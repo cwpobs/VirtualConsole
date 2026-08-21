@@ -52,6 +52,13 @@ public:
     // (compositeTiles ничего не рисует, пока карта не загружена).
     void setTileMap(int width, int height, const uint8_t* indices);
 
+    // Кладёт готовый кадр 3D-слоя целиком (320*240*3 RGB +
+    // 320*240 маска "затронутых" пикселей, 0/1) - для Gpu3D (команда
+    // PRESENT). Пиксели с touchedMask[i]==0 не перекрывают то, что
+    // уже нарисовано на слоях под 3D (фон/тайлы) - см. compositeThreeD.
+    // Первый вызов включает 3D-слой в композиции кадра.
+    void setThreeDLayer(const uint8_t* rgb, const uint8_t* touchedMask);
+
 private:
 
     static const int WIDTH = 320;
@@ -145,6 +152,15 @@ private:
     uint16_t scrollX;
     uint16_t scrollY;
 
+    // 3D-слой (см. Gpu3D) - заполняется целиком одним вызовом
+    // setThreeDLayer, не через регистры. threeDActive==false значит
+    // "ни разу не было PRESENT" - compositeThreeD тогда ничего не
+    // делает, старые демо без 3D не видят разницы (та же идея, что у
+    // mapHeight==0 для тайлов).
+    uint8_t threeDLayer[FB_SIZE];
+    std::vector<uint8_t> threeDTouched;   // WIDTH*HEIGHT, 0/1
+    bool threeDActive;
+
     std::thread renderThread;
     std::atomic<bool> windowOpen;
     std::atomic<bool> stopRequested;
@@ -167,6 +183,7 @@ private:
 
     void clampScroll();
     void compositeTiles(uint8_t* staging) const;
+    void compositeThreeD(uint8_t* staging) const;
 
     void renderThreadMain();
 };

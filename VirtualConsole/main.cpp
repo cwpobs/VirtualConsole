@@ -17,6 +17,7 @@
 #include "MapLoader.h"
 #include "SoundCard.h"
 #include "ModLoader.h"
+#include "Gpu3D.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -61,6 +62,7 @@ int main()
     MapLoader mapLoader(&videoCard);
     SoundCard soundCard;
     ModLoader modLoader(&soundCard);
+    Gpu3D gpu3D(&videoCard);
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -81,6 +83,7 @@ int main()
     bus.mapDevice(&mapLoader, 0xF0001012, 0xF000101F); // загрузчик текстовой карты тайлов
     bus.mapDevice(&modLoader, 0xF0001020, 0xF0001041); // загрузчик .mod-файлов
     bus.mapDevice(&soundCard, 0xF0001042, 0xF0001044); // звуковая карта (PLAY/STOP/VOLUME)
+    bus.mapDevice(&gpu3D, 0xF0001045, 0xF0001065);     // 3D-ускоритель (вершины/треугольники/PRESENT)
 
 
     // ========================================

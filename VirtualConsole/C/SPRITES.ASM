@@ -11,7 +11,7 @@
 ; при композиции кадра (см. VideoCard::compositeSprites) - в цикле
 ; ниже просто переставляются SPRITE_X/SPRITE_Y.
 ;
-; ESC ведёт себя как везде в системе - завершает всю VM (см.
+; Ctrl+Q ведёт себя как везде в системе - завершает всю VM (см.
 ; SHELL.ASM/irq_handler). EI нужен, чтобы клавиатурное прерывание
 ; вообще могло сработать во время цикла (dispatch_command вызывается
 ; с прерываниями выключенными - см. CPU::step).
@@ -109,7 +109,7 @@
 sprites_loop:
 
     LDA 0x00010001      ; lastKey - тот же адрес читает и SHELL
-    LDI B, 27           ; ESC
+    LDI B, 17           ; Ctrl+Q
     CMP B
     JZ sprites_exit
 

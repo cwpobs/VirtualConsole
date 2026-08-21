@@ -12,7 +12,7 @@
 ; Печатает баннер на экран (Text VRAM) и запускает интерактивный
 ; терминал: набранные символы отображаются на экране в реальном
 ; времени, Enter переводит строку, Backspace стирает символ.
-; ESC завершает программу.
+; Ctrl+Q завершает программу.
 ;
 ; Терминал также работает как простой командный shell: строка,
 ; набранная до Enter, сравнивается с одной из известных команд
@@ -132,7 +132,7 @@ irq_handler:
 
     LDA 0x00010001      ; A = код клавиши
 
-    LDI B, 27       ; ESC
+    LDI B, 17       ; Ctrl+Q
     CMP B
     JZ do_quit
 
@@ -150,7 +150,7 @@ irq_handler:
 do_quit:
 
     ; Если сейчас выполняется программа (exec/run - см. programRunning
-    ; в cmd_run/cmd_exec_run), ESC не должен гасить всю VM - lastKey
+    ; в cmd_run/cmd_exec_run), Ctrl+Q не должен гасить всю VM - lastKey
     ; уже обновлён выше безусловно, программа сама заметит его в своём
     ; цикле опроса и завершится штатно, вернувшись в шелл.
     LDA programRunning
@@ -484,7 +484,7 @@ draw_banner:
     LDI A, 0xBB
     CALL print_char   ; ╗
 
-    ; ---- Строка 1: "Shell v1.0 (2026). ESC to quit." ----
+    ; ---- Строка 1: "Shell v1.0 (2026). Ctrl+Q to quit." ----
 
     LDHL 0xF0000057     ; 0xF0000007 + 80
     LDI A, 0
@@ -533,12 +533,18 @@ draw_banner:
     CALL print_char   ; .
     LDI A, 32
     CALL print_char   ; (пробел)
-    LDI A, 69
-    CALL print_char   ; E
-    LDI A, 83
-    CALL print_char   ; S
     LDI A, 67
     CALL print_char   ; C
+    LDI A, 116
+    CALL print_char   ; t
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 43
+    CALL print_char   ; +
+    LDI A, 81
+    CALL print_char   ; Q
     LDI A, 32
     CALL print_char   ; (пробел)
     LDI A, 116
@@ -558,8 +564,8 @@ draw_banner:
     LDI A, 46
     CALL print_char   ; .
 
-    ; 31 видимый символ - дополняем пробелами до 78
-    LDI A, 47
+    ; 34 видимых символа - дополняем пробелами до 78
+    LDI A, 44
     STA tmp2
     LDI A, 32
     CALL print_char_n
@@ -1863,7 +1869,7 @@ cmd_run:
     PUSH D          ; на случай, если код в песочнице испортит "константу 0"
 
     LDI A, 1
-    STA programRunning   ; ESC во время работы программы не должен
+    STA programRunning   ; Ctrl+Q во время работы программы не должен
                           ; гасить всю VM - см. do_quit
 
     CALL 0x00002000
@@ -2436,7 +2442,7 @@ cmd_exec_run:
     PUSH D          ; на случай, если программа испортит "константу 0"
 
     LDI A, 1
-    STA programRunning   ; ESC во время работы программы не должен
+    STA programRunning   ; Ctrl+Q во время работы программы не должен
                           ; гасить всю VM - см. do_quit
 
     CALL 0x00002000

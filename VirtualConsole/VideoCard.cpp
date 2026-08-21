@@ -74,6 +74,13 @@ VideoCard::VideoCard()
     mapHeight = 0;   // 0 = карта не загружена, compositeTiles ничего не рисует
     scrollX = 0;
     scrollY = 0;
+
+    for (int i = 0; i < FB_SIZE; i++)
+    {
+        threeDLayer[i] = 0;
+    }
+    threeDTouched.assign(WIDTH * HEIGHT, 0);
+    threeDActive = false;
 }
 
 VideoCard::~VideoCard()
@@ -458,6 +465,40 @@ void VideoCard::compositeTiles(uint8_t* staging) const
     }
 }
 
+void VideoCard::setThreeDLayer(const uint8_t* rgb, const uint8_t* touchedMask)
+{
+    std::lock_guard<std::mutex> lock(framebufferMutex);
+
+    memcpy(threeDLayer, rgb, FB_SIZE);
+    threeDTouched.assign(touchedMask, touchedMask + (WIDTH * HEIGHT));
+    threeDActive = true;
+}
+
+void VideoCard::compositeThreeD(uint8_t* staging) const
+{
+    // Вызывающий (renderThreadMain) уже держит framebufferMutex - см.
+    // compositeSprites про тот же приём. Пока Gpu3D ни разу не сделал
+    // PRESENT, threeDActive==false - слой полностью пропускается,
+    // старые демо без 3D не видят разницы.
+    if (!threeDActive)
+    {
+        return;
+    }
+
+    for (int i = 0; i < WIDTH * HEIGHT; i++)
+    {
+        if (!threeDTouched[i])
+        {
+            continue;   // пиксель, которого 3D-кадр не коснулся - оставляем то, что под ним
+        }
+
+        int idx = i * CHANNELS;
+        staging[idx] = threeDLayer[idx];
+        staging[idx + 1] = threeDLayer[idx + 1];
+        staging[idx + 2] = threeDLayer[idx + 2];
+    }
+}
+
 void VideoCard::setSpriteBitmap(int index, const uint8_t* rgb)
 {
     if (index < 0 || index >= SPRITE_COUNT)
@@ -641,7 +682,8 @@ void VideoCard::renderThreadMain()
             std::lock_guard<std::mutex> lock(framebufferMutex);
             memcpy(staging, framebuffer, FB_SIZE);
             compositeTiles(staging);    // тайлы (если карта загружена) поверх фона
-            compositeSprites(staging);  // спрайты - всегда поверх тайлов
+            compositeThreeD(staging);   // 3D-слой (если активен) поверх тайлов
+            compositeSprites(staging);  // спрайты (UI) - всегда поверх всех слоёв
         }
 
         glClear(GL_COLOR_BUFFER_BIT);

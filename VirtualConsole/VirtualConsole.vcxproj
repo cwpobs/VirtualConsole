@@ -157,6 +157,7 @@
     <ClCompile Include="Disk.cpp" />
     <ClCompile Include="Keyboard.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Gpu3D.cpp" />
     <ClCompile Include="MapLoader.cpp" />
     <ClCompile Include="Memory.cpp" />
     <ClCompile Include="ModLoader.cpp" />
@@ -176,6 +177,7 @@
     <ClInclude Include="Device.h" />
     <ClInclude Include="Disk.h" />
     <ClInclude Include="Keyboard.h" />
+    <ClInclude Include="Gpu3D.h" />
     <ClInclude Include="MapLoader.h" />
     <ClInclude Include="Memory.h" />
     <ClInclude Include="ModLoader.h" />
