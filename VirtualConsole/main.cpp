@@ -9,6 +9,7 @@
 #include "Keyboard.h"
 #include "TextVRAM.h"
 #include "DebugPort.h"
+#include "Disk.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -36,6 +37,8 @@ int main()
     Bus bus;
     CPU cpu;
     DebugPort debugPort(&cpu);
+    Disk diskC("C");
+    Disk diskD("D");
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -47,6 +50,8 @@ int main()
     bus.mapDevice(&keyboard, 0xF0000005, 0xF0000006);
     bus.mapDevice(&vram, 0xF0000007, 0xF00007D8);      // сетка + SCROLL + CLEAR
     bus.mapDevice(&debugPort, 0xF00007D9, 0xF00007E5); // PC/SP/HL/FLAGS (только чтение)
+    bus.mapDevice(&diskC, 0xF00007E6, 0xF00007F8);     // диск C (папка "C")
+    bus.mapDevice(&diskD, 0xF00007F9, 0xF000080B);     // диск D (папка "D")
 
 
     // ========================================

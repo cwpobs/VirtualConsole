@@ -427,3 +427,10 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# VirtualConsole: exe теперь собирается прямо в папку проекта
+# (см. OutDir в VirtualConsole.vcxproj), чтобы boot.asm и папки
+# дисков C/D были рядом и коммитились - сам exe всё равно не нужен
+# в репозитории.
+VirtualConsole/VirtualConsole.exe
+VirtualConsole/obj/

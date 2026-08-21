@@ -740,18 +740,80 @@ check_reset:
     LDA cmdlen
     LDI B, 5
     CMP B
-    JNZ dispatch_done
+    JNZ check_dir
 
     LDA cmdbuf0
     LDI B, 114      ; 'r'
     CMP B
-    JNZ dispatch_done
+    JNZ check_dir
     LDA cmdbuf1
     LDI B, 101      ; 'e'
     CMP B
-    JNZ dispatch_done
+    JNZ check_dir
     LDA cmdbuf2
     LDI B, 115      ; 's'
+    CMP B
+    JNZ check_dir
+    LDA cmdbuf3
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_dir
+    LDA cmdbuf4
+    LDI B, 116      ; 't'
+    CMP B
+    JNZ check_dir
+
+    CALL cmd_reset
+    JMP dispatch_done
+
+
+check_dir:
+
+    ; "dir" (3 символа) - список файлов на диске C
+
+    LDA cmdlen
+    LDI B, 3
+    CMP B
+    JNZ check_type
+
+    LDA cmdbuf0
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ check_type
+    LDA cmdbuf1
+    LDI B, 105      ; 'i'
+    CMP B
+    JNZ check_type
+    LDA cmdbuf2
+    LDI B, 114      ; 'r'
+    CMP B
+    JNZ check_type
+
+    CALL cmd_dir
+    JMP dispatch_done
+
+
+check_type:
+
+    ; "type " + ровно 7 символов имени файла (см. help) = 12 символов,
+    ; как у "poke NNN VVV" - фиксированная длина, т.к. без флага CARRY
+    ; нет способа проверить "длина >= N", только точное равенство.
+
+    LDA cmdlen
+    LDI B, 12
+    CMP B
+    JNZ dispatch_done
+
+    LDA cmdbuf0
+    LDI B, 116      ; 't'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf1
+    LDI B, 121      ; 'y'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf2
+    LDI B, 112      ; 'p'
     CMP B
     JNZ dispatch_done
     LDA cmdbuf3
@@ -759,11 +821,11 @@ check_reset:
     CMP B
     JNZ dispatch_done
     LDA cmdbuf4
-    LDI B, 116      ; 't'
+    LDI B, 32       ; (пробел)
     CMP B
     JNZ dispatch_done
 
-    CALL cmd_reset
+    CALL cmd_type
 
 dispatch_done:
 
@@ -840,6 +902,41 @@ cmd_help:
     CALL print_char   ; e
     LDI A, 116
     CALL print_char   ; t
+
+    CALL print_newline
+
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 105
+    CALL print_char   ; i
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 32
+    CALL print_char
+    LDI A, 116
+    CALL print_char   ; t
+    LDI A, 121
+    CALL print_char   ; y
+    LDI A, 112
+    CALL print_char   ; p
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 32
+    CALL print_char
+    LDI A, 78
+    CALL print_char   ; N (имя - ровно 7 символов, дополнить пробелами)
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
 
     CALL print_newline
 
@@ -1133,6 +1230,162 @@ cmd_reset:
     STA 0xF00007D8    ; CLEAR
 
     CALL draw_banner  ; сама выставит column/row/HL заново
+
+    RET
+
+
+cmd_dir:
+
+    ; Список файлов на диске C. Регистры диска - по фиксированным
+    ; MMIO-адресам (см. ASSEMBLY.md, "Disk"), HL не нужен:
+    ; NAME0..11 = 0xF00007E6..0xF00007F1, COMMAND = 0xF00007F2,
+    ; STATUS = 0xF00007F3.
+
+    LDI A, 1
+    STA 0xF00007F2    ; DiskC COMMAND = LIST_FIRST
+
+cmd_dir_loop:
+
+    LDA 0xF00007F3    ; DiskC STATUS
+    LDI B, 1
+    CMP B
+    JZ cmd_dir_done   ; больше файлов нет
+
+    LDI B, 0
+
+    LDA 0xF00007E6
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007E7
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007E8
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007E9
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007EA
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007EB
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007EC
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007ED
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007EE
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007EF
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007F0
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+    LDA 0xF00007F1
+    CMP B
+    JZ cmd_dir_after_name
+    CALL print_char
+
+cmd_dir_after_name:
+
+    CALL print_newline
+
+    LDI A, 2
+    STA 0xF00007F2    ; DiskC COMMAND = LIST_NEXT
+    JMP cmd_dir_loop
+
+cmd_dir_done:
+
+    RET
+
+
+cmd_type:
+
+    ; "type ИМЯ" - ИМЯ должно быть ровно 7 символов (см. check_type/
+    ; help): cmdbuf5..cmdbuf11 -> DiskC NAME0..6, NAME7..11 обнуляем,
+    ; чтобы не осталось "хвоста" от предыдущего имени.
+
+    LDA cmdbuf5
+    STA 0xF00007E6    ; NAME0
+    LDA cmdbuf6
+    STA 0xF00007E7    ; NAME1
+    LDA cmdbuf7
+    STA 0xF00007E8    ; NAME2
+    LDA cmdbuf8
+    STA 0xF00007E9    ; NAME3
+    LDA cmdbuf9
+    STA 0xF00007EA    ; NAME4
+    LDA cmdbuf10
+    STA 0xF00007EB    ; NAME5
+    LDA cmdbuf11
+    STA 0xF00007EC    ; NAME6
+
+    LDI A, 0
+    STA 0xF00007ED    ; NAME7
+    STA 0xF00007EE    ; NAME8
+    STA 0xF00007EF    ; NAME9
+    STA 0xF00007F0    ; NAME10
+    STA 0xF00007F1    ; NAME11
+
+    LDI A, 3
+    STA 0xF00007F2    ; COMMAND = OPEN_READ
+
+    LDA 0xF00007F3    ; STATUS
+    LDI B, 2
+    CMP B
+    JZ cmd_type_done   ; ошибка открытия - молча выходим
+
+cmd_type_loop:
+
+    LDI A, 4
+    STA 0xF00007F2    ; COMMAND = READ_BYTE
+
+    LDA 0xF00007F3    ; STATUS
+    LDI B, 1
+    CMP B
+    JZ cmd_type_close  ; EOF
+
+    LDA 0xF00007F4    ; DATA
+
+    LDI B, 10          ; '\n'
+    CMP B
+    JNZ cmd_type_check_cr
+    CALL print_newline
+    JMP cmd_type_loop
+
+cmd_type_check_cr:
+
+    LDI B, 13          ; '\r' - игнорируем
+    CMP B
+    JZ cmd_type_loop
+
+    CALL print_char
+    JMP cmd_type_loop
+
+cmd_type_close:
+
+    LDI A, 7
+    STA 0xF00007F2    ; COMMAND = CLOSE
+
+cmd_type_done:
+
+    CALL print_newline
 
     RET
 
