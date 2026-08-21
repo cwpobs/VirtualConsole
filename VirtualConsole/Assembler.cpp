@@ -189,7 +189,8 @@ void Assembler::firstPass(
             instruction == "STX" ||
             instruction == "LDX" ||
             instruction == "INCHL" ||
-            instruction == "DECHL")
+            instruction == "DECHL" ||
+            instruction == "DB")
         {
             address += 1;
         }
@@ -558,6 +559,22 @@ void Assembler::secondPass(
         else if (instruction == "DECHL")
         {
             output.push_back(0x15);
+        }
+
+
+        // -------------------------
+        // DB value (резервирует байт данных)
+        // -------------------------
+
+        else if (instruction == "DB")
+        {
+            std::string valueText;
+
+            ss >> valueText;
+
+            int value = parseNumber(valueText);
+
+            output.push_back(static_cast<uint8_t>(value));
         }
 
 

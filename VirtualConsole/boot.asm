@@ -115,8 +115,8 @@ main:
 
     LDI A, 0
     STA 0x0900      ; keyCount = 0
-    STA 0x0901      ; quit = 0
-    STA 0x0903      ; column = 0
+    STA quit      ; quit = 0
+    STA column      ; column = 0
 
     LDI D, 0        ; D - константа "0" для сравнений
 
@@ -127,7 +127,7 @@ main:
 
 wait:
 
-    LDA 0x0901
+    LDA quit
     CMP D
     JZ wait
 
@@ -172,7 +172,7 @@ irq_handler:
 do_quit:
 
     LDI A, 1
-    STA 0x0901      ; quit = 1
+    STA quit      ; quit = 1
     JMP irq_done
 
 
@@ -181,24 +181,24 @@ do_echo:
     STX             ; VRAM[HL] = A (код клавиши)
     INCHL
 
-    LDA 0x0903
+    LDA column
     LDI B, 1
     ADD B
-    STA 0x0903      ; column++
+    STA column      ; column++
 
     LDI B, 80
     CMP B
     JNZ irq_done
 
     LDI A, 0
-    STA 0x0903      ; column дошёл до 80 - перенос на новую строку
+    STA column      ; column дошёл до 80 - перенос на новую строку
 
     JMP irq_done
 
 
 do_backspace:
 
-    LDA 0x0903
+    LDA column
     LDI B, 0
     CMP B
     JZ irq_done     ; column == 0 - стирать некуда, игнорируем
@@ -208,17 +208,17 @@ do_backspace:
     LDI A, 32
     STX             ; затираем символ пробелом
 
-    LDA 0x0903
+    LDA column
     LDI B, 1
     SUB B
-    STA 0x0903      ; column--
+    STA column      ; column--
 
     JMP irq_done
 
 
 do_enter:
 
-    LDA 0x0903      ; A = column
+    LDA column      ; A = column
     PUSH A
     POP B           ; B = column
 
@@ -235,7 +235,7 @@ newline_loop:
     JNZ newline_loop
 
     LDI A, 0
-    STA 0x0903      ; column = 0
+    STA column      ; column = 0
 
 
 irq_done:
@@ -245,3 +245,20 @@ irq_done:
     POP A
 
     RETI
+
+
+; ============================================================
+; Внутренние данные.
+;
+; Резервируются через DB, поэтому их адрес вычисляется тем же
+; счётчиком, что и адреса инструкций - наложение на код исключено
+; структурно, а не по договорённости.
+;
+; keyCount/lastKey/bannerReady (0x0900/0x0902/0x0904) сюда не входят:
+; их напрямую читает main.cpp, который не видит меток ассемблера,
+; поэтому они остаются фиксированными адресами - это осознанный
+; интерфейс хост-VM, а не магический адрес наугад.
+; ============================================================
+
+quit:   DB 0
+column: DB 0
