@@ -157,6 +157,7 @@
     <ClCompile Include="Keyboard.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Memory.cpp" />
+    <ClCompile Include="TextAttr.cpp" />
     <ClCompile Include="TextVRAM.cpp" />
     <ClCompile Include="Timer.cpp" />
   </ItemGroup>
@@ -169,6 +170,7 @@
     <ClInclude Include="Disk.h" />
     <ClInclude Include="Keyboard.h" />
     <ClInclude Include="Memory.h" />
+    <ClInclude Include="TextAttr.h" />
     <ClInclude Include="TextVRAM.h" />
     <ClInclude Include="Timer.h" />
   </ItemGroup>

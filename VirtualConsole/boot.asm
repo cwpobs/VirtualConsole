@@ -329,7 +329,9 @@ advance_row:
     ; на последней строке
 
     LDI A, 1
-    STA 0xF00007D7      ; SCROLL - сдвинуть экран на одну строку вверх
+    STA 0xF00007D7      ; SCROLL (Text VRAM) - сдвинуть текст вверх
+    STA 0xF0000FDC      ; SCROLL (TextAttr) - и цвет вместе с ним,
+                         ; иначе после прокрутки цвет "отстанет" от текста
 
     LDHL 0xF0000787     ; последняя строка (24), столбец 0 (0xF0000007 + 24*80)
 
@@ -343,11 +345,40 @@ advance_row_done:
 
 draw_banner:
 
-    ; ---- Первая строка: "Virtual Console. ESC to quit." ----
+    ; ---- Рамка 80x4 вокруг баннера, окрашенная отдельным цветом
+    ; (голубой на чёрном) - показывает, что и псевдографика (CP866),
+    ; и цвет (TextAttr) реально работают. Текст внутри - тот же, что
+    ; был раньше, только на строках 1-2 вместо 0-1 (строка 0 и 3 -
+    ; сама рамка). Терминал теперь начинается со строки 4 (было 2).
+
+    ; ---- Строка 0: верхняя граница ----
 
     LDHL 0xF0000007
     LDI A, 0
     STA column
+    STA row
+
+    LDI A, 0xC9
+    CALL print_char   ; ╔
+
+    LDI A, 78
+    STA tmp2
+    LDI A, 0xCD
+    CALL print_char_n ; ═ x78
+
+    LDI A, 0xBB
+    CALL print_char   ; ╗
+
+    ; ---- Строка 1: "Virtual Console. ESC to quit." ----
+
+    LDHL 0xF0000057     ; 0xF0000007 + 80
+    LDI A, 0
+    STA column
+    LDI A, 1
+    STA row
+
+    LDI A, 0xBA
+    CALL print_char   ; ║
 
     LDI A, 86
     CALL print_char   ; V
@@ -408,11 +439,25 @@ draw_banner:
     LDI A, 46
     CALL print_char   ; .
 
-    ; ---- Вторая строка: объём доступной RAM ----
+    ; 29 видимых символов - дополняем пробелами до 78
+    LDI A, 49
+    STA tmp2
+    LDI A, 32
+    CALL print_char_n
 
-    LDHL 0xF0000057     ; 0xF0000007 + 80 (строка 2)
+    LDI A, 0xBA
+    CALL print_char   ; ║
+
+    ; ---- Строка 2: объём доступной RAM ----
+
+    LDHL 0xF00000A7     ; 0xF0000007 + 2*80
     LDI A, 0
     STA column
+    LDI A, 2
+    STA row
+
+    LDI A, 0xBA
+    CALL print_char   ; ║
 
     LDI A, 82
     CALL print_char   ; R
@@ -433,12 +478,74 @@ draw_banner:
     LDI A, 66
     CALL print_char   ; B
 
-    ; ---- Курсор терминала - начало третьей строки ----
+    ; 9 видимых символов - дополняем пробелами до 78
+    LDI A, 69
+    STA tmp2
+    LDI A, 32
+    CALL print_char_n
 
-    LDHL 0xF00000A7     ; 0xF0000007 + 2*80
+    LDI A, 0xBA
+    CALL print_char   ; ║
+
+    ; ---- Строка 3: нижняя граница ----
+
+    LDHL 0xF00000F7     ; 0xF0000007 + 3*80
     LDI A, 0
     STA column
+    LDI A, 3
+    STA row
+
+    LDI A, 0xC8
+    CALL print_char   ; ╚
+
+    LDI A, 78
+    STA tmp2
+    LDI A, 0xCD
+    CALL print_char_n ; ═ x78
+
+    LDI A, 0xBC
+    CALL print_char   ; ╝
+
+    ; ---- Красим все 4 строки рамки в голубой (0x0E) на чёрном ----
+
+    LDI A, 0
+    STA row
+    CALL goto_attr_row_start
+    LDI A, 80
+    STA tmp2
+    LDI A, 0x0E
+    CALL print_char_n
+
+    LDI A, 1
+    STA row
+    CALL goto_attr_row_start
+    LDI A, 80
+    STA tmp2
+    LDI A, 0x0E
+    CALL print_char_n
+
     LDI A, 2
+    STA row
+    CALL goto_attr_row_start
+    LDI A, 80
+    STA tmp2
+    LDI A, 0x0E
+    CALL print_char_n
+
+    LDI A, 3
+    STA row
+    CALL goto_attr_row_start
+    LDI A, 80
+    STA tmp2
+    LDI A, 0x0E
+    CALL print_char_n
+
+    ; ---- Курсор терминала - строка 4 (сразу под рамкой) ----
+
+    LDHL 0xF0000147     ; 0xF0000007 + 4*80
+    LDI A, 0
+    STA column
+    LDI A, 4
     STA row
 
     RET
@@ -987,7 +1094,8 @@ cmd_help:
 cmd_cls:
 
     LDI A, 1
-    STA 0xF00007D8    ; CLEAR
+    STA 0xF00007D8    ; CLEAR (Text VRAM)
+    STA 0xF0000FDD    ; CLEAR (TextAttr) - сбрасывает цвет к дефолту
 
     LDI A, 0
     STA column
@@ -1268,9 +1376,10 @@ cmd_run:
 cmd_reset:
 
     LDI A, 1
-    STA 0xF00007D8    ; CLEAR
+    STA 0xF00007D8    ; CLEAR (Text VRAM)
+    STA 0xF0000FDD    ; CLEAR (TextAttr)
 
-    CALL draw_banner  ; сама выставит column/row/HL заново
+    CALL draw_banner  ; сама выставит column/row/HL и перекрасит рамку
 
     RET
 
@@ -1643,6 +1752,86 @@ cmd_cd_c:
     RET
 
 
+print_char_n:
+
+    ; Пишет значение A (символ или цвет - без разницы, просто STX) N
+    ; раз подряд начиная с текущего HL, сдвигая HL. N - в tmp2.
+    ; Используется для линий рамки (78 x '═') и заливки цвета
+    ; (draw_banner). В отличие от print_char не трогает column - HL
+    ; в местах вызова всё равно переустанавливается явно.
+
+    STA pcn_char
+
+pcn_loop:
+
+    LDA tmp2
+    CMP D
+    JZ pcn_done
+
+    LDI B, 1
+    SUB B
+    STA tmp2
+
+    LDA pcn_char
+    STX
+    INCHL
+
+    JMP pcn_loop
+
+pcn_done:
+
+    RET
+
+
+goto_attr_row_start:
+
+    ; То же самое, что goto_row_start, но для TextAttr (плоскость
+    ; цвета) вместо Text VRAM - HL = 0xF000080C + row*80. Отдельная
+    ; копия, а не параметр, т.к. подпрограммы в этом ассемблере не
+    ; принимают аргументов, кроме как через регистры/DB-переменные.
+
+    LDHL 0xF000080C
+
+    LDA row
+    STA gas_outer
+
+gas_loop_outer:
+
+    LDA gas_outer
+    CMP D
+    JZ gas_outer_done
+
+    LDI B, 1
+    SUB B
+    STA gas_outer
+
+    LDI A, 80
+    STA gas_inner
+
+gas_loop_inner:
+
+    LDA gas_inner
+    CMP D
+    JZ gas_inner_done
+
+    INCHL
+
+    LDA gas_inner
+    LDI B, 1
+    SUB B
+    STA gas_inner
+
+    JMP gas_loop_inner
+
+gas_inner_done:
+
+    JMP gas_loop_outer
+
+gas_outer_done:
+
+    RET
+
+
 hl_add_offset:
 
     ; HL уже указывает на базовый адрес, A = offset (0-255).
@@ -1767,6 +1956,11 @@ tmp2:       DB 0
 
 grs_outer:  DB 0
 grs_inner:  DB 0
+
+gas_outer:  DB 0   ; счётчики goto_attr_row_start (см. grs_outer/inner)
+gas_inner:  DB 0
+
+pcn_char:   DB 0   ; символ/цвет, который print_char_n сейчас печатает
 
 ; Буфер команды - 12 отдельных байт (0..11), не единый массив (см.
 ; комментарий в do_echo). Хватает на самую длинную команду - "poke

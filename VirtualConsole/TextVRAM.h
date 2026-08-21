@@ -2,6 +2,8 @@
 
 #include "Device.h"
 
+class TextAttr;
+
 class TextVRAM : public Device
 {
 public:
@@ -15,7 +17,9 @@ public:
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
 
-    void render() const;
+    // attr - плоскость цветовых атрибутов (см. TextAttr); может быть
+    // nullptr, тогда рендерится без цвета (как раньше).
+    void render(const TextAttr* attr) const;
 
 private:
 

@@ -1,4 +1,5 @@
 #include "TextVRAM.h"
+#include "TextAttr.h"
 
 #include <iostream>
 
@@ -116,13 +117,38 @@ void TextVRAM::scrollUp()
     }
 }
 
-void TextVRAM::render() const
+static void writeAnsiColor(std::ostream& out, uint8_t attribute)
 {
+    int fg = attribute & 0x0F;
+    int bg = (attribute >> 4) & 0x0F;
+
+    int fgCode = (fg < 8) ? (30 + fg) : (90 + (fg - 8));
+    int bgCode = (bg < 8) ? (40 + bg) : (100 + (bg - 8));
+
+    out << "\x1b[" << fgCode << ";" << bgCode << "m";
+}
+
+void TextVRAM::render(const TextAttr* attr) const
+{
+    int lastAttribute = -1;
+
     for (int y = 0; y < HEIGHT; y++)
     {
         for (int x = 0; x < WIDTH; x++)
         {
-            uint8_t c = data[y * WIDTH + x];
+            int index = y * WIDTH + x;
+            uint8_t c = data[index];
+
+            if (attr != nullptr)
+            {
+                int attribute = attr->attributeAt(index);
+
+                if (attribute != lastAttribute)
+                {
+                    writeAnsiColor(std::cout, static_cast<uint8_t>(attribute));
+                    lastAttribute = attribute;
+                }
+            }
 
             if (c == 0)
             {
@@ -135,5 +161,12 @@ void TextVRAM::render() const
         }
 
         std::cout << "\n";
+    }
+
+    if (attr != nullptr)
+    {
+        // Сброс цвета в конце кадра - иначе он "утекает" в
+        // диагностический дамп/остальной вывод консоли после HLT
+        std::cout << "\x1b[0m";
     }
 }

@@ -8,6 +8,7 @@
 #include "Timer.h"
 #include "Keyboard.h"
 #include "TextVRAM.h"
+#include "TextAttr.h"
 #include "DebugPort.h"
 #include "Disk.h"
 #include "Bus.h"
@@ -42,6 +43,7 @@ int main()
     Timer timer;
     Keyboard keyboard;
     TextVRAM vram;
+    TextAttr attr;
     Bus bus;
     CPU cpu;
     DebugPort debugPort(&cpu);
@@ -60,6 +62,7 @@ int main()
     bus.mapDevice(&debugPort, 0xF00007D9, 0xF00007E5); // PC/SP/HL/FLAGS (только чтение)
     bus.mapDevice(&diskC, 0xF00007E6, 0xF00007F8);     // диск C (папка "C")
     bus.mapDevice(&diskD, 0xF00007F9, 0xF000080B);     // диск D (папка "D")
+    bus.mapDevice(&attr, 0xF000080C, 0xF0000FDD);      // цвет (fg/bg) + SCROLL + CLEAR
 
 
     // ========================================
@@ -138,7 +141,7 @@ int main()
         // Прячем курсор перед перерисовкой - иначе он на мгновение
         // виден "прыгающим" в начало экрана перед каждым кадром
         std::cout << "\x1b[?25l\x1b[H";
-        vram.render();
+        vram.render(&attr);
 
         const uint32_t vramBase = 0xF0000007;
 
