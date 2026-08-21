@@ -28,9 +28,16 @@ public:
 
 private:
 
-    // Адрес в RAM, куда LOAD кладёт собранный код - та же
-    // "песочница", что уже использует poke/run (см. ASSEMBLY.md).
+    // Адрес в RAM, куда LOAD (8) кладёт собранный код - та же
+    // "песочница", что уже использует poke/run/exec (см. ASSEMBLY.md).
     static const uint32_t LOAD_ADDRESS = 0x00002000;
+
+    // Отдельный адрес для LOAD_SHELL (10) - резидентное место
+    // SHELL.ASM. Обязательно другой, чем LOAD_ADDRESS: shell.asm
+    // живёт там постоянно, пока работает VM, а песочницу poke/run
+    // затирает при каждой команде - если бы они делили один адрес,
+    // poke переписывал бы код самого shell'а.
+    static const uint32_t SHELL_LOAD_ADDRESS = 0x00003000;
 
     std::filesystem::path basePath;
     Bus* bus;
@@ -60,6 +67,6 @@ private:
 
     void closeFiles();
 
-    void loadProgram();
+    void loadProgram(uint32_t targetAddress);
     void deleteFile();
 };

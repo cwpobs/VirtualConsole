@@ -66,8 +66,9 @@ void Disk::write(uint32_t address, uint8_t value)
         case 5: openWrite(); break;
         case 6: writeByte(); break;
         case 7: closeFiles(); break;
-        case 8: loadProgram(); break;
+        case 8: loadProgram(LOAD_ADDRESS); break;
         case 9: deleteFile(); break;
+        case 10: loadProgram(SHELL_LOAD_ADDRESS); break;
         default: break;
         }
 
@@ -240,13 +241,16 @@ void Disk::closeFiles()
     status = 0;
 }
 
-void Disk::loadProgram()
+void Disk::loadProgram(uint32_t targetAddress)
 {
     // Читаем NAME как текстовый .asm-файл (не бинарно - это исходник
     // ассемблера, не машинный код), собираем тем же Assembler, что
     // main.cpp использует для boot.asm, и кладём результат в RAM по
-    // фиксированному адресу песочницы - дальше программа запускается
-    // как обычно через CALL LOAD_ADDRESS (см. cmd_exec в boot.asm).
+    // targetAddress (LOAD_ADDRESS для exec/поке-программ,
+    // SHELL_LOAD_ADDRESS для резидентного SHELL.ASM). Ассемблер
+    // резолвит метки относительно targetAddress (origin) - иначе
+    // JMP/CALL на метки резолвились бы так, будто код лежит на
+    // адресе 0.
 
     std::ifstream sourceFile(basePath / nameAsString());
 
@@ -264,7 +268,7 @@ void Disk::loadProgram()
 
     try
     {
-        machineCode = assembler.assemble(buffer.str());
+        machineCode = assembler.assemble(buffer.str(), targetAddress);
     }
     catch (const std::exception&)
     {
@@ -276,7 +280,7 @@ void Disk::loadProgram()
     for (size_t i = 0; i < machineCode.size(); i++)
     {
         bus->write(
-            LOAD_ADDRESS + static_cast<uint32_t>(i),
+            targetAddress + static_cast<uint32_t>(i),
             machineCode[i]
         );
     }

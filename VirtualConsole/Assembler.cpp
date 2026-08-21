@@ -98,9 +98,10 @@ int Assembler::findLabel(const std::string& name)
 // ============================================================
 
 void Assembler::firstPass(
-    const std::vector<std::string>& lines)
+    const std::vector<std::string>& lines,
+    uint32_t origin)
 {
-    uint32_t address = 0;
+    uint32_t address = origin;
 
     for (const std::string& originalLine : lines)
     {
@@ -833,7 +834,8 @@ void Assembler::secondPass(
 // ============================================================
 
 std::vector<uint8_t> Assembler::assemble(
-    const std::string& source)
+    const std::string& source,
+    uint32_t origin)
 {
     labels.clear();
 
@@ -852,7 +854,7 @@ std::vector<uint8_t> Assembler::assemble(
     // Первый проход:
     // ищем адреса меток
 
-    firstPass(lines);
+    firstPass(lines, origin);
 
 
     // Второй проход:
