@@ -69,6 +69,8 @@ void Disk::write(uint32_t address, uint8_t value)
         case 8: loadProgram(LOAD_ADDRESS); break;
         case 9: deleteFile(); break;
         case 10: loadProgram(SHELL_LOAD_ADDRESS); break;
+        case 11: changeDir(); break;
+        case 12: changeDirUp(); break;
         default: break;
         }
 
@@ -98,7 +100,7 @@ void Disk::listFirst()
 {
     std::error_code ec;
 
-    dirIt = std::filesystem::directory_iterator(basePath, ec);
+    dirIt = std::filesystem::directory_iterator(basePath / currentDir, ec);
 
     if (ec)
     {
@@ -106,7 +108,6 @@ void Disk::listFirst()
         return;
     }
 
-    skipToRegularFile();
     populateNameFromIterator();
 }
 
@@ -118,18 +119,7 @@ void Disk::listNext()
         dirIt.increment(ec);
     }
 
-    skipToRegularFile();
     populateNameFromIterator();
-}
-
-void Disk::skipToRegularFile()
-{
-    while (dirIt != std::filesystem::directory_iterator() &&
-        !dirIt->is_regular_file())
-    {
-        std::error_code ec;
-        dirIt.increment(ec);
-    }
 }
 
 void Disk::populateNameFromIterator()
@@ -146,6 +136,14 @@ void Disk::populateNameFromIterator()
     }
 
     std::string fileName = dirIt->path().filename().string();
+
+    // Папки перечисляем вместе с файлами (не только is_regular_file),
+    // отмечая их хвостовым "/" в NAME - так dir сразу отличает папку
+    // от файла (GAMES/ vs GAMES), без новых регистров на устройстве.
+    if (dirIt->is_directory() && fileName.size() < 12)
+    {
+        fileName += '/';
+    }
 
     for (int i = 0; i < 12 && i < static_cast<int>(fileName.size()); i++)
     {
@@ -164,7 +162,7 @@ void Disk::openRead()
 
     readStream.clear();
 
-    readStream.open(basePath / nameAsString(), std::ios::binary);
+    readStream.open(basePath / currentDir / nameAsString(), std::ios::binary);
 
     if (!readStream)
     {
@@ -209,7 +207,7 @@ void Disk::openWrite()
 
     writeStream.clear();
 
-    writeStream.open(basePath / nameAsString(), std::ios::binary | std::ios::trunc);
+    writeStream.open(basePath / currentDir / nameAsString(), std::ios::binary | std::ios::trunc);
 
     status = writeStream ? 0 : 2;
 }
@@ -252,7 +250,7 @@ void Disk::loadProgram(uint32_t targetAddress)
     // JMP/CALL на метки резолвились бы так, будто код лежит на
     // адресе 0.
 
-    std::ifstream sourceFile(basePath / nameAsString());
+    std::ifstream sourceFile(basePath / currentDir / nameAsString());
 
     if (!sourceFile)
     {
@@ -293,7 +291,30 @@ void Disk::deleteFile()
 {
     std::error_code ec;
 
-    bool removed = std::filesystem::remove(basePath / nameAsString(), ec);
+    bool removed = std::filesystem::remove(basePath / currentDir / nameAsString(), ec);
 
     status = (!ec && removed) ? 0 : 2;
+}
+
+void Disk::changeDir()
+{
+    std::error_code ec;
+
+    std::filesystem::path target = basePath / currentDir / nameAsString();
+
+    if (!std::filesystem::is_directory(target, ec) || ec)
+    {
+        status = 2;
+        return;
+    }
+
+    currentDir /= nameAsString();
+    status = 0;
+}
+
+void Disk::changeDirUp()
+{
+    // Уже в корне - тихо ничего не делаем (как в DOS).
+    currentDir = currentDir.parent_path();
+    status = 0;
 }

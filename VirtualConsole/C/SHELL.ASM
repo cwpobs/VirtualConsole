@@ -67,10 +67,10 @@ main:
 
     LDI D, 0        ; D - константа "0" для сравнений на весь запуск
 
-    LDI A, 62       ; '>'
-    CALL print_char
-    LDI A, 32       ; (пробел)
-    CALL print_char
+    LDI A, 0
+    STA inSubdir    ; стартуем в корне диска C
+
+    CALL print_prompt
 
     LDI A, 1
     STA 0x00010002      ; bannerReady = 1 (баннер готов к отрисовке)
@@ -274,9 +274,81 @@ de_check11:
     LDA cmdlen
     LDI B, 11
     CMP B
-    JNZ de_buf_done
+    JNZ de_check12
     LDA lastChar
     STA cmdbuf11
+    JMP de_buf_done
+
+de_check12:
+    LDA cmdlen
+    LDI B, 12
+    CMP B
+    JNZ de_check13
+    LDA lastChar
+    STA cmdbuf12
+    JMP de_buf_done
+
+de_check13:
+    LDA cmdlen
+    LDI B, 13
+    CMP B
+    JNZ de_check14
+    LDA lastChar
+    STA cmdbuf13
+    JMP de_buf_done
+
+de_check14:
+    LDA cmdlen
+    LDI B, 14
+    CMP B
+    JNZ de_check15
+    LDA lastChar
+    STA cmdbuf14
+    JMP de_buf_done
+
+de_check15:
+    LDA cmdlen
+    LDI B, 15
+    CMP B
+    JNZ de_check16
+    LDA lastChar
+    STA cmdbuf15
+    JMP de_buf_done
+
+de_check16:
+    LDA cmdlen
+    LDI B, 16
+    CMP B
+    JNZ de_check17
+    LDA lastChar
+    STA cmdbuf16
+    JMP de_buf_done
+
+de_check17:
+    LDA cmdlen
+    LDI B, 17
+    CMP B
+    JNZ de_check18
+    LDA lastChar
+    STA cmdbuf17
+    JMP de_buf_done
+
+de_check18:
+    LDA cmdlen
+    LDI B, 18
+    CMP B
+    JNZ de_check19
+    LDA lastChar
+    STA cmdbuf18
+    JMP de_buf_done
+
+de_check19:
+    LDA cmdlen
+    LDI B, 19
+    CMP B
+    JNZ de_buf_done
+    LDA lastChar
+    STA cmdbuf19
 
 de_buf_done:
 
@@ -342,10 +414,7 @@ do_enter:
     LDI A, 0
     STA cmdlen
 
-    LDI A, 62       ; '>'
-    CALL print_char
-    LDI A, 32
-    CALL print_char
+    CALL print_prompt
 
     JMP irq_done
 
@@ -648,6 +717,95 @@ pnl_loop:
     POP C
     POP B
     POP A
+
+    RET
+
+
+print_prompt:
+
+    ; Промпт в стиле DOS: "C:\>" в корне, "C:\ИМЯ>" внутри папки (см.
+    ; inSubdir/curDirName0..11, устанавливаются cmd_cd*). Заменяет
+    ; прежний статичный "> ".
+
+    LDA currentDisk
+    CMP D
+    JNZ pp_drive_d
+
+    LDI A, 67    ; 'C'
+    CALL print_char
+    JMP pp_colon
+
+pp_drive_d:
+
+    LDI A, 68    ; 'D'
+    CALL print_char
+
+pp_colon:
+
+    LDI A, 58    ; ':'
+    CALL print_char
+    LDI A, 92    ; '\'
+    CALL print_char
+
+    LDA inSubdir
+    CMP D
+    JZ pp_done   ; в корне - имя папки не печатаем
+
+    LDI B, 0
+
+    LDA curDirName0
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName1
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName2
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName3
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName4
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName5
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName6
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName7
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName8
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName9
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName10
+    CMP B
+    JZ pp_done
+    CALL print_char
+    LDA curDirName11
+    CMP B
+    JZ pp_done
+    CALL print_char
+
+pp_done:
+
+    LDI A, 62    ; '>'
+    CALL print_char
 
     RET
 
@@ -983,12 +1141,75 @@ check_type:
 
 check_cd:
 
-    ; "cd c" / "cd d" (4 символа)
+    ; "cd c" / "cd d" (4 символа) - переключение диска (см. cmd_cd)
 
     LDA cmdlen
     LDI B, 4
     CMP B
-    JNZ check_exec
+    JNZ check_cd_up
+
+    LDA cmdbuf0
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ check_cd_up
+    LDA cmdbuf1
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ check_cd_up
+    LDA cmdbuf2
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_cd_up
+
+    CALL cmd_cd
+    JMP dispatch_done
+
+
+check_cd_up:
+
+    ; "cd.." (4 символа, без пробела) - выйти из папки на уровень выше
+
+    LDA cmdlen
+    LDI B, 4
+    CMP B
+    JNZ check_cd_dir
+
+    LDA cmdbuf0
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ check_cd_dir
+    LDA cmdbuf1
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ check_cd_dir
+    LDA cmdbuf2
+    LDI B, 46       ; '.'
+    CMP B
+    JNZ check_cd_dir
+    LDA cmdbuf3
+    LDI B, 46       ; '.'
+    CMP B
+    JNZ check_cd_dir
+
+    CALL cmd_cd_up
+    JMP dispatch_done
+
+
+check_cd_dir:
+
+    ; "cd " + имя папки, переменная длина 1-12 символов (та же схема,
+    ; что у type/exec/create). Не пересекается с "cd c"/"cd d"/"cd.." -
+    ; те проверяются раньше и явно совпадают только на точный текст.
+
+    LDA cmdlen
+    LDI B, 4        ; "cd " (3) + 1 символ
+    CMP B
+    JC check_exec
+
+    LDA cmdlen
+    LDI B, 16       ; "cd " (3) + 12 символов = 15
+    CMP B
+    JNC check_exec
 
     LDA cmdbuf0
     LDI B, 99       ; 'c'
@@ -1003,7 +1224,7 @@ check_cd:
     CMP B
     JNZ check_exec
 
-    CALL cmd_cd
+    CALL cmd_cd_dir
     JMP dispatch_done
 
 
@@ -1279,6 +1500,28 @@ cmd_help:
     CALL print_char   ; /
     LDI A, 100
     CALL print_char   ; d
+
+    CALL print_newline
+
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 32
+    CALL print_char
+    LDI A, 78
+    CALL print_char   ; N (имя папки)
+
+    CALL print_newline
+
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 46
+    CALL print_char   ; .
+    LDI A, 46
+    CALL print_char   ; . (выйти из папки на уровень выше)
 
     CALL print_newline
 
@@ -1635,6 +1878,15 @@ cmd_reset:
     STA 0xF00007D8    ; CLEAR (Text VRAM)
     STA 0xF0000FDD    ; CLEAR (TextAttr)
 
+    LDI A, 12
+    STA 0xF00007F2    ; DiskC COMMAND = CHDIR_UP (сброс в корень)
+    LDI A, 12
+    STA 0xF0000805    ; DiskD COMMAND = CHDIR_UP
+
+    LDI A, 0
+    STA inSubdir
+    STA currentDisk
+
     CALL draw_banner  ; сама выставит column/row/HL и перекрасит рамку
 
     RET
@@ -1953,7 +2205,9 @@ cmd_type_d_done:
 cmd_cd:
 
     ; "cd c" / "cd d" (4 символа) - переключает currentDisk для
-    ; dir/type. Символ диска - cmdbuf3.
+    ; dir/type/... Символ диска - cmdbuf3. Заодно возвращает выбранный
+    ; диск в корень (v1 не помнит "где был" на каждом диске отдельно -
+    ; см. план) и сбрасывает промпт на корень.
 
     LDA cmdbuf3
     LDI B, 100    ; 'd'
@@ -1962,12 +2216,155 @@ cmd_cd:
 
     LDI A, 1
     STA currentDisk
+
+    LDI A, 12
+    STA 0xF0000805      ; DiskD COMMAND = CHDIR_UP (сброс в корень)
+
+    LDI A, 0
+    STA inSubdir
     RET
 
 cmd_cd_c:
 
     LDI A, 0
     STA currentDisk
+
+    LDI A, 12
+    STA 0xF00007F2      ; DiskC COMMAND = CHDIR_UP
+
+    LDI A, 0
+    STA inSubdir
+    RET
+
+
+cmd_cd_up:
+
+    ; "cd.." - выйти из папки на уровень выше (на currentDisk)
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_cd_up_d
+
+    LDI A, 12
+    STA 0xF00007F2      ; DiskC COMMAND = CHDIR_UP
+    JMP cmd_cd_up_done
+
+cmd_cd_up_d:
+
+    LDI A, 12
+    STA 0xF0000805      ; DiskD COMMAND = CHDIR_UP
+
+cmd_cd_up_done:
+
+    LDI A, 0
+    STA inSubdir
+    RET
+
+
+cmd_cd_dir:
+
+    ; "cd ИМЯ" - зайти в папку ИМЯ на currentDisk (CHDIR = 11 в Disk)
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_cd_dir_d
+    JMP cmd_cd_dir_c
+
+
+cmd_cd_dir_c:
+
+    LDI A, 3
+    STA cn_prefix_len   ; длина префикса "cd "
+    CALL copy_name_to_diskc
+
+    LDI A, 11
+    STA 0xF00007F2      ; DiskC COMMAND = CHDIR
+
+    LDA 0xF00007F3      ; DiskC STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_cd_dir_done  ; не папка/не найдена - молча выходим
+
+    ; успех - копируем имя из NAME диска в curDirName для промпта
+    ; (фиксированные адреса с обеих сторон - HL не нужен)
+
+    LDA 0xF00007E6
+    STA curDirName0
+    LDA 0xF00007E7
+    STA curDirName1
+    LDA 0xF00007E8
+    STA curDirName2
+    LDA 0xF00007E9
+    STA curDirName3
+    LDA 0xF00007EA
+    STA curDirName4
+    LDA 0xF00007EB
+    STA curDirName5
+    LDA 0xF00007EC
+    STA curDirName6
+    LDA 0xF00007ED
+    STA curDirName7
+    LDA 0xF00007EE
+    STA curDirName8
+    LDA 0xF00007EF
+    STA curDirName9
+    LDA 0xF00007F0
+    STA curDirName10
+    LDA 0xF00007F1
+    STA curDirName11
+
+    LDI A, 1
+    STA inSubdir
+
+cmd_cd_dir_done:
+
+    RET
+
+
+cmd_cd_dir_d:
+
+    LDI A, 3
+    STA cn_prefix_len   ; длина префикса "cd "
+    CALL copy_name_to_diskd
+
+    LDI A, 11
+    STA 0xF0000805      ; DiskD COMMAND = CHDIR
+
+    LDA 0xF0000806      ; DiskD STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_cd_dir_d_done
+
+    LDA 0xF00007F9
+    STA curDirName0
+    LDA 0xF00007FA
+    STA curDirName1
+    LDA 0xF00007FB
+    STA curDirName2
+    LDA 0xF00007FC
+    STA curDirName3
+    LDA 0xF00007FD
+    STA curDirName4
+    LDA 0xF00007FE
+    STA curDirName5
+    LDA 0xF00007FF
+    STA curDirName6
+    LDA 0xF0000800
+    STA curDirName7
+    LDA 0xF0000801
+    STA curDirName8
+    LDA 0xF0000802
+    STA curDirName9
+    LDA 0xF0000803
+    STA curDirName10
+    LDA 0xF0000804
+    STA curDirName11
+
+    LDI A, 1
+    STA inSubdir
+
+cmd_cd_dir_d_done:
+
     RET
 
 
@@ -2580,6 +2977,21 @@ cmdlen:     DB 0
 lastChar:   DB 0
 currentDisk: DB 0   ; 0 = диск C, 1 = диск D (см. cmd_cd)
 
+inSubdir:    DB 0   ; 0 = в корне диска, 1 = внутри папки (см. print_prompt)
+
+curDirName0:  DB 0  ; имя текущей папки (для промпта), см. cmd_cd_dir
+curDirName1:  DB 0
+curDirName2:  DB 0
+curDirName3:  DB 0
+curDirName4:  DB 0
+curDirName5:  DB 0
+curDirName6:  DB 0
+curDirName7:  DB 0
+curDirName8:  DB 0
+curDirName9:  DB 0
+curDirName10: DB 0
+curDirName11: DB 0
+
 savedA:     DB 0
 savedB:     DB 0
 savedC:     DB 0
@@ -2604,9 +3016,13 @@ cn_prefix_len: DB 0 ; длина префикса команды перед им
                     ; copy_name_to_diskc/d (5 для type/exec/copy,
                     ; 7 для create, 4 для del)
 
-; Буфер команды - 12 отдельных байт (0..11), не единый массив (см.
-; комментарий в do_echo). Хватает на самую длинную команду - "poke
-; NNN VVV" (12 символов).
+; Буфер команды - 20 отдельных байт (0..19), не единый массив (см.
+; комментарий в do_echo). Изначально был 12 байт (под "poke NNN VVV"),
+; но самая длинная реальная команда - "create ИМЯ.ЕХТ" (7 символов
+; префикса + до 12 на имя 8.3) = 19 символов; 12 байт обрезали хвост
+; имени файла и copy_name_to_diskc/d читали "мусор" за пределами
+; буфера (баг: "type" внутри папки не находил файл длиннее 7 симв.
+; после префикса).
 
 cmdbuf0:    DB 0
 cmdbuf1:    DB 0
@@ -2620,3 +3036,11 @@ cmdbuf8:    DB 0
 cmdbuf9:    DB 0
 cmdbuf10:   DB 0
 cmdbuf11:   DB 0
+cmdbuf12:   DB 0
+cmdbuf13:   DB 0
+cmdbuf14:   DB 0
+cmdbuf15:   DB 0
+cmdbuf16:   DB 0
+cmdbuf17:   DB 0
+cmdbuf18:   DB 0
+cmdbuf19:   DB 0

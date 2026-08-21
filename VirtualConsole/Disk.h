@@ -40,6 +40,12 @@ private:
     static const uint32_t SHELL_LOAD_ADDRESS = 0x00003000;
 
     std::filesystem::path basePath;
+
+    // Текущая папка относительно basePath (пусто = корень диска).
+    // v1 - один уровень вложенности (см. ASSEMBLY.md, "Disk"): CHDIR
+    // просто добавляет имя, CHDIR_UP берёт parent_path().
+    std::filesystem::path currentDir;
+
     Bus* bus;
     Assembler assembler;
 
@@ -56,7 +62,6 @@ private:
 
     void listFirst();
     void listNext();
-    void skipToRegularFile();
     void populateNameFromIterator();
 
     void openRead();
@@ -69,4 +74,6 @@ private:
 
     void loadProgram(uint32_t targetAddress);
     void deleteFile();
+    void changeDir();
+    void changeDirUp();
 };
