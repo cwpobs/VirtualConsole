@@ -1,10 +1,13 @@
 #pragma once
 
 #include "Device.h"
+#include "Assembler.h"
 
 #include <string>
 #include <fstream>
 #include <filesystem>
+
+class Bus;
 
 // Устройство "диск" - физически папка на компьютере хоста. Файлы
 // разной длины не ложатся на модель "адрес=байт памяти", поэтому
@@ -15,14 +18,23 @@ class Disk : public Device
 {
 public:
 
-    Disk(const std::string& folder);
+    // bus нужен только для команды LOAD (собрать .asm-файл и
+    // записать код в RAM) - остальные команды (LIST/OPEN/READ/WRITE)
+    // работают только с файловой системой и его не используют.
+    Disk(const std::string& folder, Bus* bus);
 
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
 
 private:
 
+    // Адрес в RAM, куда LOAD кладёт собранный код - та же
+    // "песочница", что уже использует poke/run (см. ASSEMBLY.md).
+    static const uint32_t LOAD_ADDRESS = 0x00002000;
+
     std::filesystem::path basePath;
+    Bus* bus;
+    Assembler assembler;
 
     uint8_t name[12];
     uint8_t status;
@@ -47,4 +59,6 @@ private:
     void writeByte();
 
     void closeFiles();
+
+    void loadProgram();
 };

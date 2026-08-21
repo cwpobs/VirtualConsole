@@ -47,8 +47,8 @@ int main()
     Bus bus;
     CPU cpu;
     DebugPort debugPort(&cpu);
-    Disk diskC("C");
-    Disk diskD("D");
+    Disk diskC("C", &bus);
+    Disk diskD("D", &bus);
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),

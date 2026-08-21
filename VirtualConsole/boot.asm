@@ -943,22 +943,57 @@ check_cd:
     LDA cmdlen
     LDI B, 4
     CMP B
-    JNZ dispatch_done
+    JNZ check_exec
 
     LDA cmdbuf0
     LDI B, 99       ; 'c'
     CMP B
-    JNZ dispatch_done
+    JNZ check_exec
     LDA cmdbuf1
     LDI B, 100      ; 'd'
     CMP B
+    JNZ check_exec
+    LDA cmdbuf2
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_exec
+
+    CALL cmd_cd
+    JMP dispatch_done
+
+
+check_exec:
+
+    ; "exec " + ровно 7 символов имени файла (та же схема, что у
+    ; "type" - фиксированная длина, без переменного аргумента)
+
+    LDA cmdlen
+    LDI B, 12
+    CMP B
+    JNZ dispatch_done
+
+    LDA cmdbuf0
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf1
+    LDI B, 120      ; 'x'
+    CMP B
     JNZ dispatch_done
     LDA cmdbuf2
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf3
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf4
     LDI B, 32       ; (пробел)
     CMP B
     JNZ dispatch_done
 
-    CALL cmd_cd
+    CALL cmd_exec
 
 dispatch_done:
 
@@ -1085,6 +1120,33 @@ cmd_help:
     CALL print_char   ; /
     LDI A, 100
     CALL print_char   ; d
+
+    CALL print_newline
+
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 120
+    CALL print_char   ; x
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 32
+    CALL print_char
+    LDI A, 78
+    CALL print_char   ; N (имя - ровно 7 символов)
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 78
+    CALL print_char   ; N
 
     CALL print_newline
 
@@ -1749,6 +1811,113 @@ cmd_cd_c:
 
     LDI A, 0
     STA currentDisk
+    RET
+
+
+cmd_exec:
+
+    ; "exec ИМЯ" - собирает .asm-файл с текущего диска (currentDisk)
+    ; и запускает его (LOAD в Disk - см. ASSEMBLY.md, "Disk"). ИМЯ -
+    ; ровно 7 символов, как у "type".
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_exec_d
+    JMP cmd_exec_c
+
+
+cmd_exec_c:
+
+    LDA cmdbuf5
+    STA 0xF00007E6
+    LDA cmdbuf6
+    STA 0xF00007E7
+    LDA cmdbuf7
+    STA 0xF00007E8
+    LDA cmdbuf8
+    STA 0xF00007E9
+    LDA cmdbuf9
+    STA 0xF00007EA
+    LDA cmdbuf10
+    STA 0xF00007EB
+    LDA cmdbuf11
+    STA 0xF00007EC
+
+    LDI A, 0
+    STA 0xF00007ED
+    STA 0xF00007EE
+    STA 0xF00007EF
+    STA 0xF00007F0
+    STA 0xF00007F1
+
+    LDI A, 8
+    STA 0xF00007F2      ; DiskC COMMAND = LOAD
+
+    LDA 0xF00007F3      ; DiskC STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_exec_done   ; файл не найден/ошибка сборки - молча выходим
+
+    JMP cmd_exec_run
+
+
+cmd_exec_d:
+
+    LDA cmdbuf5
+    STA 0xF00007F9
+    LDA cmdbuf6
+    STA 0xF00007FA
+    LDA cmdbuf7
+    STA 0xF00007FB
+    LDA cmdbuf8
+    STA 0xF00007FC
+    LDA cmdbuf9
+    STA 0xF00007FD
+    LDA cmdbuf10
+    STA 0xF00007FE
+    LDA cmdbuf11
+    STA 0xF00007FF
+
+    LDI A, 0
+    STA 0xF0000800
+    STA 0xF0000801
+    STA 0xF0000802
+    STA 0xF0000803
+    STA 0xF0000804
+
+    LDI A, 8
+    STA 0xF0000805      ; DiskD COMMAND = LOAD
+
+    LDA 0xF0000806      ; DiskD STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_exec_done
+
+    ; --- дошли сюда после успешной сборки - запускаем, как cmd_run ---
+
+cmd_exec_run:
+
+    PUSH D          ; на случай, если программа испортит "константу 0"
+
+    CALL 0x00002000
+
+    STA savedA
+    PUSH B
+    POP A
+    STA savedB
+    PUSH C
+    POP A
+    STA savedC
+    PUSH D
+    POP A
+    STA savedD
+
+    POP D           ; восстанавливаем константу 0
+
+    CALL goto_row_start   ; программа могла сама сдвинуть HL
+
+cmd_exec_done:
+
     RET
 
 

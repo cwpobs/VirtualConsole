@@ -1,8 +1,12 @@
 #include "Disk.h"
+#include "Bus.h"
 
-Disk::Disk(const std::string& folder)
+#include <sstream>
+
+Disk::Disk(const std::string& folder, Bus* bus)
 {
     basePath = folder;
+    this->bus = bus;
 
     std::filesystem::create_directories(basePath);
 
@@ -62,6 +66,7 @@ void Disk::write(uint32_t address, uint8_t value)
         case 5: openWrite(); break;
         case 6: writeByte(); break;
         case 7: closeFiles(); break;
+        case 8: loadProgram(); break;
         default: break;
         }
 
@@ -231,5 +236,50 @@ void Disk::closeFiles()
         writeStream.close();
     }
 
+    status = 0;
+}
+
+void Disk::loadProgram()
+{
+    // Читаем NAME как текстовый .asm-файл (не бинарно - это исходник
+    // ассемблера, не машинный код), собираем тем же Assembler, что
+    // main.cpp использует для boot.asm, и кладём результат в RAM по
+    // фиксированному адресу песочницы - дальше программа запускается
+    // как обычно через CALL LOAD_ADDRESS (см. cmd_exec в boot.asm).
+
+    std::ifstream sourceFile(basePath / nameAsString());
+
+    if (!sourceFile)
+    {
+        status = 2;
+        fileSize = 0;
+        return;
+    }
+
+    std::stringstream buffer;
+    buffer << sourceFile.rdbuf();
+
+    std::vector<uint8_t> machineCode;
+
+    try
+    {
+        machineCode = assembler.assemble(buffer.str());
+    }
+    catch (const std::exception&)
+    {
+        status = 2;
+        fileSize = 0;
+        return;
+    }
+
+    for (size_t i = 0; i < machineCode.size(); i++)
+    {
+        bus->write(
+            LOAD_ADDRESS + static_cast<uint32_t>(i),
+            machineCode[i]
+        );
+    }
+
+    fileSize = static_cast<uint32_t>(machineCode.size());
     status = 0;
 }
