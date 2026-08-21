@@ -2,6 +2,8 @@
 
 #include "Device.h"
 
+#include <chrono>
+
 class Keyboard : public Device
 {
 public:
@@ -25,6 +27,16 @@ private:
     int count;
 
     bool enabled;
+
+    // tick() вызывается на КАЖДОЕ обращение к шине (CPU::busRead/
+    // busWrite), а не раз в инструкцию - это тысячи раз в секунду.
+    // _kbhit()/_getch() - настоящие системные вызовы Windows, не
+    // дешёвая проверка переменной; опрашивать реальную клавиатуру
+    // так часто не нужно и заметно тормозит (нашли живым
+    // тестированием - shell-команды с большими циклами вроде
+    // goto_row_start ощутимо подвисали). Троттлим до ~1 мс - с
+    // большим запасом для скорости печати человека.
+    std::chrono::steady_clock::time_point lastPoll;
 
     bool queueEmpty();
     bool queueFull();

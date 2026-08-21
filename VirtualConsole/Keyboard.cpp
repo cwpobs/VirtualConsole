@@ -9,6 +9,8 @@ Keyboard::Keyboard()
     count = 0;
 
     enabled = false;
+
+    lastPoll = std::chrono::steady_clock::now();
 }
 
 bool Keyboard::queueEmpty()
@@ -83,6 +85,19 @@ void Keyboard::write(uint32_t address, uint8_t value)
 
 void Keyboard::tick()
 {
+    // tick() вызывается на каждое обращение к шине - тысячи раз в
+    // секунду. _kbhit()/_getch() - настоящие системные вызовы,
+    // опрашивать реальную клавиатуру так часто не нужно и заметно
+    // тормозит выполнение (см. Keyboard.h). Троттлим до ~1 мс.
+    auto now = std::chrono::steady_clock::now();
+
+    if (now - lastPoll < std::chrono::milliseconds(1))
+    {
+        return;
+    }
+
+    lastPoll = now;
+
     if (_kbhit())
     {
         int key = _getch();
