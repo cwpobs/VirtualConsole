@@ -293,34 +293,12 @@ do_backspace:
 
 do_enter:
 
-    ; Извлекаем исходные A/B/C - их положил на стек irq_handler ДО
-    ; того, как их затёрла логика чтения кода клавиши. Без этого
-    ; "regs" показывала бы код клавиши Enter вместо реальных
-    ; регистров прерванной программы. Складываем обратно в том же
-    ; порядке, чтобы irq_done мог штатно восстановить их для RETI.
-
-    POP C
-    POP B
-    POP A
-
-    STA savedA
-
-    PUSH B
-    POP A
-    STA savedB
-
-    PUSH C
-    POP A
-    STA savedC
-
-    PUSH D
-    POP A
-    STA savedD
-
-    LDA savedA
-    PUSH A
-    PUSH B
-    PUSH C
+    ; savedA/B/C/D сюда НЕ трогаем: между нажатиями клавиш крутится
+    ; wait-цикл ("LDA quit; CMP D; JZ wait"), который каждую итерацию
+    ; затирает A - если бы do_enter захватывал "текущие" A/B/C/D на
+    ; каждый Enter, "regs" после "run" всегда показывала бы нули
+    ; вместо результата run (ровно так и было - нашли живым
+    ; тестированием). Обновляет saved* только команда run.
 
     CALL print_newline
     CALL dispatch_command
@@ -1026,11 +1004,12 @@ cmd_dump:
     ADD C
     STA tmp1              ; tmp1 = адрес (0-255)
 
-    ; --- читаем байт по этому адресу ---
+    ; --- читаем байт по этому адресу (та же песочница, что и poke -
+    ; чтобы poke/dump работали согласованной парой) ---
 
-    LDHL 0
+    LDHL 0x00002000
     LDA tmp1
-    CALL hl_add_offset    ; HL = tmp1
+    CALL hl_add_offset    ; HL = 0x00002000 + tmp1
 
     LDX
     STA tmp2              ; tmp2 = значение по адресу
