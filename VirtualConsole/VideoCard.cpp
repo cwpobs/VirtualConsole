@@ -315,6 +315,17 @@ void VideoCard::spriteClear()
     spriteStatus = 0;
 }
 
+void VideoCard::setSpriteBitmap(int index, const uint8_t* rgb)
+{
+    if (index < 0 || index >= SPRITE_COUNT)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(framebufferMutex);
+    memcpy(spriteData[index], rgb, SPRITE_PIXELS * CHANNELS);
+}
+
 void VideoCard::compositeSprites(uint8_t* staging) const
 {
     // Вызывающий (renderThreadMain) уже держит framebufferMutex на

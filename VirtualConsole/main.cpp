@@ -13,6 +13,7 @@
 #include "Disk.h"
 #include "VideoCard.h"
 #include "Clock.h"
+#include "PngLoader.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -53,6 +54,7 @@ int main()
     Disk diskD("D", &bus);
     VideoCard videoCard;
     Clock clock;
+    PngLoader pngLoader(&videoCard);
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -69,6 +71,7 @@ int main()
     bus.mapDevice(&attr, 0xF000080C, 0xF0000FDD);      // цвет (fg/bg) + SCROLL + CLEAR
     bus.mapDevice(&videoCard, 0xF0000FDE, 0xF0000FF7); // видеокарта 320x240 + 16 спрайтов 32x32
     bus.mapDevice(&clock, 0xF0000FF8, 0xF0000FF9);     // часы реального времени (мс, std::chrono)
+    bus.mapDevice(&pngLoader, 0xF0000FFA, 0xF000100C); // загрузчик PNG-спрайтшитов (stb_image)
 
 
     // ========================================

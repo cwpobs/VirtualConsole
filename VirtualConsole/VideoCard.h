@@ -31,6 +31,13 @@ public:
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
 
+    // Заливает битмап спрайта index целиком из внешнего RGB-буфера
+    // (32*32*3 байт) - для устройств вроде PngLoader, которым нужно
+    // положить готовую декодированную картинку в спрайт одним вызовом
+    // C++, без похода через регистры/WRITE_PIXEL по одному пикселю.
+    // index вне 0-15 молча игнорируется.
+    void setSpriteBitmap(int index, const uint8_t* rgb);
+
 private:
 
     static const int WIDTH = 320;

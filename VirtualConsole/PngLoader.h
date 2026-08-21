@@ -1,0 +1,65 @@
+#pragma once
+
+#include "Device.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+class VideoCard;
+
+// Устройство "загрузчик PNG" - декодирует спрайтшит (PNG со сжатием
+// zlib/deflate - декодировать такое в ассемблере этого CPU нереально)
+// на стороне C++ (через stb_image.h) и вырезает из него квадраты
+// 32x32 прямо в видеопамять аппаратных спрайтов VideoCard. Ассемблеру
+// видна только команда "загрузи файл" / "вырежи регион в спрайт N" -
+// вся работа с форматом PNG спрятана здесь. См. ASSEMBLY.md,
+// раздел "PngLoader".
+class PngLoader : public Device
+{
+public:
+
+    // videoCard - куда складывать вырезанные спрайты (см.
+    // VideoCard::setSpriteBitmap). Как и Disk, читает файлы из
+    // папки "C" (без поддиректорий - v1).
+    explicit PngLoader(VideoCard* videoCard);
+
+    uint8_t read(uint32_t address) override;
+    void write(uint32_t address, uint8_t value) override;
+
+private:
+
+    static const int SPRITE_SIZE = 32;
+
+    static const uint32_t REG_NAME_FIRST = 0;
+    static const uint32_t REG_NAME_LAST = 11;
+    static const uint32_t REG_SRC_X_LOW = 12;
+    static const uint32_t REG_SRC_X_HIGH = 13;
+    static const uint32_t REG_SRC_Y_LOW = 14;
+    static const uint32_t REG_SRC_Y_HIGH = 15;
+    static const uint32_t REG_SPRITE_INDEX = 16;
+    static const uint32_t REG_COMMAND = 17;
+    static const uint32_t REG_STATUS = 18;
+
+    VideoCard* videoCard;
+    std::string basePath;
+
+    uint8_t name[12];
+    uint8_t srcXLow, srcXHigh, srcYLow, srcYHigh;
+    uint8_t spriteIndex;
+    uint8_t status;
+
+    // Кэш последнего успешно декодированного изображения (RGBA,
+    // 4 байта/пиксель) - один LOAD обслуживает много EXTRACT без
+    // повторного декодирования того же файла.
+    std::vector<uint8_t> pixels;
+    int imageWidth;
+    int imageHeight;
+
+    std::string nameAsString() const;
+    uint16_t srcX() const;
+    uint16_t srcY() const;
+
+    void load();
+    void extract();
+};
