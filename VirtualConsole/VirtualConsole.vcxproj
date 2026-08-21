@@ -160,6 +160,7 @@
     <ClCompile Include="TextAttr.cpp" />
     <ClCompile Include="TextVRAM.cpp" />
     <ClCompile Include="Timer.cpp" />
+    <ClCompile Include="VideoCard.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h" />
@@ -173,6 +174,7 @@
     <ClInclude Include="TextAttr.h" />
     <ClInclude Include="TextVRAM.h" />
     <ClInclude Include="Timer.h" />
+    <ClInclude Include="VideoCard.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="ASSEMBLY.md" />
