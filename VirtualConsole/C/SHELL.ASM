@@ -405,7 +405,7 @@ draw_banner:
     LDI A, 0xBB
     CALL print_char   ; ╗
 
-    ; ---- Строка 1: "Virtual Console. ESC to quit." ----
+    ; ---- Строка 1: "Shell v1.0 (2026). ESC to quit." ----
 
     LDHL 0xF0000057     ; 0xF0000007 + 80
     LDI A, 0
@@ -416,36 +416,40 @@ draw_banner:
     LDI A, 0xBA
     CALL print_char   ; ║
 
-    LDI A, 86
-    CALL print_char   ; V
-    LDI A, 105
-    CALL print_char   ; i
-    LDI A, 114
-    CALL print_char   ; r
-    LDI A, 116
-    CALL print_char   ; t
-    LDI A, 117
-    CALL print_char   ; u
-    LDI A, 97
-    CALL print_char   ; a
+    LDI A, 83
+    CALL print_char   ; S
+    LDI A, 104
+    CALL print_char   ; h
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 108
+    CALL print_char   ; l
     LDI A, 108
     CALL print_char   ; l
     LDI A, 32
     CALL print_char   ; (пробел)
-    LDI A, 67
-    CALL print_char   ; C
-    LDI A, 111
-    CALL print_char   ; o
-    LDI A, 110
-    CALL print_char   ; n
-    LDI A, 115
-    CALL print_char   ; s
-    LDI A, 111
-    CALL print_char   ; o
-    LDI A, 108
-    CALL print_char   ; l
-    LDI A, 101
-    CALL print_char   ; e
+    LDI A, 118
+    CALL print_char   ; v
+    LDI A, 49
+    CALL print_char   ; 1
+    LDI A, 46
+    CALL print_char   ; .
+    LDI A, 48
+    CALL print_char   ; 0
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 40
+    CALL print_char   ; (
+    LDI A, 50
+    CALL print_char   ; 2
+    LDI A, 48
+    CALL print_char   ; 0
+    LDI A, 50
+    CALL print_char   ; 2
+    LDI A, 54
+    CALL print_char   ; 6
+    LDI A, 41
+    CALL print_char   ; )
     LDI A, 46
     CALL print_char   ; .
     LDI A, 32
@@ -475,8 +479,8 @@ draw_banner:
     LDI A, 46
     CALL print_char   ; .
 
-    ; 29 видимых символов - дополняем пробелами до 78
-    LDI A, 49
+    ; 31 видимый символ - дополняем пробелами до 78
+    LDI A, 47
     STA tmp2
     LDI A, 32
     CALL print_char_n
