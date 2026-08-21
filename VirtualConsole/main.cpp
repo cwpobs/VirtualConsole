@@ -3,6 +3,7 @@
 
 #include "CPU.h"
 #include "Memory.h"
+#include "Timer.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -13,12 +14,15 @@ int main()
     // ========================================
 
     Memory memory;
+    Timer timer;
     Bus bus;
     CPU cpu;
     Assembler assembler;
 
-    // Подключаем память к шине на весь диапазон адресов
-    bus.mapDevice(&memory, 0x0000, 0xFFFF);
+    // Память занимает нижнюю часть адресного пространства,
+    // верхняя часть (0xF000-0xF001) отдана таймеру
+    bus.mapDevice(&memory, 0x0000, 0xEFFF);
+    bus.mapDevice(&timer, 0xF000, 0xF001);
 
 
     // ========================================
@@ -97,6 +101,7 @@ int main()
     while (cpu.running)
     {
         cpu.step();
+        bus.tick();
     }
 
 
@@ -130,6 +135,14 @@ int main()
 
     std::cout << "FLAGS = "
         << (int)cpu.FLAGS
+        << "\n";
+
+    uint16_t timerValue =
+        bus.read(0xF000) |
+        (bus.read(0xF001) << 8);
+
+    std::cout << "TIMER = "
+        << timerValue
         << "\n";
 
 

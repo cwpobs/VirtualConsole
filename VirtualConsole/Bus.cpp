@@ -47,3 +47,11 @@ bool Bus::isMapped(uint16_t address)
 {
     return findDevice(address) != nullptr;
 }
+
+void Bus::tick()
+{
+    for (MappedDevice& mapped : devices)
+    {
+        mapped.device->tick();
+    }
+}

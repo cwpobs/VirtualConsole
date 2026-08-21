@@ -16,6 +16,8 @@ public:
 
     bool isMapped(uint16_t address);
 
+    void tick();
+
 private:
 
     struct MappedDevice
