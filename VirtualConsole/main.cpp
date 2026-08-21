@@ -1,3 +1,4 @@
+#include <chrono>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -159,10 +160,21 @@ int main()
     // соответствующую cpu.HL (в границах видеопамяти)
     auto redraw = [&]()
     {
+        // Весь кадр сначала собирается в памяти и уходит на экран
+        // ОДНИМ write - иначе десятки-сотни отдельных << на std::cout
+        // (по паре байт на символ кириллицы/псевдографики, плюс ANSI-
+        // код на каждую смену цвета) могут превысить внутренний буфер
+        // потока и вызвать НЕСКОЛЬКО настоящих системных вызовов
+        // записи в консоль на один кадр - при частой перерисовке
+        // (см. programRunning ниже) это ощутимо тормозит и саму
+        // перерисовку, и (раз всё в одном потоке с cpu.step()) опрос
+        // клавиатуры.
+        std::ostringstream frame;
+
         // Прячем курсор перед перерисовкой - иначе он на мгновение
         // виден "прыгающим" в начало экрана перед каждым кадром
-        std::cout << "\x1b[?25l\x1b[H";
-        vram.render(&attr);
+        frame << "\x1b[?25l\x1b[H";
+        vram.render(&attr, frame);
 
         const uint32_t vramBase = 0xF0000007;
 
@@ -173,10 +185,12 @@ int main()
             int row = offset / TextVRAM::WIDTH;
             int col = offset % TextVRAM::WIDTH;
 
-            std::cout << "\x1b[" << (row + 1) << ";" << (col + 1) << "H";
+            frame << "\x1b[" << (row + 1) << ";" << (col + 1) << "H";
         }
 
-        std::cout << "\x1b[?25h";
+        frame << "\x1b[?25h";
+
+        std::cout << frame.str();
         std::cout.flush();
     };
 
@@ -186,6 +200,32 @@ int main()
     uint8_t lastBannerReady = 0;
     uint8_t lastDoneReady = 0;
 
+    // Помимо перерисовки по изменению keyCount/bannerReady/doneReady
+    // (нужно для мгновенного отклика печати в терминале) - отдельная,
+    // по РЕАЛЬНОМУ времени, перерисовка раз в ~150 мс (тот же приём
+    // throttling'а через steady_clock, что и в Keyboard::tick()), НО
+    // только пока реально работает exec'нутая программа (programRunning,
+    // 0x00010004, см. SHELL.ASM) - иначе программа, которая пишет прямо
+    // в Text VRAM, но не трогает keyCount/bannerReady/doneReady
+    // (например, игра на мини-C, опрашивающая клавиатуру напрямую через
+    // peek(), а не через прерывания), была бы не видна на экране в
+    // реальном времени.
+    //
+    // Гейт по programRunning принципиален: включать это ВСЕГДА (в том
+    // числе на время обычной работы шелла) резко увеличивает нагрузку
+    // и на практике тормозит печать баннера и опрос клавиатуры -
+    // проверено на живую, регресс уже был и это его исправление.
+    //
+    // 150 мс (не 33/~30 кадров/сек, как было раньше) - тоже осознанно:
+    // redraw() - это реальная перерисовка терминала (не просто запись
+    // в файл), и на медленной консоли сам по себе может занимать
+    // заметное время; 30 раз/сек этого хватало, чтобы синхронный вызов
+    // redraw() съедал большую часть времени потока, в котором крутится
+    // cpu.step()/опрос клавиатуры - отсюда и "клавиатура не реагирует".
+    // SNAKE.MC двигает змейку раз в 120 мс - чаще этого перерисовывать
+    // всё равно бессмысленно, кадр не меняется.
+    auto lastRedraw = std::chrono::steady_clock::now();
+
     while (cpu.running)
     {
         cpu.step();
@@ -193,14 +233,19 @@ int main()
         uint8_t currentKeyCount = bus.read(0x00010000);
         uint8_t currentBannerReady = bus.read(0x00010002);
         uint8_t currentDoneReady = bus.read(0x00010003);
+        uint8_t currentProgramRunning = bus.read(0x00010004);
+
+        auto now = std::chrono::steady_clock::now();
 
         if (currentKeyCount != lastKeyCount ||
             currentBannerReady != lastBannerReady ||
-            currentDoneReady != lastDoneReady)
+            currentDoneReady != lastDoneReady ||
+            (currentProgramRunning != 0 && now - lastRedraw >= std::chrono::milliseconds(150)))
         {
             lastKeyCount = currentKeyCount;
             lastBannerReady = currentBannerReady;
             lastDoneReady = currentDoneReady;
+            lastRedraw = now;
 
             redraw();
         }

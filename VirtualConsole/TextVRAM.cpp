@@ -1,7 +1,7 @@
 #include "TextVRAM.h"
 #include "TextAttr.h"
 
-#include <iostream>
+#include <ostream>
 
 // Кодовая страница CP866 ("альтернативная ГОСТ") - классическая
 // DOS-кодировка для русского: байты 0x80-0xFF дают кириллицу и
@@ -128,7 +128,7 @@ static void writeAnsiColor(std::ostream& out, uint8_t attribute)
     out << "\x1b[" << fgCode << ";" << bgCode << "m";
 }
 
-void TextVRAM::render(const TextAttr* attr) const
+void TextVRAM::render(const TextAttr* attr, std::ostream& out) const
 {
     int lastAttribute = -1;
 
@@ -145,28 +145,28 @@ void TextVRAM::render(const TextAttr* attr) const
 
                 if (attribute != lastAttribute)
                 {
-                    writeAnsiColor(std::cout, static_cast<uint8_t>(attribute));
+                    writeAnsiColor(out, static_cast<uint8_t>(attribute));
                     lastAttribute = attribute;
                 }
             }
 
             if (c == 0)
             {
-                std::cout << ' ';
+                out << ' ';
             }
             else
             {
-                writeUtf8(std::cout, codepointFor(c));
+                writeUtf8(out, codepointFor(c));
             }
         }
 
-        std::cout << "\n";
+        out << "\n";
     }
 
     if (attr != nullptr)
     {
         // Сброс цвета в конце кадра - иначе он "утекает" в
         // диагностический дамп/остальной вывод консоли после HLT
-        std::cout << "\x1b[0m";
+        out << "\x1b[0m";
     }
 }

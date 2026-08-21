@@ -114,6 +114,7 @@ private:
     std::map<std::string, long long> constants;
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, int> arraySizes;
+    std::map<std::string, long long> arrayBaseAddr;   // маппированные массивы (`int arr[N] = адрес;`) - alias на внешнюю память (MMIO), без собственной DB-ячейки
     std::vector<std::string> globalVars;   // все `int x;` - и верхнего уровня, и внутри функций (переменных без глобальной DB-ячейки в этом языке не бывает)
 
     void collectDeclarations(const NodePtr& program);

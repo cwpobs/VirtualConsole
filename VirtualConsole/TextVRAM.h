@@ -2,6 +2,8 @@
 
 #include "Device.h"
 
+#include <ostream>
+
 class TextAttr;
 
 class TextVRAM : public Device
@@ -18,8 +20,11 @@ public:
     void write(uint32_t address, uint8_t value) override;
 
     // attr - плоскость цветовых атрибутов (см. TextAttr); может быть
-    // nullptr, тогда рендерится без цвета (как раньше).
-    void render(const TextAttr* attr) const;
+    // nullptr, тогда рендерится без цвета (как раньше). out - куда
+    // писать кадр - вызывающий сам решает, когда сбрасывать его на
+    // экран одним write (см. main.cpp, redraw()) - render() сам по
+    // себе flush не делает.
+    void render(const TextAttr* attr, std::ostream& out) const;
 
 private:
 

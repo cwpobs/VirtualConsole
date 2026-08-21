@@ -216,6 +216,15 @@ Compiler::NodePtr Compiler::parseTopLevelDecl()
         NodePtr sizeExpr = parseExpr();
         n->children.push_back(sizeExpr);
         expect("]");
+        if (match("="))
+        {
+            // Маппированный массив - "= адрес" вместо обычного DB-
+            // хранилища привязывает arr[i] к готовому MMIO-адресу
+            // (например, Text VRAM) - см. Compiler.h и ASSEMBLY.md,
+            // "Мини-C". Адрес - константа времени компиляции, как у
+            // poke/peek.
+            n->children.push_back(parseExpr());
+        }
         expect(";");
         return n;
     }
@@ -698,6 +707,10 @@ void Compiler::collectDeclarations(const NodePtr& program)
         else if (decl->kind == NodeKind::ArrayDecl)
         {
             arraySizes[decl->text] = static_cast<int>(foldConst(decl->children[0]));
+            if (decl->children.size() > 1)
+            {
+                arrayBaseAddr[decl->text] = foldConst(decl->children[1]);
+            }
         }
         else if (decl->kind == NodeKind::FuncDecl)
         {
@@ -792,7 +805,15 @@ void Compiler::genAddressOf(const NodePtr& indexNode)
             ": '" + indexNode->text + "' не является массивом");
     }
 
-    *codeOut << "    LDHL " << indexNode->text << "\n";
+    auto mapped = arrayBaseAddr.find(indexNode->text);
+    if (mapped != arrayBaseAddr.end())
+    {
+        *codeOut << "    LDHL " << mapped->second << "\n";
+    }
+    else
+    {
+        *codeOut << "    LDHL " << indexNode->text << "\n";
+    }
     genExprToA(indexNode->children[0]);
     *codeOut << "    CALL __mc_hladd\n";
 }
@@ -1165,6 +1186,7 @@ std::string Compiler::compile(const std::string& source)
     constants.clear();
     functions.clear();
     arraySizes.clear();
+    arrayBaseAddr.clear();
     globalVars.clear();
 
     lex(source);
@@ -1224,6 +1246,8 @@ std::string Compiler::compile(const std::string& source)
     {
         if (decl->kind == NodeKind::ArrayDecl)
         {
+            if (arrayBaseAddr.count(decl->text)) continue;   // маппированный - alias на внешнюю память, своей DB не нужно
+
             int size = arraySizes[decl->text];
             data << decl->text << ": DB 0\n";
             for (int i = 1; i < size; i++)

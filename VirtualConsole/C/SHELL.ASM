@@ -64,7 +64,7 @@ main:
     STA 0x00010000      ; keyCount = 0
     STA quit            ; quit = 0
     STA cmdlen          ; cmdlen = 0
-    STA programRunning  ; programRunning = 0
+    STA 0x00010004      ; programRunning = 0
 
     LDI D, 0        ; D - константа "0" для сравнений на весь запуск
 
@@ -153,7 +153,7 @@ do_quit:
     ; в cmd_run/cmd_exec_run), Ctrl+Q не должен гасить всю VM - lastKey
     ; уже обновлён выше безусловно, программа сама заметит его в своём
     ; цикле опроса и завершится штатно, вернувшись в шелл.
-    LDA programRunning
+    LDA 0x00010004      ; programRunning
     LDI B, 0
     CMP B
     JNZ irq_done
@@ -1956,14 +1956,17 @@ cmd_run:
     PUSH D          ; на случай, если код в песочнице испортит "константу 0"
 
     LDI A, 1
-    STA programRunning   ; Ctrl+Q во время работы программы не должен
-                          ; гасить всю VM - см. do_quit
+    STA 0x00010004        ; programRunning = 1 - Ctrl+Q во время работы
+                          ; программы не должен гасить всю VM - см.
+                          ; do_quit; main.cpp тоже читает этот адрес,
+                          ; чтобы включать перерисовку по таймеру
+                          ; только пока реально работает программа
 
     CALL 0x00002000
 
     PUSH A                ; сохранить A программы на время сброса флага
     LDI A, 0
-    STA programRunning
+    STA 0x00010004        ; programRunning = 0
     POP A
 
     STA savedA
@@ -2529,14 +2532,17 @@ cmd_exec_run:
     PUSH D          ; на случай, если программа испортит "константу 0"
 
     LDI A, 1
-    STA programRunning   ; Ctrl+Q во время работы программы не должен
-                          ; гасить всю VM - см. do_quit
+    STA 0x00010004        ; programRunning = 1 - Ctrl+Q во время работы
+                          ; программы не должен гасить всю VM - см.
+                          ; do_quit; main.cpp тоже читает этот адрес,
+                          ; чтобы включать перерисовку по таймеру
+                          ; только пока реально работает программа
 
     CALL 0x00002000
 
     PUSH A                ; сохранить A программы на время сброса флага
     LDI A, 0
-    STA programRunning
+    STA 0x00010004        ; programRunning = 0
     POP A
 
     STA savedA
@@ -3238,15 +3244,17 @@ irq_done:
 ; счётчиком, что и адреса инструкций - наложение на код исключено
 ; структурно, а не по договорённости.
 ;
-; keyCount/lastKey/bannerReady/doneReady (0x00010000-0x00010003) сюда не
-; входят: их напрямую читает main.cpp, который не видит меток
-; ассемблера, поэтому они остаются фиксированными адресами - это
-; осознанный интерфейс хост-VM, а не магический адрес наугад.
+; keyCount/lastKey/bannerReady/doneReady/programRunning
+; (0x00010000-0x00010004) сюда не входят: их напрямую читает main.cpp,
+; который не видит меток ассемблера, поэтому они остаются
+; фиксированными адресами - это осознанный интерфейс хост-VM, а не
+; магический адрес наугад. programRunning (0x00010004, "1" - пока
+; внутри CALL 0x00002000 у exec/run, см. do_quit/cmd_run/cmd_exec_run)
+; main.cpp использует, чтобы включать перерисовку экрана по таймеру
+; только пока реально работает программа, а не постоянно.
 ; ============================================================
 
 quit:       DB 0
-programRunning: DB 0   ; 1 - пока внутри CALL 0x00002000 (exec/run) -
-                        ; см. do_quit/cmd_run/cmd_exec_run
 column:     DB 0
 row:        DB 0
 cmdlen:     DB 0
