@@ -631,6 +631,96 @@ void CPU::step()
     }
 
     // -------------------------
+    // AND reg
+    // -------------------------
+
+    case 0x19:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            A = A & *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // OR reg
+    // -------------------------
+
+    case 0x1A:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            A = A | *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // XOR reg
+    // -------------------------
+
+    case 0x1B:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            A = A ^ *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // NOT (A = ~A)
+    // -------------------------
+
+    case 0x1C:
+    {
+        A = ~A;
+
+        break;
+    }
+
+    // -------------------------
+    // SHL (A = A << 1)
+    // -------------------------
+
+    case 0x1D:
+    {
+        A = static_cast<uint8_t>(A << 1);
+
+        break;
+    }
+
+    // -------------------------
+    // SHR (A = A >> 1)
+    // -------------------------
+
+    case 0x1E:
+    {
+        A = A >> 1;
+
+        break;
+    }
+
+    // -------------------------
     // HLT
     // -------------------------
 

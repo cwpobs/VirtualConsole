@@ -169,7 +169,10 @@ void Assembler::firstPass(
             instruction == "POP" ||
             instruction == "MUL" ||
             instruction == "DIV" ||
-            instruction == "MOD")
+            instruction == "MOD" ||
+            instruction == "AND" ||
+            instruction == "OR" ||
+            instruction == "XOR")
         {
             // opcode + register
 
@@ -196,6 +199,9 @@ void Assembler::firstPass(
             instruction == "LDX" ||
             instruction == "INCHL" ||
             instruction == "DECHL" ||
+            instruction == "NOT" ||
+            instruction == "SHL" ||
+            instruction == "SHR" ||
             instruction == "DB")
         {
             address += 1;
@@ -427,6 +433,102 @@ void Assembler::secondPass(
 
             output.push_back(0x18);
             output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // AND register
+        // -------------------------
+
+        else if (instruction == "AND")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x19);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // OR register
+        // -------------------------
+
+        else if (instruction == "OR")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x1A);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // XOR register
+        // -------------------------
+
+        else if (instruction == "XOR")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x1B);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // NOT
+        // -------------------------
+
+        else if (instruction == "NOT")
+        {
+            output.push_back(0x1C);
+        }
+
+
+        // -------------------------
+        // SHL
+        // -------------------------
+
+        else if (instruction == "SHL")
+        {
+            output.push_back(0x1D);
+        }
+
+
+        // -------------------------
+        // SHR
+        // -------------------------
+
+        else if (instruction == "SHR")
+        {
+            output.push_back(0x1E);
         }
 
 

@@ -382,6 +382,138 @@ Store A.
 
 ---
 
+## AND
+
+Побитовое И между A и значением регистра.
+
+Синтаксис:
+
+    AND register
+
+Пример:
+
+    AND B
+
+Эквивалент:
+
+    A = A & register
+
+Машинный формат:
+
+    19 register
+
+
+---
+
+## OR
+
+Побитовое ИЛИ между A и значением регистра.
+
+Синтаксис:
+
+    OR register
+
+Пример:
+
+    OR B
+
+Эквивалент:
+
+    A = A | register
+
+Машинный формат:
+
+    1A register
+
+
+---
+
+## XOR
+
+Побитовое исключающее ИЛИ между A и значением регистра.
+
+Синтаксис:
+
+    XOR register
+
+Пример:
+
+    XOR B
+
+Эквивалент:
+
+    A = A ^ register
+
+Машинный формат:
+
+    1B register
+
+
+---
+
+## NOT
+
+Побитовое отрицание A (все биты инвертируются).
+
+Синтаксис:
+
+    NOT
+
+Эквивалент:
+
+    A = ~A
+
+Машинный код:
+
+    1C
+
+
+---
+
+## SHL
+
+Shift Left. Сдвигает A на 1 бит влево, старший бит теряется,
+младший заполняется нулём.
+
+Синтаксис:
+
+    SHL
+
+Эквивалент:
+
+    A = A << 1
+
+Машинный код:
+
+    1D
+
+
+---
+
+## SHR
+
+Shift Right. Сдвигает A на 1 бит вправо (логический сдвиг),
+младший бит теряется, старший заполняется нулём.
+
+Синтаксис:
+
+    SHR
+
+Эквивалент:
+
+    A = A >> 1
+
+Машинный код:
+
+    1E
+
+`AND`/`OR`/`XOR`/`NOT`/`SHL`/`SHR`, как и остальные арифметические
+инструкции (`ADD`/`SUB`/`MUL`/`DIV`/`MOD`), не изменяют `FLAGS` —
+флаг `ZERO` по-прежнему выставляет только `CMP`.
+
+
+---
+
 ## JMP
 
 Безусловный переход.
@@ -919,6 +1051,12 @@ success:
 | 16 | MUL | register | 2 | Multiply A by register (8-bit truncated) |
 | 17 | DIV | register | 2 | Divide A by register (integer) |
 | 18 | MOD | register | 2 | Remainder of A / register |
+| 19 | AND | register | 2 | Bitwise AND with A |
+| 1A | OR | register | 2 | Bitwise OR with A |
+| 1B | XOR | register | 2 | Bitwise XOR with A |
+| 1C | NOT | — | 1 | Bitwise NOT of A |
+| 1D | SHL | — | 1 | Shift A left by 1 |
+| 1E | SHR | — | 1 | Shift A right by 1 |
 | FF | HLT | — | 1 | Halt CPU |
 
 Регистры `A`/`B`/`C`/`D` и значения в `LDI`/`ADD`/`SUB`/`CMP`/
@@ -985,6 +1123,12 @@ MMIO вынесено далеко от RAM (на `0xF0000000`), а не сра�
 | MUL | 2 |
 | DIV | 2 |
 | MOD | 2 |
+| AND | 2 |
+| OR | 2 |
+| XOR | 2 |
+| NOT | 1 |
+| SHL | 1 |
+| SHR | 1 |
 | HLT | 1 |
 
 `LDA`/`STA`/`JMP`/`JZ`/`JNZ`/`CALL`/`LDHL` стали дороже, чем
@@ -1205,12 +1349,5 @@ UTF-8. У сетки нет прерываний и регистров упра�
 но предполагаются в будущих версиях процессора:
 
 - Additional flags
-- Bit operations
-- AND
-- OR
-- XOR
-- NOT
-- Shift operations
-- Increment / Decrement
 - Video instructions
 - Sound instructions
