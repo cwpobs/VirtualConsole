@@ -12,9 +12,9 @@ TextVRAM::TextVRAM()
 
 uint8_t TextVRAM::read(uint32_t address)
 {
-    if (address == SIZE)
+    if (address == SIZE || address == SIZE + 1)
     {
-        // SCROLL - только для записи, чтение возвращает 0
+        // SCROLL/CLEAR - только для записи, чтение возвращает 0
         return 0;
     }
 
@@ -30,7 +30,22 @@ void TextVRAM::write(uint32_t address, uint8_t value)
         return;
     }
 
+    if (address == SIZE + 1)
+    {
+        // CLEAR - любая запись заполняет весь экран пробелами
+        clear();
+        return;
+    }
+
     data[address] = value;
+}
+
+void TextVRAM::clear()
+{
+    for (int i = 0; i < SIZE; i++)
+    {
+        data[i] = ' ';
+    }
 }
 
 void TextVRAM::scrollUp()

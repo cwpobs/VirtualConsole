@@ -22,4 +22,5 @@ private:
     uint8_t data[SIZE];
 
     void scrollUp();
+    void clear();
 };

@@ -8,6 +8,7 @@
 #include "Timer.h"
 #include "Keyboard.h"
 #include "TextVRAM.h"
+#include "DebugPort.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -34,6 +35,7 @@ int main()
     TextVRAM vram;
     Bus bus;
     CPU cpu;
+    DebugPort debugPort(&cpu);
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -43,7 +45,8 @@ int main()
     bus.mapDevice(&memory, 0x00000000, 0x003FFFFF);
     bus.mapDevice(&timer, 0xF0000000, 0xF0000004);
     bus.mapDevice(&keyboard, 0xF0000005, 0xF0000006);
-    bus.mapDevice(&vram, 0xF0000007, 0xF00007D7);
+    bus.mapDevice(&vram, 0xF0000007, 0xF00007D8);      // сетка + SCROLL + CLEAR
+    bus.mapDevice(&debugPort, 0xF00007D9, 0xF00007E5); // PC/SP/HL/FLAGS (только чтение)
 
 
     // ========================================

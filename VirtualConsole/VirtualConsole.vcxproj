@@ -158,6 +158,7 @@
     <ClCompile Include="Assembler.cpp" />
     <ClCompile Include="Bus.cpp" />
     <ClCompile Include="CPU.cpp" />
+    <ClCompile Include="DebugPort.cpp" />
     <ClCompile Include="Keyboard.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Memory.cpp" />
@@ -168,6 +169,7 @@
     <ClInclude Include="Assembler.h" />
     <ClInclude Include="Bus.h" />
     <ClInclude Include="CPU.h" />
+    <ClInclude Include="DebugPort.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="Keyboard.h" />
     <ClInclude Include="Memory.h" />

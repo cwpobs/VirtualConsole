@@ -5,6 +5,11 @@
 ; терминал: набранные символы отображаются на экране в реальном
 ; времени, Enter переводит строку, Backspace стирает символ.
 ; ESC завершает программу.
+;
+; Терминал также работает как простой командный shell: строка,
+; набранная до Enter, сравнивается с одной из известных команд
+; (help/cls/regs/dump/poke/run/reset) и выполняется - см.
+; dispatch_command и обработчики cmd_* ниже.
 ; ============================================================
 
     JMP main
@@ -12,133 +17,7 @@
 
 main:
 
-    ; ---- Баннер: "Virtual Console. ESC to quit." ----
-
-    LDHL 0xF0000007
-
-    LDI A, 86
-    STX             ; V
-    INCHL
-    LDI A, 105
-    STX             ; i
-    INCHL
-    LDI A, 114
-    STX             ; r
-    INCHL
-    LDI A, 116
-    STX             ; t
-    INCHL
-    LDI A, 117
-    STX             ; u
-    INCHL
-    LDI A, 97
-    STX             ; a
-    INCHL
-    LDI A, 108
-    STX             ; l
-    INCHL
-    LDI A, 32
-    STX             ; (пробел)
-    INCHL
-    LDI A, 67
-    STX             ; C
-    INCHL
-    LDI A, 111
-    STX             ; o
-    INCHL
-    LDI A, 110
-    STX             ; n
-    INCHL
-    LDI A, 115
-    STX             ; s
-    INCHL
-    LDI A, 111
-    STX             ; o
-    INCHL
-    LDI A, 108
-    STX             ; l
-    INCHL
-    LDI A, 101
-    STX             ; e
-    INCHL
-    LDI A, 46
-    STX             ; .
-    INCHL
-    LDI A, 32
-    STX             ; (пробел)
-    INCHL
-    LDI A, 69
-    STX             ; E
-    INCHL
-    LDI A, 83
-    STX             ; S
-    INCHL
-    LDI A, 67
-    STX             ; C
-    INCHL
-    LDI A, 32
-    STX             ; (пробел)
-    INCHL
-    LDI A, 116
-    STX             ; t
-    INCHL
-    LDI A, 111
-    STX             ; o
-    INCHL
-    LDI A, 32
-    STX             ; (пробел)
-    INCHL
-    LDI A, 113
-    STX             ; q
-    INCHL
-    LDI A, 117
-    STX             ; u
-    INCHL
-    LDI A, 105
-    STX             ; i
-    INCHL
-    LDI A, 116
-    STX             ; t
-    INCHL
-    LDI A, 46
-    STX             ; .
-    INCHL
-
-    ; ---- Баннер: вторая строка - объём доступной RAM ----
-
-    LDHL 0xF0000057     ; 0xF0000007 + 80 (строка 2)
-
-    LDI A, 82
-    STX             ; R
-    INCHL
-    LDI A, 65
-    STX             ; A
-    INCHL
-    LDI A, 77
-    STX             ; M
-    INCHL
-    LDI A, 58
-    STX             ; :
-    INCHL
-    LDI A, 32
-    STX             ; (пробел)
-    INCHL
-    LDI A, 52
-    STX             ; 4
-    INCHL
-    LDI A, 32
-    STX             ; (пробел)
-    INCHL
-    LDI A, 77
-    STX             ; M
-    INCHL
-    LDI A, 66
-    STX             ; B
-    INCHL
-
-    ; ---- Курсор терминала - начало третьей строки ----
-
-    LDHL 0xF00000A7     ; 0xF0000007 + 2*80
+    CALL draw_banner
 
     ; ---- Настройка клавиатуры ----
 
@@ -147,10 +26,15 @@ main:
 
     LDI A, 0
     STA 0x00001000      ; keyCount = 0
-    STA quit      ; quit = 0
-    STA column      ; column = 0
+    STA quit            ; quit = 0
+    STA cmdlen          ; cmdlen = 0
 
-    LDI D, 0        ; D - константа "0" для сравнений
+    LDI D, 0        ; D - константа "0" для сравнений на весь запуск
+
+    LDI A, 62       ; '>'
+    CALL print_char
+    LDI A, 32       ; (пробел)
+    CALL print_char
 
     LDI A, 1
     STA 0x00001002      ; bannerReady = 1 (баннер готов к отрисовке)
@@ -170,25 +54,23 @@ wait:
     ; прокруткой, т.к. терминал больше не пишет в VRAM)
 
     LDHL 0xF0000787     ; последняя строка (24), столбец 0
+    LDI A, 0
+    STA column
+    LDI A, 24
+    STA row
 
     LDI A, 75
-    STX             ; K
-    INCHL
+    CALL print_char   ; K
     LDI A, 101
-    STX             ; e
-    INCHL
+    CALL print_char   ; e
     LDI A, 121
-    STX             ; y
-    INCHL
+    CALL print_char   ; y
     LDI A, 115
-    STX             ; s
-    INCHL
+    CALL print_char   ; s
     LDI A, 58
-    STX             ; :
-    INCHL
+    CALL print_char   ; :
     LDI A, 32
-    STX             ; (пробел)
-    INCHL
+    CALL print_char   ; (пробел)
 
     LDA 0x00001000      ; keyCount
     CALL print_number
@@ -237,6 +119,9 @@ do_quit:
 
 do_echo:
 
+    STA lastChar    ; символ понадобится ниже для буфера команды,
+                     ; а A будет занят под арифметику column/cmdlen
+
     STX             ; VRAM[HL] = A (код клавиши)
     INCHL
 
@@ -245,6 +130,130 @@ do_echo:
     ADD B
     STA column      ; column++
 
+    ; ---- дописываем символ в cmdbuf[cmdlen], если есть место (0-11) ----
+    ; cmdbuf - не единый массив, а 12 отдельных переменных (cmdbuf0..11):
+    ; так проще, чем городить сохранение/восстановление HL (который
+    ; всё это время держит позицию курсора на экране, а сохранить его
+    ; на стек нечем - PUSH работает только с 8-битными регистрами).
+
+    LDA cmdlen
+    LDI B, 0
+    CMP B
+    JNZ de_check1
+    LDA lastChar
+    STA cmdbuf0
+    JMP de_buf_done
+
+de_check1:
+    LDA cmdlen
+    LDI B, 1
+    CMP B
+    JNZ de_check2
+    LDA lastChar
+    STA cmdbuf1
+    JMP de_buf_done
+
+de_check2:
+    LDA cmdlen
+    LDI B, 2
+    CMP B
+    JNZ de_check3
+    LDA lastChar
+    STA cmdbuf2
+    JMP de_buf_done
+
+de_check3:
+    LDA cmdlen
+    LDI B, 3
+    CMP B
+    JNZ de_check4
+    LDA lastChar
+    STA cmdbuf3
+    JMP de_buf_done
+
+de_check4:
+    LDA cmdlen
+    LDI B, 4
+    CMP B
+    JNZ de_check5
+    LDA lastChar
+    STA cmdbuf4
+    JMP de_buf_done
+
+de_check5:
+    LDA cmdlen
+    LDI B, 5
+    CMP B
+    JNZ de_check6
+    LDA lastChar
+    STA cmdbuf5
+    JMP de_buf_done
+
+de_check6:
+    LDA cmdlen
+    LDI B, 6
+    CMP B
+    JNZ de_check7
+    LDA lastChar
+    STA cmdbuf6
+    JMP de_buf_done
+
+de_check7:
+    LDA cmdlen
+    LDI B, 7
+    CMP B
+    JNZ de_check8
+    LDA lastChar
+    STA cmdbuf7
+    JMP de_buf_done
+
+de_check8:
+    LDA cmdlen
+    LDI B, 8
+    CMP B
+    JNZ de_check9
+    LDA lastChar
+    STA cmdbuf8
+    JMP de_buf_done
+
+de_check9:
+    LDA cmdlen
+    LDI B, 9
+    CMP B
+    JNZ de_check10
+    LDA lastChar
+    STA cmdbuf9
+    JMP de_buf_done
+
+de_check10:
+    LDA cmdlen
+    LDI B, 10
+    CMP B
+    JNZ de_check11
+    LDA lastChar
+    STA cmdbuf10
+    JMP de_buf_done
+
+de_check11:
+    LDA cmdlen
+    LDI B, 11
+    CMP B
+    JNZ de_buf_done
+    LDA lastChar
+    STA cmdbuf11
+
+de_buf_done:
+
+    LDA cmdlen
+    LDI B, 1
+    ADD B
+    STA cmdlen      ; cmdlen++ (может уйти выше 12 - просто перестаём
+                     ; писать в буфер дальше, длина всё равно не
+                     ; совпадёт ни с одной командой)
+
+    ; ---- перенос строки на 80-м столбце (как раньше) ----
+
+    LDA column
     LDI B, 80
     CMP B
     JNZ irq_done
@@ -274,31 +283,55 @@ do_backspace:
     SUB B
     STA column      ; column--
 
+    LDA cmdlen
+    LDI B, 1
+    SUB B
+    STA cmdlen      ; cmdlen-- (симметрично column)
+
     JMP irq_done
 
 
 do_enter:
 
-    LDA column      ; A = column
+    ; Извлекаем исходные A/B/C - их положил на стек irq_handler ДО
+    ; того, как их затёрла логика чтения кода клавиши. Без этого
+    ; "regs" показывала бы код клавиши Enter вместо реальных
+    ; регистров прерванной программы. Складываем обратно в том же
+    ; порядке, чтобы irq_done мог штатно восстановить их для RETI.
+
+    POP C
+    POP B
+    POP A
+
+    STA savedA
+
+    PUSH B
+    POP A
+    STA savedB
+
+    PUSH C
+    POP A
+    STA savedC
+
+    PUSH D
+    POP A
+    STA savedD
+
+    LDA savedA
     PUSH A
-    POP B           ; B = column
+    PUSH B
+    PUSH C
 
-    LDI A, 80
-    SUB B           ; A = 80 - column (сколько ячеек до начала след. строки)
-
-    LDI C, 1
-
-newline_loop:
-
-    INCHL
-    SUB C
-    CMP D
-    JNZ newline_loop
+    CALL print_newline
+    CALL dispatch_command
 
     LDI A, 0
-    STA column      ; column = 0
+    STA cmdlen
 
-    CALL advance_row
+    LDI A, 62       ; '>'
+    CALL print_char
+    LDI A, 32
+    CALL print_char
 
     JMP irq_done
 
@@ -326,6 +359,170 @@ advance_row:
     STA row
 
 advance_row_done:
+
+    RET
+
+
+draw_banner:
+
+    ; ---- Первая строка: "Virtual Console. ESC to quit." ----
+
+    LDHL 0xF0000007
+    LDI A, 0
+    STA column
+
+    LDI A, 86
+    CALL print_char   ; V
+    LDI A, 105
+    CALL print_char   ; i
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 116
+    CALL print_char   ; t
+    LDI A, 117
+    CALL print_char   ; u
+    LDI A, 97
+    CALL print_char   ; a
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 67
+    CALL print_char   ; C
+    LDI A, 111
+    CALL print_char   ; o
+    LDI A, 110
+    CALL print_char   ; n
+    LDI A, 115
+    CALL print_char   ; s
+    LDI A, 111
+    CALL print_char   ; o
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 46
+    CALL print_char   ; .
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 69
+    CALL print_char   ; E
+    LDI A, 83
+    CALL print_char   ; S
+    LDI A, 67
+    CALL print_char   ; C
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 116
+    CALL print_char   ; t
+    LDI A, 111
+    CALL print_char   ; o
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 113
+    CALL print_char   ; q
+    LDI A, 117
+    CALL print_char   ; u
+    LDI A, 105
+    CALL print_char   ; i
+    LDI A, 116
+    CALL print_char   ; t
+    LDI A, 46
+    CALL print_char   ; .
+
+    ; ---- Вторая строка: объём доступной RAM ----
+
+    LDHL 0xF0000057     ; 0xF0000007 + 80 (строка 2)
+    LDI A, 0
+    STA column
+
+    LDI A, 82
+    CALL print_char   ; R
+    LDI A, 65
+    CALL print_char   ; A
+    LDI A, 77
+    CALL print_char   ; M
+    LDI A, 58
+    CALL print_char   ; :
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 52
+    CALL print_char   ; 4
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 77
+    CALL print_char   ; M
+    LDI A, 66
+    CALL print_char   ; B
+
+    ; ---- Курсор терминала - начало третьей строки ----
+
+    LDHL 0xF00000A7     ; 0xF0000007 + 2*80
+    LDI A, 0
+    STA column
+    LDI A, 2
+    STA row
+
+    RET
+
+
+print_char:
+
+    ; Печатает символ A в текущей позиции HL, увеличивает HL и
+    ; column. Не обрабатывает перенос строки на 80-м столбце -
+    ; это отдельно делает do_echo (там нужна ещё и логика cmdbuf).
+
+    STX
+    INCHL
+
+    PUSH A
+    PUSH B
+
+    LDA column
+    LDI B, 1
+    ADD B
+    STA column
+
+    POP B
+    POP A
+
+    RET
+
+
+print_newline:
+
+    ; Переходит на следующую строку экрана - используется shell'ом
+    ; (dispatch_command и обработчиками команд) вместо ручного набора
+    ; текста через Enter.
+
+    PUSH A
+    PUSH B
+    PUSH C
+
+    LDA column
+    PUSH A
+    POP B           ; B = column
+
+    LDI A, 80
+    SUB B           ; A = 80 - column
+
+    LDI C, 1
+
+pnl_loop:
+
+    INCHL
+    SUB C
+    CMP D
+    JNZ pnl_loop
+
+    LDI A, 0
+    STA column
+
+    CALL advance_row
+
+    POP C
+    POP B
+    POP A
 
     RET
 
@@ -371,8 +568,7 @@ pn_print:
 
     LDI B, 48       ; '0'
     ADD B
-    STX
-    INCHL
+    CALL print_char
 
     JMP pn_print
 
@@ -380,6 +576,663 @@ pn_done:
 
     POP D
     POP B
+    RET
+
+
+dispatch_command:
+
+    ; Сравнивает cmdlen/cmdbuf0..11 с каждой известной командой по
+    ; очереди: сначала длина (быстрый отсев), затем посимвольно.
+    ; Если ничего не совпало - молча ничего не делаем.
+
+    ; ---- help (4 символа) ----
+
+    LDA cmdlen
+    LDI B, 4
+    CMP B
+    JNZ check_cls
+
+    LDA cmdbuf0
+    LDI B, 104      ; 'h'
+    CMP B
+    JNZ check_cls
+    LDA cmdbuf1
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_cls
+    LDA cmdbuf2
+    LDI B, 108      ; 'l'
+    CMP B
+    JNZ check_cls
+    LDA cmdbuf3
+    LDI B, 112      ; 'p'
+    CMP B
+    JNZ check_cls
+
+    CALL cmd_help
+    JMP dispatch_done
+
+
+check_cls:
+
+    LDA cmdlen
+    LDI B, 3
+    CMP B
+    JNZ check_regs
+
+    LDA cmdbuf0
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ check_regs
+    LDA cmdbuf1
+    LDI B, 108      ; 'l'
+    CMP B
+    JNZ check_regs
+    LDA cmdbuf2
+    LDI B, 115      ; 's'
+    CMP B
+    JNZ check_regs
+
+    CALL cmd_cls
+    JMP dispatch_done
+
+
+check_regs:
+
+    LDA cmdlen
+    LDI B, 4
+    CMP B
+    JNZ check_dump
+
+    LDA cmdbuf0
+    LDI B, 114      ; 'r'
+    CMP B
+    JNZ check_dump
+    LDA cmdbuf1
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_dump
+    LDA cmdbuf2
+    LDI B, 103      ; 'g'
+    CMP B
+    JNZ check_dump
+    LDA cmdbuf3
+    LDI B, 115      ; 's'
+    CMP B
+    JNZ check_dump
+
+    CALL cmd_regs
+    JMP dispatch_done
+
+
+check_dump:
+
+    LDA cmdlen
+    LDI B, 8
+    CMP B
+    JNZ check_poke
+
+    LDA cmdbuf0
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ check_poke
+    LDA cmdbuf1
+    LDI B, 117      ; 'u'
+    CMP B
+    JNZ check_poke
+    LDA cmdbuf2
+    LDI B, 109      ; 'm'
+    CMP B
+    JNZ check_poke
+    LDA cmdbuf3
+    LDI B, 112      ; 'p'
+    CMP B
+    JNZ check_poke
+    LDA cmdbuf4
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_poke
+
+    CALL cmd_dump
+    JMP dispatch_done
+
+
+check_poke:
+
+    LDA cmdlen
+    LDI B, 12
+    CMP B
+    JNZ check_run
+
+    LDA cmdbuf0
+    LDI B, 112      ; 'p'
+    CMP B
+    JNZ check_run
+    LDA cmdbuf1
+    LDI B, 111      ; 'o'
+    CMP B
+    JNZ check_run
+    LDA cmdbuf2
+    LDI B, 107      ; 'k'
+    CMP B
+    JNZ check_run
+    LDA cmdbuf3
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_run
+    LDA cmdbuf4
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_run
+    LDA cmdbuf8
+    LDI B, 32       ; (пробел между адресом и значением)
+    CMP B
+    JNZ check_run
+
+    CALL cmd_poke
+    JMP dispatch_done
+
+
+check_run:
+
+    LDA cmdlen
+    LDI B, 3
+    CMP B
+    JNZ check_reset
+
+    LDA cmdbuf0
+    LDI B, 114      ; 'r'
+    CMP B
+    JNZ check_reset
+    LDA cmdbuf1
+    LDI B, 117      ; 'u'
+    CMP B
+    JNZ check_reset
+    LDA cmdbuf2
+    LDI B, 110      ; 'n'
+    CMP B
+    JNZ check_reset
+
+    CALL cmd_run
+    JMP dispatch_done
+
+
+check_reset:
+
+    LDA cmdlen
+    LDI B, 5
+    CMP B
+    JNZ dispatch_done
+
+    LDA cmdbuf0
+    LDI B, 114      ; 'r'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf1
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf2
+    LDI B, 115      ; 's'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf3
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf4
+    LDI B, 116      ; 't'
+    CMP B
+    JNZ dispatch_done
+
+    CALL cmd_reset
+
+dispatch_done:
+
+    RET
+
+
+cmd_help:
+
+    LDI A, 104
+    CALL print_char   ; h
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 112
+    CALL print_char   ; p
+    LDI A, 32
+    CALL print_char
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 115
+    CALL print_char   ; s
+    LDI A, 32
+    CALL print_char
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 103
+    CALL print_char   ; g
+    LDI A, 115
+    CALL print_char   ; s
+
+    CALL print_newline
+
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 117
+    CALL print_char   ; u
+    LDI A, 109
+    CALL print_char   ; m
+    LDI A, 112
+    CALL print_char   ; p
+    LDI A, 32
+    CALL print_char
+    LDI A, 112
+    CALL print_char   ; p
+    LDI A, 111
+    CALL print_char   ; o
+    LDI A, 107
+    CALL print_char   ; k
+    LDI A, 101
+    CALL print_char   ; e
+
+    CALL print_newline
+
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 117
+    CALL print_char   ; u
+    LDI A, 110
+    CALL print_char   ; n
+    LDI A, 32
+    CALL print_char
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 115
+    CALL print_char   ; s
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 116
+    CALL print_char   ; t
+
+    CALL print_newline
+
+    RET
+
+
+cmd_cls:
+
+    LDI A, 1
+    STA 0xF00007D8    ; CLEAR
+
+    LDI A, 0
+    STA column
+    STA row
+
+    LDHL 0xF0000007
+
+    RET
+
+
+cmd_regs:
+
+    LDI A, 65    ; 'A'
+    CALL print_char
+    LDI A, 61    ; '='
+    CALL print_char
+    LDA savedA
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 66    ; 'B'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA savedB
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 67    ; 'C'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA savedC
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 68    ; 'D'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA savedD
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 80    ; 'P'
+    CALL print_char
+    LDI A, 67    ; 'C'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA 0xF00007D9
+    CALL print_number
+    LDI A, 46    ; '.'
+    CALL print_char
+    LDA 0xF00007DA
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007DB
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007DC
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 83    ; 'S'
+    CALL print_char
+    LDI A, 80    ; 'P'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA 0xF00007DD
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007DE
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007DF
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007E0
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 72    ; 'H'
+    CALL print_char
+    LDI A, 76    ; 'L'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA 0xF00007E1
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007E2
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007E3
+    CALL print_number
+    LDI A, 46
+    CALL print_char
+    LDA 0xF00007E4
+    CALL print_number
+    CALL print_newline
+
+    LDI A, 70    ; 'F'
+    CALL print_char
+    LDI A, 61
+    CALL print_char
+    LDA 0xF00007E5
+    CALL print_number
+    CALL print_newline
+
+    RET
+
+
+cmd_dump:
+
+    ; --- разбор 3-значного (десятичного) адреса из cmdbuf5..7 ---
+
+    LDA cmdbuf5
+    LDI B, 48
+    SUB B
+    LDI B, 100
+    MUL B
+    STA tmp1              ; tmp1 = digit0 * 100
+
+    LDA cmdbuf6
+    LDI B, 48
+    SUB B
+    LDI B, 10
+    MUL B                 ; A = digit1 * 10
+
+    PUSH A
+    POP C
+    LDA tmp1
+    ADD C
+    STA tmp1              ; tmp1 += digit1*10
+
+    LDA cmdbuf7
+    LDI B, 48
+    SUB B                 ; A = digit2
+
+    PUSH A
+    POP C
+    LDA tmp1
+    ADD C
+    STA tmp1              ; tmp1 = адрес (0-255)
+
+    ; --- читаем байт по этому адресу ---
+
+    LDHL 0
+    LDA tmp1
+    CALL hl_add_offset    ; HL = tmp1
+
+    LDX
+    STA tmp2              ; tmp2 = значение по адресу
+
+    ; --- восстанавливаем экранный курсор (HL выше был занят под
+    ; чтение памяти - PUSH HL не существует, поэтому пересчитываем
+    ; его заново из row) и печатаем результат ---
+
+    CALL goto_row_start
+
+    LDA tmp2
+    CALL print_number
+
+    CALL print_newline
+
+    RET
+
+
+cmd_poke:
+
+    ; --- адрес (cmdbuf5..7) -> tmp1 ---
+
+    LDA cmdbuf5
+    LDI B, 48
+    SUB B
+    LDI B, 100
+    MUL B
+    STA tmp1
+
+    LDA cmdbuf6
+    LDI B, 48
+    SUB B
+    LDI B, 10
+    MUL B
+    PUSH A
+    POP C
+    LDA tmp1
+    ADD C
+    STA tmp1
+
+    LDA cmdbuf7
+    LDI B, 48
+    SUB B
+    PUSH A
+    POP C
+    LDA tmp1
+    ADD C
+    STA tmp1              ; tmp1 = offset
+
+    ; --- значение (cmdbuf9..11) -> tmp2 ---
+
+    LDA cmdbuf9
+    LDI B, 48
+    SUB B
+    LDI B, 100
+    MUL B
+    STA tmp2
+
+    LDA cmdbuf10
+    LDI B, 48
+    SUB B
+    LDI B, 10
+    MUL B
+    PUSH A
+    POP C
+    LDA tmp2
+    ADD C
+    STA tmp2
+
+    LDA cmdbuf11
+    LDI B, 48
+    SUB B
+    PUSH A
+    POP C
+    LDA tmp2
+    ADD C
+    STA tmp2              ; tmp2 = value
+
+    ; --- пишем value по адресу sandbox(0x00002000) + offset ---
+
+    LDHL 0x00002000
+    LDA tmp1
+    CALL hl_add_offset
+
+    LDA tmp2
+    STX
+
+    CALL goto_row_start   ; ничего не печатали - просто восстанавливаем
+                           ; курсор экрана, HL был занят под запись
+
+    RET
+
+
+cmd_run:
+
+    PUSH D          ; на случай, если код в песочнице испортит "константу 0"
+
+    CALL 0x00002000
+
+    STA savedA
+    PUSH B
+    POP A
+    STA savedB
+    PUSH C
+    POP A
+    STA savedC
+    PUSH D
+    POP A
+    STA savedD
+
+    POP D           ; восстанавливаем константу 0
+
+    CALL goto_row_start   ; код в песочнице мог сам сдвинуть HL
+
+    RET
+
+
+cmd_reset:
+
+    LDI A, 1
+    STA 0xF00007D8    ; CLEAR
+
+    CALL draw_banner  ; сама выставит column/row/HL заново
+
+    RET
+
+
+hl_add_offset:
+
+    ; HL уже указывает на базовый адрес, A = offset (0-255).
+    ; Добавляет offset к HL через INCHL. Разрушает A, B.
+
+    LDI B, 0
+    CMP B
+    JZ hl_add_offset_done   ; offset == 0 - уже на месте
+
+hl_add_offset_loop:
+
+    INCHL
+
+    LDI B, 1
+    SUB B
+
+    LDI B, 0
+    CMP B
+    JNZ hl_add_offset_loop
+
+hl_add_offset_done:
+
+    RET
+
+
+goto_row_start:
+
+    ; HL = 0xF0000007 + row*80 (начало текущей строки). Нужен, чтобы
+    ; вернуть курсор экрана на место после того, как HL был временно
+    ; занят под чтение/запись произвольного адреса памяти (dump/poke/
+    ; run) - PUSH HL не существует, поэтому пересчитываем заново.
+    ;
+    ; Внешний цикл - row раз, внутренний - всегда ровно 80: так можно
+    ; посчитать row*80 (до 1920) без 8-битного MUL, который бы это
+    ; переполнил.
+
+    LDHL 0xF0000007
+
+    LDA row
+    STA grs_outer
+
+grs_loop_outer:
+
+    LDA grs_outer
+    CMP D
+    JZ grs_outer_done
+
+    LDI B, 1
+    SUB B
+    STA grs_outer
+
+    LDI A, 80
+    STA grs_inner
+
+grs_loop_inner:
+
+    LDA grs_inner
+    CMP D
+    JZ grs_inner_done
+
+    INCHL
+
+    LDA grs_inner
+    LDI B, 1
+    SUB B
+    STA grs_inner
+
+    JMP grs_loop_inner
+
+grs_inner_done:
+
+    JMP grs_loop_outer
+
+grs_outer_done:
+
     RET
 
 
@@ -415,3 +1268,33 @@ irq_done:
 quit:       DB 0
 column:     DB 0
 row:        DB 0
+cmdlen:     DB 0
+lastChar:   DB 0
+
+savedA:     DB 0
+savedB:     DB 0
+savedC:     DB 0
+savedD:     DB 0
+
+tmp1:       DB 0
+tmp2:       DB 0
+
+grs_outer:  DB 0
+grs_inner:  DB 0
+
+; Буфер команды - 12 отдельных байт (0..11), не единый массив (см.
+; комментарий в do_echo). Хватает на самую длинную команду - "poke
+; NNN VVV" (12 символов).
+
+cmdbuf0:    DB 0
+cmdbuf1:    DB 0
+cmdbuf2:    DB 0
+cmdbuf3:    DB 0
+cmdbuf4:    DB 0
+cmdbuf5:    DB 0
+cmdbuf6:    DB 0
+cmdbuf7:    DB 0
+cmdbuf8:    DB 0
+cmdbuf9:    DB 0
+cmdbuf10:   DB 0
+cmdbuf11:   DB 0
