@@ -53,6 +53,35 @@ private:
     static const uint32_t REG_COMMAND = 11;
     static const uint32_t REG_STATUS = 12;
 
+    // Спрайтовые регистры - продолжение того же адресного блока (см.
+    // ASSEMBLY.md, "VideoCard"). SPRITE_X/Y/VISIBLE пишутся напрямую
+    // (без команды-триггера) - обновлять позицию каждый кадр должно
+    // быть дёшево. SPRITE_PIXEL - индекс 0-1023 (32x32), не влезает
+    // в один байт, поэтому LOW/HIGH, как X/Y фона.
+    static const uint32_t REG_SPRITE_INDEX = 13;
+    static const uint32_t REG_SPRITE_PIXEL_LOW = 14;
+    static const uint32_t REG_SPRITE_PIXEL_HIGH = 15;
+    static const uint32_t REG_SPRITE_X_LOW = 16;
+    static const uint32_t REG_SPRITE_X_HIGH = 17;
+    static const uint32_t REG_SPRITE_Y_LOW = 18;
+    static const uint32_t REG_SPRITE_Y_HIGH = 19;
+    static const uint32_t REG_SPRITE_VISIBLE = 20;
+    static const uint32_t REG_SPRITE_R = 21;
+    static const uint32_t REG_SPRITE_G = 22;
+    static const uint32_t REG_SPRITE_B = 23;
+    static const uint32_t REG_SPRITE_COMMAND = 24;
+    static const uint32_t REG_SPRITE_STATUS = 25;
+
+    static const int SPRITE_COUNT = 16;
+    static const int SPRITE_SIZE = 32;
+    static const int SPRITE_PIXELS = SPRITE_SIZE * SPRITE_SIZE;
+
+    // Цвет-ключ прозрачности - пиксель спрайта такого цвета не
+    // рисуется при композиции поверх фона (см. compositeSprites).
+    static const uint8_t CHROMA_R = 255;
+    static const uint8_t CHROMA_G = 0;
+    static const uint8_t CHROMA_B = 255;
+
     uint8_t xLow, xHigh, yLow, yHigh;
     uint8_t wLow, wHigh, hLow, hHigh;
     uint8_t r, g, b;
@@ -60,6 +89,16 @@ private:
 
     uint8_t framebuffer[FB_SIZE];
     std::mutex framebufferMutex;
+
+    uint8_t spriteIndex;
+    uint8_t spritePixelLow, spritePixelHigh;
+    uint8_t spriteR, spriteG, spriteB;
+    uint8_t spriteStatus;
+
+    uint8_t spriteData[SPRITE_COUNT][SPRITE_PIXELS * CHANNELS];
+    uint16_t spriteX[SPRITE_COUNT];
+    uint16_t spriteY[SPRITE_COUNT];
+    bool spriteVisible[SPRITE_COUNT];
 
     std::thread renderThread;
     std::atomic<bool> windowOpen;
@@ -69,12 +108,17 @@ private:
     uint16_t regY() const;
     uint16_t regW() const;
     uint16_t regH() const;
+    uint16_t regSpritePixel() const;
 
     void modeOn();
     void modeOff();
     void clear();
     void setPixel();
     void fillRect();
+
+    void spriteWritePixel();
+    void spriteClear();
+    void compositeSprites(uint8_t* staging) const;
 
     void renderThreadMain();
 };

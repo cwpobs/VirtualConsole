@@ -40,6 +40,27 @@ VideoCard::VideoCard()
     {
         framebuffer[i] = 0;
     }
+
+    spriteIndex = 0;
+    spritePixelLow = spritePixelHigh = 0;
+    spriteR = spriteG = spriteB = 0;
+    spriteStatus = 0;
+
+    for (int s = 0; s < SPRITE_COUNT; s++)
+    {
+        // Пустой спрайт по умолчанию - целиком цвет-ключ прозрачности,
+        // невидим по контенту даже до первого явного CLEAR/WRITE_PIXEL.
+        for (int i = 0; i < SPRITE_PIXELS * CHANNELS; i += CHANNELS)
+        {
+            spriteData[s][i] = CHROMA_R;
+            spriteData[s][i + 1] = CHROMA_G;
+            spriteData[s][i + 2] = CHROMA_B;
+        }
+
+        spriteX[s] = 0;
+        spriteY[s] = 0;
+        spriteVisible[s] = false;
+    }
 }
 
 VideoCard::~VideoCard()
@@ -51,6 +72,7 @@ uint16_t VideoCard::regX() const { return static_cast<uint16_t>(xLow) | (static_
 uint16_t VideoCard::regY() const { return static_cast<uint16_t>(yLow) | (static_cast<uint16_t>(yHigh) << 8); }
 uint16_t VideoCard::regW() const { return static_cast<uint16_t>(wLow) | (static_cast<uint16_t>(wHigh) << 8); }
 uint16_t VideoCard::regH() const { return static_cast<uint16_t>(hLow) | (static_cast<uint16_t>(hHigh) << 8); }
+uint16_t VideoCard::regSpritePixel() const { return static_cast<uint16_t>(spritePixelLow) | (static_cast<uint16_t>(spritePixelHigh) << 8); }
 
 uint8_t VideoCard::read(uint32_t address)
 {
@@ -68,6 +90,20 @@ uint8_t VideoCard::read(uint32_t address)
     case REG_G: return g;
     case REG_B: return b;
     case REG_STATUS: return status;
+
+    case REG_SPRITE_INDEX: return spriteIndex;
+    case REG_SPRITE_PIXEL_LOW: return spritePixelLow;
+    case REG_SPRITE_PIXEL_HIGH: return spritePixelHigh;
+    case REG_SPRITE_X_LOW: return spriteX[spriteIndex] & 0xFF;
+    case REG_SPRITE_X_HIGH: return (spriteX[spriteIndex] >> 8) & 0xFF;
+    case REG_SPRITE_Y_LOW: return spriteY[spriteIndex] & 0xFF;
+    case REG_SPRITE_Y_HIGH: return (spriteY[spriteIndex] >> 8) & 0xFF;
+    case REG_SPRITE_VISIBLE: return spriteVisible[spriteIndex] ? 1 : 0;
+    case REG_SPRITE_R: return spriteR;
+    case REG_SPRITE_G: return spriteG;
+    case REG_SPRITE_B: return spriteB;
+    case REG_SPRITE_STATUS: return spriteStatus;
+
     default: return 0;
     }
 }
@@ -96,6 +132,67 @@ void VideoCard::write(uint32_t address, uint8_t value)
         case 3: clear(); break;
         case 4: setPixel(); break;
         case 5: fillRect(); break;
+        default: break;
+        }
+        return;
+
+    case REG_SPRITE_INDEX:
+        // spriteIndex индексирует массивы spriteX/Y/Visible/Data
+        // напрямую - невалидное значение здесь означало бы выход за
+        // границы массива при следующем же обращении, поэтому
+        // отклоняем его тут же, а не там, где уже поздно.
+        if (value >= SPRITE_COUNT)
+        {
+            spriteStatus = 1;
+            return;
+        }
+        spriteIndex = value;
+        spriteStatus = 0;
+        return;
+
+    case REG_SPRITE_PIXEL_LOW: spritePixelLow = value; return;
+    case REG_SPRITE_PIXEL_HIGH: spritePixelHigh = value; return;
+
+    case REG_SPRITE_X_LOW:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        spriteX[spriteIndex] = (spriteX[spriteIndex] & 0xFF00) | value;
+        return;
+    }
+    case REG_SPRITE_X_HIGH:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        spriteX[spriteIndex] = (spriteX[spriteIndex] & 0x00FF) | (static_cast<uint16_t>(value) << 8);
+        return;
+    }
+    case REG_SPRITE_Y_LOW:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        spriteY[spriteIndex] = (spriteY[spriteIndex] & 0xFF00) | value;
+        return;
+    }
+    case REG_SPRITE_Y_HIGH:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        spriteY[spriteIndex] = (spriteY[spriteIndex] & 0x00FF) | (static_cast<uint16_t>(value) << 8);
+        return;
+    }
+    case REG_SPRITE_VISIBLE:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        spriteVisible[spriteIndex] = (value != 0);
+        return;
+    }
+
+    case REG_SPRITE_R: spriteR = value; return;
+    case REG_SPRITE_G: spriteG = value; return;
+    case REG_SPRITE_B: spriteB = value; return;
+
+    case REG_SPRITE_COMMAND:
+        switch (value)
+        {
+        case 1: spriteWritePixel(); break;
+        case 2: spriteClear(); break;
         default: break;
         }
         return;
@@ -173,6 +270,99 @@ void VideoCard::fillRect()
     }
 
     status = 0;
+}
+
+void VideoCard::spriteWritePixel()
+{
+    uint16_t pixel = regSpritePixel();
+
+    if (pixel >= SPRITE_PIXELS)
+    {
+        spriteStatus = 1;
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+
+        int index = pixel * CHANNELS;
+        spriteData[spriteIndex][index] = spriteR;
+        spriteData[spriteIndex][index + 1] = spriteG;
+        spriteData[spriteIndex][index + 2] = spriteB;
+    }
+
+    // Автоинкремент по модулю SPRITE_PIXELS - удобно заливать весь
+    // битмап подряд простым циклом без пересчёта индекса вручную
+    // (см. ASSEMBLY.md, "VideoCard").
+    uint16_t next = static_cast<uint16_t>((pixel + 1) % SPRITE_PIXELS);
+    spritePixelLow = next & 0xFF;
+    spritePixelHigh = (next >> 8) & 0xFF;
+
+    spriteStatus = 0;
+}
+
+void VideoCard::spriteClear()
+{
+    std::lock_guard<std::mutex> lock(framebufferMutex);
+
+    for (int i = 0; i < SPRITE_PIXELS * CHANNELS; i += CHANNELS)
+    {
+        spriteData[spriteIndex][i] = CHROMA_R;
+        spriteData[spriteIndex][i + 1] = CHROMA_G;
+        spriteData[spriteIndex][i + 2] = CHROMA_B;
+    }
+
+    spriteStatus = 0;
+}
+
+void VideoCard::compositeSprites(uint8_t* staging) const
+{
+    // Вызывающий (renderThreadMain) уже держит framebufferMutex на
+    // время снимка фона - композиция спрайтов идёт в ТОМ ЖЕ снимке,
+    // отдельной блокировки тут не нужно (mutex не рекурсивный).
+    for (int s = 0; s < SPRITE_COUNT; s++)
+    {
+        if (!spriteVisible[s])
+        {
+            continue;
+        }
+
+        int baseX = spriteX[s];
+        int baseY = spriteY[s];
+
+        for (int sy = 0; sy < SPRITE_SIZE; sy++)
+        {
+            int py = baseY + sy;
+            if (py < 0 || py >= HEIGHT)
+            {
+                continue;
+            }
+
+            for (int sx = 0; sx < SPRITE_SIZE; sx++)
+            {
+                int px = baseX + sx;
+                if (px < 0 || px >= WIDTH)
+                {
+                    continue;
+                }
+
+                int srcIndex = (sy * SPRITE_SIZE + sx) * CHANNELS;
+                uint8_t sr = spriteData[s][srcIndex];
+                uint8_t sg = spriteData[s][srcIndex + 1];
+                uint8_t sb = spriteData[s][srcIndex + 2];
+
+                if (sr == CHROMA_R && sg == CHROMA_G && sb == CHROMA_B)
+                {
+                    continue;   // цвет-ключ - прозрачный пиксель
+                }
+
+                int dstIndex = (py * WIDTH + px) * CHANNELS;
+                staging[dstIndex] = sr;
+                staging[dstIndex + 1] = sg;
+                staging[dstIndex + 2] = sb;
+            }
+        }
+    }
 }
 
 void VideoCard::modeOn()
@@ -296,6 +486,7 @@ void VideoCard::renderThreadMain()
         {
             std::lock_guard<std::mutex> lock(framebufferMutex);
             memcpy(staging, framebuffer, FB_SIZE);
+            compositeSprites(staging);
         }
 
         glClear(GL_COLOR_BUFFER_BIT);
