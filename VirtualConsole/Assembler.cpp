@@ -174,9 +174,10 @@ void Assembler::firstPass(
             instruction == "JMP" ||
             instruction == "JZ" ||
             instruction == "JNZ" ||
-            instruction == "CALL")
+            instruction == "CALL" ||
+            instruction == "LDHL")
         {
-            // opcode + 16-bit address
+            // opcode + 16-bit address/value
 
             address += 3;
         }
@@ -184,7 +185,10 @@ void Assembler::firstPass(
             instruction == "RET" ||
             instruction == "EI" ||
             instruction == "DI" ||
-            instruction == "RETI")
+            instruction == "RETI" ||
+            instruction == "STX" ||
+            instruction == "LDX" ||
+            instruction == "INCHL")
         {
             address += 1;
         }
@@ -405,7 +409,8 @@ void Assembler::secondPass(
             instruction == "JMP" ||
             instruction == "JZ" ||
             instruction == "JNZ" ||
-            instruction == "CALL")
+            instruction == "CALL" ||
+            instruction == "LDHL")
         {
             std::string addressText;
 
@@ -446,8 +451,11 @@ void Assembler::secondPass(
             else if (instruction == "JNZ")
                 opcode = 0x09;
 
-            else
+            else if (instruction == "CALL")
                 opcode = 0x0C;
+
+            else
+                opcode = 0x11;
 
 
             output.push_back(opcode);
@@ -509,6 +517,36 @@ void Assembler::secondPass(
         else if (instruction == "RETI")
         {
             output.push_back(0x10);
+        }
+
+
+        // -------------------------
+        // STX
+        // -------------------------
+
+        else if (instruction == "STX")
+        {
+            output.push_back(0x12);
+        }
+
+
+        // -------------------------
+        // LDX
+        // -------------------------
+
+        else if (instruction == "LDX")
+        {
+            output.push_back(0x13);
+        }
+
+
+        // -------------------------
+        // INCHL
+        // -------------------------
+
+        else if (instruction == "INCHL")
+        {
+            output.push_back(0x14);
         }
 
 

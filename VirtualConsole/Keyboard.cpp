@@ -9,7 +9,6 @@ Keyboard::Keyboard()
     count = 0;
 
     enabled = false;
-    pending = false;
 }
 
 bool Keyboard::queueEmpty()
@@ -59,8 +58,7 @@ uint8_t Keyboard::read(uint16_t address)
     case 1:
         return
             (enabled ? 0x01 : 0) |
-            (pending ? 0x02 : 0) |
-            (queueEmpty() ? 0 : 0x04);
+            (queueEmpty() ? 0 : 0x02);
 
     default:
         return 0;
@@ -72,10 +70,10 @@ void Keyboard::write(uint16_t address, uint8_t value)
     switch (address)
     {
     case 1:
-        // Любая запись в регистр управления подтверждает
-        // (сбрасывает) прерывание, а бит 0 включает/выключает клавиатуру
+        // Бит 0 включает/выключает клавиатуру. Отдельного
+        // подтверждения прерывания не нужно - оно само снимается,
+        // когда обработчик вычитывает данные из очереди (DATA)
         enabled = (value & 0x01) != 0;
-        pending = false;
         break;
 
     default:
@@ -90,15 +88,13 @@ void Keyboard::tick()
         int key = _getch();
 
         queuePush(static_cast<uint8_t>(key));
-
-        if (enabled && !queueEmpty())
-        {
-            pending = true;
-        }
     }
 }
 
 bool Keyboard::interruptPending()
 {
-    return pending;
+    // Уровневое прерывание: активно, пока включено и в очереди
+    // есть непрочитанные данные (не защёлка, чтобы не терять
+    // запросы, если в очереди накопилось несколько клавиш)
+    return enabled && !queueEmpty();
 }

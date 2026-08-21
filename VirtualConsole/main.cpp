@@ -16,6 +16,13 @@ int main()
     // этого кириллица в выводе превращается в кракозябры
     SetConsoleOutputCP(CP_UTF8);
 
+    // Включаем поддержку ANSI-последовательностей (нужно для очистки
+    // экрана при живой отрисовке VRAM)
+    HANDLE consoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD consoleMode = 0;
+    GetConsoleMode(consoleOut, &consoleMode);
+    SetConsoleMode(consoleOut, consoleMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+
     // ========================================
     // Создаём компоненты компьютера
     // ========================================
@@ -376,6 +383,8 @@ int main()
 
         LDI D, 0        ; D - константа "0" для сравнений
 
+        LDHL 0x8000     ; курсор эха - начало экрана
+
         EI
 
     wait:
@@ -407,10 +416,16 @@ int main()
         LDA 0x0104
         LDI B, 27       ; ESC
         CMP B
-        JNZ irq_done
+        JNZ echo
 
         LDI A, 1
         STA 0x0103      ; quit = 1
+        JMP irq_done
+
+    echo:
+
+        STX             ; VRAM[HL] = A (код клавиши)
+        INCHL           ; курсор++
 
     irq_done:
 
@@ -448,9 +463,22 @@ int main()
     std::cout << "\nНажимайте клавиши, ESC - выход...\n";
     std::cout.flush();
 
+    uint8_t lastKeyCount = 0;
+
     while (cpu.running)
     {
         cpu.step();
+
+        uint8_t currentKeyCount = bus.read(0x0102);
+
+        if (currentKeyCount != lastKeyCount)
+        {
+            lastKeyCount = currentKeyCount;
+
+            std::cout << "\x1b[2J\x1b[H";
+            vram.render();
+            std::cout.flush();
+        }
     }
 
     std::cout << "\n";

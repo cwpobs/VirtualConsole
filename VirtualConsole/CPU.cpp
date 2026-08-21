@@ -17,6 +17,8 @@ void CPU::reset()
 
     SP = 0xEFFF;
 
+    HL = 0;
+
     FLAGS = 0;
 
     running = false;
@@ -416,6 +418,56 @@ void CPU::step()
         PC = low | (high << 8);
 
         interruptsEnabled = true;
+
+        break;
+    }
+
+    // -------------------------
+    // LDHL value
+    // -------------------------
+
+    case 0x11:
+    {
+        uint8_t low = busRead(PC);
+        PC++;
+
+        uint8_t high = busRead(PC);
+        PC++;
+
+        HL = low | (high << 8);
+
+        break;
+    }
+
+    // -------------------------
+    // STX (store A at [HL])
+    // -------------------------
+
+    case 0x12:
+    {
+        busWrite(HL, A);
+
+        break;
+    }
+
+    // -------------------------
+    // LDX (load A from [HL])
+    // -------------------------
+
+    case 0x13:
+    {
+        A = busRead(HL);
+
+        break;
+    }
+
+    // -------------------------
+    // INCHL
+    // -------------------------
+
+    case 0x14:
+    {
+        HL++;
 
         break;
     }

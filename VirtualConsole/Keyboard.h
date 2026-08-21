@@ -25,7 +25,6 @@ private:
     int count;
 
     bool enabled;
-    bool pending;
 
     bool queueEmpty();
     bool queueFull();
