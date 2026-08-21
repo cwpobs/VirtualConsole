@@ -1,12 +1,12 @@
 #include "Bus.h"
 #include "Device.h"
 
-void Bus::mapDevice(Device* device, uint16_t start, uint16_t end)
+void Bus::mapDevice(Device* device, uint32_t start, uint32_t end)
 {
     devices.push_back({ device, start, end });
 }
 
-Bus::MappedDevice* Bus::findDevice(uint16_t address)
+Bus::MappedDevice* Bus::findDevice(uint32_t address)
 {
     for (MappedDevice& mapped : devices)
     {
@@ -19,7 +19,7 @@ Bus::MappedDevice* Bus::findDevice(uint16_t address)
     return nullptr;
 }
 
-uint8_t Bus::read(uint16_t address)
+uint8_t Bus::read(uint32_t address)
 {
     MappedDevice* mapped = findDevice(address);
 
@@ -31,7 +31,7 @@ uint8_t Bus::read(uint16_t address)
     return mapped->device->read(address - mapped->start);
 }
 
-void Bus::write(uint16_t address, uint8_t value)
+void Bus::write(uint32_t address, uint8_t value)
 {
     MappedDevice* mapped = findDevice(address);
 
@@ -43,7 +43,7 @@ void Bus::write(uint16_t address, uint8_t value)
     mapped->device->write(address - mapped->start, value);
 }
 
-bool Bus::isMapped(uint16_t address)
+bool Bus::isMapped(uint32_t address)
 {
     return findDevice(address) != nullptr;
 }

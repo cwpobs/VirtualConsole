@@ -36,17 +36,14 @@ int main()
     CPU cpu;
     Assembler assembler;
 
-    // Память занимает нижнюю часть адресного пространства,
-    // верхняя часть (0xF000-0xF006) отдана таймеру и клавиатуре,
-    // 0x8000-0x87CF - текстовая видеопамять (80x25 символов),
-    // 0x87D0 - её регистр SCROLL.
-    // VRAM регистрируется до Memory: диапазон VRAM физически лежит
-    // внутри диапазона Memory, а Bus отдаёт адрес первому подходящему
-    // по порядку регистрации устройству
-    bus.mapDevice(&vram, 0x8000, 0x87D0);
-    bus.mapDevice(&memory, 0x0000, 0xEFFF);
-    bus.mapDevice(&timer, 0xF000, 0xF004);
-    bus.mapDevice(&keyboard, 0xF005, 0xF006);
+    // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
+    // чтобы RAM можно было расширять в будущем, не трогая MMIO.
+    // Диапазоны больше не пересекаются, поэтому порядок регистрации
+    // устройств на шине не важен
+    bus.mapDevice(&memory, 0x00000000, 0x003FFFFF);
+    bus.mapDevice(&timer, 0xF0000000, 0xF0000004);
+    bus.mapDevice(&keyboard, 0xF0000005, 0xF0000006);
+    bus.mapDevice(&vram, 0xF0000007, 0xF00007D7);
 
 
     // ========================================
@@ -95,7 +92,7 @@ int main()
     for (size_t i = 0; i < machineCode.size(); i++)
     {
         bus.write(
-            static_cast<uint16_t>(i),
+            static_cast<uint32_t>(i),
             machineCode[i]
         );
     }
@@ -127,10 +124,12 @@ int main()
         std::cout << "\x1b[?25l\x1b[H";
         vram.render();
 
-        int offset = cpu.HL - 0x8000;
+        const uint32_t vramBase = 0xF0000007;
 
-        if (offset >= 0 && offset < TextVRAM::SIZE)
+        if (cpu.HL >= vramBase && cpu.HL < vramBase + TextVRAM::SIZE)
         {
+            uint32_t offset = cpu.HL - vramBase;
+
             int row = offset / TextVRAM::WIDTH;
             int col = offset % TextVRAM::WIDTH;
 
@@ -150,8 +149,8 @@ int main()
     {
         cpu.step();
 
-        uint8_t currentKeyCount = bus.read(0x0900);
-        uint8_t currentBannerReady = bus.read(0x0904);
+        uint8_t currentKeyCount = bus.read(0x00001000);
+        uint8_t currentBannerReady = bus.read(0x00001002);
 
         if (currentKeyCount != lastKeyCount ||
             currentBannerReady != lastBannerReady)
@@ -186,8 +185,8 @@ int main()
     std::cout << "FLAGS = " << (int)cpu.FLAGS << "\n";
     std::cout << "CYCLES = " << cpu.cycles << "\n";
 
-    std::cout << "keyCount = " << (int)bus.read(0x0900) << "\n";
-    std::cout << "lastKey = " << (int)bus.read(0x0902) << "\n";
+    std::cout << "keyCount = " << (int)bus.read(0x00001000) << "\n";
+    std::cout << "lastKey = " << (int)bus.read(0x00001001) << "\n";
 
     return 0;
 }

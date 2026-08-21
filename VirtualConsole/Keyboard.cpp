@@ -48,7 +48,7 @@ uint8_t Keyboard::queuePop()
     return value;
 }
 
-uint8_t Keyboard::read(uint16_t address)
+uint8_t Keyboard::read(uint32_t address)
 {
     switch (address)
     {
@@ -65,7 +65,7 @@ uint8_t Keyboard::read(uint16_t address)
     }
 }
 
-void Keyboard::write(uint16_t address, uint8_t value)
+void Keyboard::write(uint32_t address, uint8_t value)
 {
     switch (address)
     {

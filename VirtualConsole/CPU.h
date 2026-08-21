@@ -18,13 +18,13 @@ public:
     uint8_t D;
 
     // Program Counter
-    uint16_t PC;
+    uint32_t PC;
 
     // Stack Pointer
-    uint16_t SP;
+    uint32_t SP;
 
     // Регистр-указатель для косвенной адресации (STX/LDX)
-    uint16_t HL;
+    uint32_t HL;
 
     // =========================
     // Flags
@@ -52,8 +52,9 @@ public:
     bool interruptsEnabled;
 
     // Адрес, по которому должен находиться JMP на
-    // реальный обработчик прерывания (см. ASSEMBLY.md)
-    static const uint16_t INTERRUPT_VECTOR = 0x0003;
+    // реальный обработчик прерывания (см. ASSEMBLY.md).
+    // Ровно сразу после первого JMP (opcode + 4-байтный адрес = 5 байт)
+    static const uint32_t INTERRUPT_VECTOR = 0x00000005;
 
     // =========================
     // Functions
@@ -69,6 +70,6 @@ private:
 
     uint8_t* getRegister(uint8_t index);
 
-    uint8_t busRead(uint16_t address);
-    void busWrite(uint16_t address, uint8_t value);
+    uint8_t busRead(uint32_t address);
+    void busWrite(uint32_t address, uint8_t value);
 };

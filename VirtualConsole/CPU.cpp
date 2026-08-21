@@ -15,7 +15,7 @@ void CPU::reset()
 
     PC = 0;
 
-    SP = 0xEFFF;
+    SP = 0x003FFFFF;
 
     HL = 0;
 
@@ -28,7 +28,7 @@ void CPU::reset()
     interruptsEnabled = false;
 }
 
-uint8_t CPU::busRead(uint16_t address)
+uint8_t CPU::busRead(uint32_t address)
 {
     uint8_t value = bus->read(address);
 
@@ -38,7 +38,7 @@ uint8_t CPU::busRead(uint16_t address)
     return value;
 }
 
-void CPU::busWrite(uint16_t address, uint8_t value)
+void CPU::busWrite(uint32_t address, uint8_t value)
 {
     bus->write(address, value);
 
@@ -68,6 +68,12 @@ void CPU::step()
 
     if (interruptsEnabled && bus->pollInterrupt())
     {
+        busWrite(SP, (PC >> 24) & 0xFF);
+        SP--;
+
+        busWrite(SP, (PC >> 16) & 0xFF);
+        SP--;
+
         busWrite(SP, (PC >> 8) & 0xFF);
         SP--;
 
@@ -125,15 +131,23 @@ void CPU::step()
 
     case 0x02:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        uint16_t address =
-            low |
-            (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
 
         A = busRead(address);
 
@@ -146,15 +160,23 @@ void CPU::step()
 
     case 0x03:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        uint16_t address =
-            low |
-            (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
 
         busWrite(address, A);
 
@@ -231,15 +253,23 @@ void CPU::step()
 
     case 0x07:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        uint16_t address =
-            low |
-            (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
 
         PC = address;
 
@@ -252,15 +282,23 @@ void CPU::step()
 
     case 0x08:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        uint16_t address =
-            low |
-            (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
 
         if (FLAGS & FLAG_ZERO)
         {
@@ -276,15 +314,23 @@ void CPU::step()
 
     case 0x09:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        uint16_t address =
-            low |
-            (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
 
         if (!(FLAGS & FLAG_ZERO))
         {
@@ -340,15 +386,29 @@ void CPU::step()
 
     case 0x0C:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        uint16_t address =
-            low |
-            (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
+
+        busWrite(SP, (PC >> 24) & 0xFF);
+        SP--;
+
+        busWrite(SP, (PC >> 16) & 0xFF);
+        SP--;
 
         busWrite(SP, (PC >> 8) & 0xFF);
         SP--;
@@ -368,12 +428,22 @@ void CPU::step()
     case 0x0D:
     {
         SP++;
-        uint8_t low = busRead(SP);
+        uint8_t r0 = busRead(SP);
 
         SP++;
-        uint8_t high = busRead(SP);
+        uint8_t r1 = busRead(SP);
 
-        PC = low | (high << 8);
+        SP++;
+        uint8_t r2 = busRead(SP);
+
+        SP++;
+        uint8_t r3 = busRead(SP);
+
+        PC =
+            r0 |
+            (r1 << 8) |
+            (r2 << 16) |
+            (static_cast<uint32_t>(r3) << 24);
 
         break;
     }
@@ -410,12 +480,22 @@ void CPU::step()
         FLAGS = busRead(SP);
 
         SP++;
-        uint8_t low = busRead(SP);
+        uint8_t r0 = busRead(SP);
 
         SP++;
-        uint8_t high = busRead(SP);
+        uint8_t r1 = busRead(SP);
 
-        PC = low | (high << 8);
+        SP++;
+        uint8_t r2 = busRead(SP);
+
+        SP++;
+        uint8_t r3 = busRead(SP);
+
+        PC =
+            r0 |
+            (r1 << 8) |
+            (r2 << 16) |
+            (static_cast<uint32_t>(r3) << 24);
 
         interruptsEnabled = true;
 
@@ -428,13 +508,23 @@ void CPU::step()
 
     case 0x11:
     {
-        uint8_t low = busRead(PC);
+        uint8_t b0 = busRead(PC);
         PC++;
 
-        uint8_t high = busRead(PC);
+        uint8_t b1 = busRead(PC);
         PC++;
 
-        HL = low | (high << 8);
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        HL =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
 
         break;
     }

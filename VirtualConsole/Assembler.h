@@ -15,7 +15,7 @@ private:
     struct Label
     {
         std::string name;
-        uint16_t address;
+        uint32_t address;
     };
 
     std::vector<Label> labels;
@@ -24,7 +24,7 @@ private:
 
     int parseRegister(const std::string& name);
 
-    int parseNumber(const std::string& text);
+    uint32_t parseNumber(const std::string& text);
 
     void firstPass(const std::vector<std::string>& lines);
 

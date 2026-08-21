@@ -55,7 +55,7 @@ int Assembler::parseRegister(const std::string& name)
 // Number
 // ============================================================
 
-int Assembler::parseNumber(const std::string& text)
+uint32_t Assembler::parseNumber(const std::string& text)
 {
     std::string value = text;
 
@@ -64,11 +64,14 @@ int Assembler::parseNumber(const std::string& text)
         value[0] == '0' &&
         (value[1] == 'x' || value[1] == 'X'))
     {
-        return std::stoi(value, nullptr, 16);
+        // std::stoul (не stoi!) - адреса вроде 0xF0000007 больше
+        // INT_MAX и не помещаются в знаковый int, stoi бы бросил
+        // исключение
+        return static_cast<uint32_t>(std::stoul(value, nullptr, 16));
     }
 
     // Decimal
-    return std::stoi(value);
+    return static_cast<uint32_t>(std::stoul(value));
 }
 
 
@@ -97,7 +100,7 @@ int Assembler::findLabel(const std::string& name)
 void Assembler::firstPass(
     const std::vector<std::string>& lines)
 {
-    uint16_t address = 0;
+    uint32_t address = 0;
 
     for (const std::string& originalLine : lines)
     {
@@ -177,9 +180,9 @@ void Assembler::firstPass(
             instruction == "CALL" ||
             instruction == "LDHL")
         {
-            // opcode + 16-bit address/value
+            // opcode + 32-bit address/value
 
-            address += 3;
+            address += 5;
         }
         else if (instruction == "HLT" ||
             instruction == "RET" ||
@@ -418,7 +421,7 @@ void Assembler::secondPass(
 
             ss >> addressText;
 
-            int address;
+            uint32_t address;
 
             if (std::isdigit(addressText[0]) ||
                 addressText[0] == '-')
@@ -427,12 +430,14 @@ void Assembler::secondPass(
             }
             else
             {
-                address = findLabel(addressText);
+                int labelAddress = findLabel(addressText);
 
-                if (address < 0)
+                if (labelAddress < 0)
                     throw std::runtime_error(
                         "Unknown label: " + addressText
                     );
+
+                address = static_cast<uint32_t>(labelAddress);
             }
 
 
@@ -468,6 +473,14 @@ void Assembler::secondPass(
 
             output.push_back(
                 static_cast<uint8_t>((address >> 8) & 0xFF)
+            );
+
+            output.push_back(
+                static_cast<uint8_t>((address >> 16) & 0xFF)
+            );
+
+            output.push_back(
+                static_cast<uint8_t>((address >> 24) & 0xFF)
             );
         }
 

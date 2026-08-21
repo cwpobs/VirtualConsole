@@ -8,7 +8,7 @@ Timer::Timer()
     pending = false;
 }
 
-uint8_t Timer::read(uint16_t address)
+uint8_t Timer::read(uint32_t address)
 {
     switch (address)
     {
@@ -25,7 +25,7 @@ uint8_t Timer::read(uint16_t address)
     }
 }
 
-void Timer::write(uint16_t address, uint8_t value)
+void Timer::write(uint32_t address, uint8_t value)
 {
     switch (address)
     {

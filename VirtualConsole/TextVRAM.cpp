@@ -10,7 +10,7 @@ TextVRAM::TextVRAM()
     }
 }
 
-uint8_t TextVRAM::read(uint16_t address)
+uint8_t TextVRAM::read(uint32_t address)
 {
     if (address == SIZE)
     {
@@ -21,7 +21,7 @@ uint8_t TextVRAM::read(uint16_t address)
     return data[address];
 }
 
-void TextVRAM::write(uint16_t address, uint8_t value)
+void TextVRAM::write(uint32_t address, uint8_t value)
 {
     if (address == SIZE)
     {
