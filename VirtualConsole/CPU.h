@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-class Memory;
+class Bus;
 
 class CPU
 {
@@ -37,13 +37,13 @@ public:
 
     bool running;
 
-    Memory* memory;
+    Bus* bus;
 
     // =========================
     // Functions
     // =========================
 
-    void connectMemory(Memory* memory);
+    void connectBus(Bus* bus);
 
     void reset();
 

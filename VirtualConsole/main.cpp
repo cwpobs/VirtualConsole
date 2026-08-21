@@ -3,6 +3,7 @@
 
 #include "CPU.h"
 #include "Memory.h"
+#include "Bus.h"
 #include "Assembler.h"
 
 int main()
@@ -12,8 +13,12 @@ int main()
     // ========================================
 
     Memory memory;
+    Bus bus;
     CPU cpu;
     Assembler assembler;
+
+    // Подключаем память к шине на весь диапазон адресов
+    bus.mapDevice(&memory, 0x0000, 0xFFFF);
 
 
     // ========================================
@@ -67,7 +72,7 @@ int main()
 
     for (size_t i = 0; i < machineCode.size(); i++)
     {
-        memory.write(
+        bus.write(
             static_cast<uint16_t>(i),
             machineCode[i]
         );
@@ -75,10 +80,10 @@ int main()
 
 
     // ========================================
-    // Подключаем память к CPU
+    // Подключаем шину к CPU
     // ========================================
 
-    cpu.connectMemory(&memory);
+    cpu.connectBus(&bus);
 
     cpu.reset();
 

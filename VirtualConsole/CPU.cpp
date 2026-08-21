@@ -1,9 +1,9 @@
 #include "CPU.h"
-#include "Memory.h"
+#include "Bus.h"
 
-void CPU::connectMemory(Memory* memory)
+void CPU::connectBus(Bus* bus)
 {
-    this->memory = memory;
+    this->bus = bus;
 }
 
 void CPU::reset()
@@ -42,7 +42,7 @@ void CPU::step()
     // Fetch
     // =========================
 
-    uint8_t opcode = memory->read(PC);
+    uint8_t opcode = bus->read(PC);
 
     PC++;
 
@@ -58,10 +58,10 @@ void CPU::step()
 
     case 0x01:
     {
-        uint8_t registerIndex = memory->read(PC);
+        uint8_t registerIndex = bus->read(PC);
         PC++;
 
-        uint8_t value = memory->read(PC);
+        uint8_t value = bus->read(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -80,17 +80,17 @@ void CPU::step()
 
     case 0x02:
     {
-        uint8_t low = memory->read(PC);
+        uint8_t low = bus->read(PC);
         PC++;
 
-        uint8_t high = memory->read(PC);
+        uint8_t high = bus->read(PC);
         PC++;
 
         uint16_t address =
             low |
             (high << 8);
 
-        A = memory->read(address);
+        A = bus->read(address);
 
         break;
     }
@@ -101,17 +101,17 @@ void CPU::step()
 
     case 0x03:
     {
-        uint8_t low = memory->read(PC);
+        uint8_t low = bus->read(PC);
         PC++;
 
-        uint8_t high = memory->read(PC);
+        uint8_t high = bus->read(PC);
         PC++;
 
         uint16_t address =
             low |
             (high << 8);
 
-        memory->write(address, A);
+        bus->write(address, A);
 
         break;
     }
@@ -122,7 +122,7 @@ void CPU::step()
 
     case 0x04:
     {
-        uint8_t registerIndex = memory->read(PC);
+        uint8_t registerIndex = bus->read(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -141,7 +141,7 @@ void CPU::step()
 
     case 0x05:
     {
-        uint8_t registerIndex = memory->read(PC);
+        uint8_t registerIndex = bus->read(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -160,7 +160,7 @@ void CPU::step()
 
     case 0x06:
     {
-        uint8_t registerIndex = memory->read(PC);
+        uint8_t registerIndex = bus->read(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -186,10 +186,10 @@ void CPU::step()
 
     case 0x07:
     {
-        uint8_t low = memory->read(PC);
+        uint8_t low = bus->read(PC);
         PC++;
 
-        uint8_t high = memory->read(PC);
+        uint8_t high = bus->read(PC);
         PC++;
 
         uint16_t address =
@@ -207,10 +207,10 @@ void CPU::step()
 
     case 0x08:
     {
-        uint8_t low = memory->read(PC);
+        uint8_t low = bus->read(PC);
         PC++;
 
-        uint8_t high = memory->read(PC);
+        uint8_t high = bus->read(PC);
         PC++;
 
         uint16_t address =
@@ -231,10 +231,10 @@ void CPU::step()
 
     case 0x09:
     {
-        uint8_t low = memory->read(PC);
+        uint8_t low = bus->read(PC);
         PC++;
 
-        uint8_t high = memory->read(PC);
+        uint8_t high = bus->read(PC);
         PC++;
 
         uint16_t address =
