@@ -92,4 +92,6 @@ private:
     void deleteFile();
     void changeDir();
     void changeDirUp();
+    void loadRaw();
+    void build();
 };

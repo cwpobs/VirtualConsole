@@ -73,6 +73,8 @@ void Disk::write(uint32_t address, uint8_t value)
         case 10: loadProgram(SHELL_LOAD_ADDRESS); break;
         case 11: changeDir(); break;
         case 12: changeDirUp(); break;
+        case 13: loadRaw(); break;
+        case 14: build(); break;
         default: break;
         }
 
@@ -329,5 +331,95 @@ void Disk::changeDirUp()
 {
     // Уже в корне - тихо ничего не делаем (как в DOS).
     currentDir = currentDir.parent_path();
+    status = 0;
+}
+
+void Disk::loadRaw()
+{
+    // В отличие от loadProgram - NAME здесь уже ГОТОВЫЙ машинный код
+    // (см. build() ниже), не текстовый исходник - копируем байты как
+    // есть, без ассемблера. Та же песочница (LOAD_ADDRESS), что и у
+    // LOAD/poke/run - "ИМЯ.RUN" запускается точно так же, как обычная
+    // exec'нутая программа (см. SHELL.ASM, cmd_autorun/cmd_exec_run).
+
+    std::ifstream file(basePath / currentDir / nameAsString(), std::ios::binary);
+
+    if (!file)
+    {
+        status = 2;
+        fileSize = 0;
+        return;
+    }
+
+    // Тот же диск, что и loadProgram() отмечает при LOAD - программа,
+    // запущенная из .RUN, тоже должна резолвить свои PNG/карты/.mod
+    // относительно правильного диска (см. Disk.h, lastExecDisk).
+    lastExecDisk = this;
+
+    std::vector<uint8_t> data(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+
+    for (size_t i = 0; i < data.size(); i++)
+    {
+        bus->write(LOAD_ADDRESS + static_cast<uint32_t>(i), data[i]);
+    }
+
+    fileSize = static_cast<uint32_t>(data.size());
+    status = 0;
+}
+
+void Disk::build()
+{
+    // Ассемблирует NAME (текстовый .asm - как loadProgram) и пишет
+    // результат НЕ в RAM, а в новый файл на диске: то же имя, но
+    // расширение заменено на .RUN (или дописано, если расширения не
+    // было). Собирается с тем же origin (LOAD_ADDRESS), что и обычный
+    // exec, - иначе метки в .RUN резолвились бы не туда, куда его
+    // потом кладёт loadRaw().
+
+    std::ifstream sourceFile(basePath / currentDir / nameAsString());
+
+    if (!sourceFile)
+    {
+        status = 2;
+        fileSize = 0;
+        return;
+    }
+
+    std::stringstream buffer;
+    buffer << sourceFile.rdbuf();
+
+    std::vector<uint8_t> machineCode;
+
+    try
+    {
+        machineCode = assembler.assemble(buffer.str(), LOAD_ADDRESS);
+    }
+    catch (const std::exception&)
+    {
+        status = 2;
+        fileSize = 0;
+        return;
+    }
+
+    std::string sourceName = nameAsString();
+    size_t dot = sourceName.find_last_of('.');
+    std::string stem = (dot == std::string::npos) ? sourceName : sourceName.substr(0, dot);
+    std::string outputName = stem + ".RUN";
+
+    std::ofstream outFile(basePath / currentDir / outputName, std::ios::binary | std::ios::trunc);
+
+    if (!outFile)
+    {
+        status = 2;
+        fileSize = 0;
+        return;
+    }
+
+    outFile.write(reinterpret_cast<const char*>(machineCode.data()), machineCode.size());
+
+    fileSize = static_cast<uint32_t>(machineCode.size());
     status = 0;
 }

@@ -1373,35 +1373,92 @@ check_copy:
     LDA cmdlen
     LDI B, 6        ; "copy " (5) + 1 символ
     CMP B
-    JC dispatch_done
+    JC check_build
 
     LDA cmdlen
     LDI B, 18       ; "copy " (5) + 12 символов = 17
     CMP B
-    JNC dispatch_done
+    JNC check_build
 
     LDA cmdbuf0
     LDI B, 99       ; 'c'
     CMP B
-    JNZ dispatch_done
+    JNZ check_build
     LDA cmdbuf1
     LDI B, 111      ; 'o'
     CMP B
-    JNZ dispatch_done
+    JNZ check_build
     LDA cmdbuf2
     LDI B, 112      ; 'p'
     CMP B
-    JNZ dispatch_done
+    JNZ check_build
     LDA cmdbuf3
     LDI B, 121      ; 'y'
     CMP B
-    JNZ dispatch_done
+    JNZ check_build
     LDA cmdbuf4
     LDI B, 32       ; (пробел)
     CMP B
-    JNZ dispatch_done
+    JNZ check_build
 
     CALL cmd_copy
+    JMP dispatch_done
+
+
+check_build:
+
+    ; "build " + имя .asm-файла, переменная длина 1-12 символов -
+    ; собирает его в ИМЯ.RUN (см. cmd_build, Disk.BUILD=14)
+
+    LDA cmdlen
+    LDI B, 7        ; "build " (6) + 1 символ
+    CMP B
+    JC check_autorun
+
+    LDA cmdlen
+    LDI B, 19       ; "build " (6) + 12 символов = 18
+    CMP B
+    JNC check_autorun
+
+    LDA cmdbuf0
+    LDI B, 98       ; 'b'
+    CMP B
+    JNZ check_autorun
+    LDA cmdbuf1
+    LDI B, 117      ; 'u'
+    CMP B
+    JNZ check_autorun
+    LDA cmdbuf2
+    LDI B, 105      ; 'i'
+    CMP B
+    JNZ check_autorun
+    LDA cmdbuf3
+    LDI B, 108      ; 'l'
+    CMP B
+    JNZ check_autorun
+    LDA cmdbuf4
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ check_autorun
+    LDA cmdbuf5
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_autorun
+
+    CALL cmd_build
+    JMP dispatch_done
+
+
+check_autorun:
+
+    ; Ничего из известных команд не совпало - последняя попытка:
+    ; считаем всю введённую строку именем программы и пробуем
+    ; запустить ИМЯ.RUN (см. cmd_autorun) - как .exe/.com в DOS. Не
+    ; сравнение, а безусловный переход - cmd_autorun сам решает,
+    ; получилось или нет, и тихо выходит, если ИМЯ.RUN не нашёлся
+    ; (тогда строка просто выглядит как неизвестная команда).
+
+    CALL cmd_autorun
 
 dispatch_done:
 
@@ -1600,6 +1657,36 @@ cmd_help:
     CALL print_char
     LDI A, 78
     CALL print_char   ; N
+
+    CALL print_newline
+
+    LDI A, 98
+    CALL print_char   ; b
+    LDI A, 117
+    CALL print_char   ; u
+    LDI A, 105
+    CALL print_char   ; i
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 32
+    CALL print_char
+    LDI A, 78
+    CALL print_char   ; N
+
+    CALL print_newline
+
+    LDI A, 78
+    CALL print_char   ; N
+    LDI A, 46
+    CALL print_char   ; .
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 117
+    CALL print_char   ; u
+    LDI A, 110
+    CALL print_char   ; n
 
     CALL print_newline
 
@@ -2647,6 +2734,159 @@ cmd_copy_d_to_c_close:
     STA 0xF00007F2      ; DiskC COMMAND = CLOSE
 
 cmd_copy_done:
+
+    RET
+
+
+cmd_build:
+
+    ; "build ИМЯ.ASM" - собирает .asm в ИМЯ.RUN на currentDisk
+    ; (BUILD = 14 в Disk) - готовый .RUN потом запускается напрямую
+    ; по имени, без exec (см. cmd_autorun).
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_build_d
+    JMP cmd_build_c
+
+
+cmd_build_c:
+
+    LDI A, 6
+    STA cn_prefix_len   ; длина префикса "build "
+    CALL copy_name_to_diskc
+
+    LDI A, 14
+    STA 0xF00007F2      ; DiskC COMMAND = BUILD
+
+    RET
+
+
+cmd_build_d:
+
+    LDI A, 6
+    STA cn_prefix_len   ; длина префикса "build "
+    CALL copy_name_to_diskd
+
+    LDI A, 14
+    STA 0xF0000805      ; DiskD COMMAND = BUILD
+
+    RET
+
+
+cmd_autorun:
+
+    ; Последняя попытка распознать введённую строку: считаем её ЦЕЛИКОМ
+    ; именем программы, приписываем ".RUN" и пробуем запустить как
+    ; готовый машинный код (LOAD_RAW = 13 в Disk) - так же, как в DOS
+    ; печатают имя .exe без расширения. Тихо ничего не делает, если
+    ; получившееся имя не влезает в 12-байтовый NAME или файл не
+    ; нашёлся - введённая строка в этом случае просто выглядит как
+    ; неизвестная команда (как и раньше).
+
+    LDA cmdlen
+    LDI B, 1
+    CMP B
+    JC cmd_autorun_done   ; пустая строка (Enter без ввода) - нечего запускать
+
+    LDA cmdlen
+    LDI B, 9              ; cmdlen+4 <= 12  =>  cmdlen <= 8  =>  cmdlen < 9
+    CMP B
+    JNC cmd_autorun_done  ; слишком длинное имя - ИМЯ+".RUN" не влезет в NAME
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_autorun_d
+    JMP cmd_autorun_c
+
+
+cmd_autorun_c:
+
+    LDI A, 0
+    STA cn_prefix_len     ; копируем ВЕСЬ cmdbuf - тут нет префикса-команды
+    CALL copy_name_to_diskc
+    CALL append_run_suffix_c
+
+    LDI A, 13
+    STA 0xF00007F2        ; DiskC COMMAND = LOAD_RAW
+
+    LDA 0xF00007F3         ; DiskC STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_autorun_done   ; ИМЯ.RUN не нашёлся - молча выходим
+
+    JMP cmd_exec_run       ; переиспользуем готовую логику запуска
+
+
+cmd_autorun_d:
+
+    LDI A, 0
+    STA cn_prefix_len
+    CALL copy_name_to_diskd
+    CALL append_run_suffix_d
+
+    LDI A, 13
+    STA 0xF0000805        ; DiskD COMMAND = LOAD_RAW
+
+    LDA 0xF0000806
+    LDI B, 0
+    CMP B
+    JNZ cmd_autorun_done
+
+    JMP cmd_exec_run
+
+
+cmd_autorun_done:
+
+    RET
+
+
+append_run_suffix_c:
+
+    ; Дописывает ".RUN" в DiskC NAME сразу после уже скопированных
+    ; cmdlen символов (copy_name_to_diskc уже обнулил остаток NAME -
+    ; здесь просто перезаписываем следующие 4 байта).
+
+    LDHL 0xF00007E6       ; DiskC NAME0
+    LDA cmdlen
+    CALL hl_add_offset    ; HL = NAME0 + cmdlen
+
+    LDI A, 46             ; '.'
+    STX
+    INCHL
+    LDI A, 82             ; 'R'
+    STX
+    INCHL
+    LDI A, 85             ; 'U'
+    STX
+    INCHL
+    LDI A, 78             ; 'N'
+    STX
+
+    CALL goto_row_start   ; HL был занят под NAME - возвращаем на экран
+
+    RET
+
+
+append_run_suffix_d:
+
+    LDHL 0xF00007F9       ; DiskD NAME0
+    LDA cmdlen
+    CALL hl_add_offset
+
+    LDI A, 46             ; '.'
+    STX
+    INCHL
+    LDI A, 82             ; 'R'
+    STX
+    INCHL
+    LDI A, 85             ; 'U'
+    STX
+    INCHL
+    LDI A, 78             ; 'N'
+    STX
+
+    CALL goto_row_start
 
     RET
 
