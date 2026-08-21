@@ -64,6 +64,7 @@ main:
     STA 0x00010000      ; keyCount = 0
     STA quit            ; quit = 0
     STA cmdlen          ; cmdlen = 0
+    STA programRunning  ; programRunning = 0
 
     LDI D, 0        ; D - константа "0" для сравнений на весь запуск
 
@@ -147,6 +148,15 @@ irq_handler:
 
 
 do_quit:
+
+    ; Если сейчас выполняется программа (exec/run - см. programRunning
+    ; в cmd_run/cmd_exec_run), ESC не должен гасить всю VM - lastKey
+    ; уже обновлён выше безусловно, программа сама заметит его в своём
+    ; цикле опроса и завершится штатно, вернувшись в шелл.
+    LDA programRunning
+    LDI B, 0
+    CMP B
+    JNZ irq_done
 
     LDI A, 1
     STA quit      ; quit = 1
@@ -1852,7 +1862,16 @@ cmd_run:
 
     PUSH D          ; на случай, если код в песочнице испортит "константу 0"
 
+    LDI A, 1
+    STA programRunning   ; ESC во время работы программы не должен
+                          ; гасить всю VM - см. do_quit
+
     CALL 0x00002000
+
+    PUSH A                ; сохранить A программы на время сброса флага
+    LDI A, 0
+    STA programRunning
+    POP A
 
     STA savedA
     PUSH B
@@ -2416,7 +2435,16 @@ cmd_exec_run:
 
     PUSH D          ; на случай, если программа испортит "константу 0"
 
+    LDI A, 1
+    STA programRunning   ; ESC во время работы программы не должен
+                          ; гасить всю VM - см. do_quit
+
     CALL 0x00002000
+
+    PUSH A                ; сохранить A программы на время сброса флага
+    LDI A, 0
+    STA programRunning
+    POP A
 
     STA savedA
     PUSH B
@@ -2971,6 +2999,8 @@ irq_done:
 ; ============================================================
 
 quit:       DB 0
+programRunning: DB 0   ; 1 - пока внутри CALL 0x00002000 (exec/run) -
+                        ; см. do_quit/cmd_run/cmd_exec_run
 column:     DB 0
 row:        DB 0
 cmdlen:     DB 0
