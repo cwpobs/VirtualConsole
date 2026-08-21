@@ -6,6 +6,7 @@
 #include "Memory.h"
 #include "Timer.h"
 #include "Keyboard.h"
+#include "TextVRAM.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -22,12 +23,18 @@ int main()
     Memory memory;
     Timer timer;
     Keyboard keyboard;
+    TextVRAM vram;
     Bus bus;
     CPU cpu;
     Assembler assembler;
 
     // Память занимает нижнюю часть адресного пространства,
-    // верхняя часть (0xF000-0xF006) отдана таймеру и клавиатуре
+    // верхняя часть (0xF000-0xF006) отдана таймеру и клавиатуре,
+    // 0x8000-0x87CF - текстовая видеопамять (80x25 символов).
+    // VRAM регистрируется до Memory: диапазон VRAM физически лежит
+    // внутри диапазона Memory, а Bus отдаёт адрес первому подходящему
+    // по порядку регистрации устройству
+    bus.mapDevice(&vram, 0x8000, 0x87CF);
     bus.mapDevice(&memory, 0x0000, 0xEFFF);
     bus.mapDevice(&timer, 0xF000, 0xF004);
     bus.mapDevice(&keyboard, 0xF005, 0xF006);
@@ -254,6 +261,95 @@ int main()
     std::cout << std::dec << "\n";
 
     std::cout.flush();
+
+
+    // ========================================
+    // Демо: текстовая видеопамять (Text VRAM)
+    // ========================================
+
+    std::string vramProgram = R"(
+        LDI A, 72
+        STA 0x8000      ; H
+        LDI A, 101
+        STA 0x8001      ; e
+        LDI A, 108
+        STA 0x8002      ; l
+        LDI A, 108
+        STA 0x8003      ; l
+        LDI A, 111
+        STA 0x8004      ; o
+        LDI A, 44
+        STA 0x8005      ; ,
+        LDI A, 32
+        STA 0x8006      ; (пробел)
+        LDI A, 86
+        STA 0x8007      ; V
+        LDI A, 105
+        STA 0x8008      ; i
+        LDI A, 114
+        STA 0x8009      ; r
+        LDI A, 116
+        STA 0x800A      ; t
+        LDI A, 117
+        STA 0x800B      ; u
+        LDI A, 97
+        STA 0x800C      ; a
+        LDI A, 108
+        STA 0x800D      ; l
+        LDI A, 32
+        STA 0x800E      ; (пробел)
+        LDI A, 67
+        STA 0x800F      ; C
+        LDI A, 111
+        STA 0x8010      ; o
+        LDI A, 110
+        STA 0x8011      ; n
+        LDI A, 115
+        STA 0x8012      ; s
+        LDI A, 111
+        STA 0x8013      ; o
+        LDI A, 108
+        STA 0x8014      ; l
+        LDI A, 101
+        STA 0x8015      ; e
+        LDI A, 33
+        STA 0x8016      ; !
+
+        HLT
+    )";
+
+    std::vector<uint8_t> vramCode;
+
+    try
+    {
+        vramCode = assembler.assemble(vramProgram);
+    }
+    catch (const std::exception& error)
+    {
+        std::cout << "Assembler error:\n";
+        std::cout << error.what() << "\n";
+
+        return 1;
+    }
+
+    for (size_t i = 0; i < vramCode.size(); i++)
+    {
+        bus.write(
+            static_cast<uint16_t>(i),
+            vramCode[i]
+        );
+    }
+
+    cpu.reset();
+    cpu.running = true;
+
+    while (cpu.running)
+    {
+        cpu.step();
+    }
+
+    std::cout << "\n";
+    vram.render();
 
 
     // ========================================
