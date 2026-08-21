@@ -92,7 +92,11 @@ void PngLoader::write(uint32_t address, uint8_t value)
 
 void PngLoader::load()
 {
-    std::string path = (diskC->getCurrentPath() / nameAsString()).string();
+    // lastExecDisk - какой диск реально запустил (через exec) текущую
+    // выполняющуюся программу - см. Disk.h. До первого exec (nullptr)
+    // используем diskC как диск по умолчанию.
+    Disk* activeDisk = (Disk::lastExecDisk != nullptr) ? Disk::lastExecDisk : diskC;
+    std::string path = (activeDisk->getCurrentPath() / nameAsString()).string();
 
     int width = 0;
     int height = 0;

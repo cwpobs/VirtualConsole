@@ -68,7 +68,11 @@ namespace
 
 void ModLoader::load()
 {
-    std::ifstream file(diskC->getCurrentPath() / nameAsString(), std::ios::binary);
+    // lastExecDisk - какой диск реально запустил (через exec) текущую
+    // выполняющуюся программу - см. Disk.h. До первого exec (nullptr)
+    // используем diskC как диск по умолчанию.
+    Disk* activeDisk = (Disk::lastExecDisk != nullptr) ? Disk::lastExecDisk : diskC;
+    std::ifstream file(activeDisk->getCurrentPath() / nameAsString(), std::ios::binary);
 
     if (!file)
     {

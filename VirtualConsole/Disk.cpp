@@ -3,6 +3,8 @@
 
 #include <sstream>
 
+Disk* Disk::lastExecDisk = nullptr;
+
 Disk::Disk(const std::string& folder, Bus* bus)
 {
     basePath = folder;
@@ -257,6 +259,17 @@ void Disk::loadProgram(uint32_t targetAddress)
         status = 2;
         fileSize = 0;
         return;
+    }
+
+    if (targetAddress == LOAD_ADDRESS)
+    {
+        // Именно песочница exec/poke+run (не SHELL_LOAD_ADDRESS -
+        // загрузка самого SHELL.ASM при старте VM тут ни при чём) -
+        // запоминаем, какой диск реально запустил текущую программу,
+        // чтобы PngLoader/MapLoader/ModLoader резолвили СВОИ файлы
+        // относительно него же, а не всегда относительно диска C
+        // (см. Disk.h, lastExecDisk).
+        lastExecDisk = this;
     }
 
     std::stringstream buffer;
