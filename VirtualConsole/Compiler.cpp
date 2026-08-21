@@ -1,0 +1,1247 @@
+#include "Compiler.h"
+
+#include <cctype>
+#include <sstream>
+#include <stdexcept>
+
+// ============================================================
+// Мини-C -> ASM. См. Compiler.h и ASSEMBLY.md, раздел "Мини-C".
+//
+// Общая идея кодогена выражений: правый операнд сначала в A,
+// PUSH A, затем левый операнд в A, POP B - после этого A=левый,
+// B=правый, готово для несимметричных операций (SUB и т.д.).
+// Работает для сколь угодно вложенных выражений бесплатно, т.к.
+// использует настоящий аппаратный стек CPU.
+//
+// У CPU нет инструкции "регистр в регистр" - единственный способ
+// скопировать значение из одного регистра в другой не трогая
+// исходный - PUSH исходный / POP целевой (PUSH только читает
+// регистр, не изменяет его - см. ASSEMBLY.md, PUSH).
+// ============================================================
+
+// ---------------- Лексер ----------------
+
+void Compiler::lex(const std::string& source)
+{
+    tokens.clear();
+    int line = 1;
+    size_t i = 0;
+    size_t n = source.size();
+
+    static const char* keywords[] = {
+        "int", "if", "else", "while", "for", "return", "const",
+        "poke", "peek"
+    };
+
+    while (i < n)
+    {
+        char c = source[i];
+
+        if (c == '\n') { line++; i++; continue; }
+        if (std::isspace(static_cast<unsigned char>(c))) { i++; continue; }
+
+        if (c == '/' && i + 1 < n && source[i + 1] == '/')
+        {
+            while (i < n && source[i] != '\n') i++;
+            continue;
+        }
+
+        if (std::isdigit(static_cast<unsigned char>(c)))
+        {
+            size_t start = i;
+            if (c == '0' && i + 1 < n && (source[i + 1] == 'x' || source[i + 1] == 'X'))
+            {
+                i += 2;
+                while (i < n && std::isxdigit(static_cast<unsigned char>(source[i]))) i++;
+                std::string text = source.substr(start, i - start);
+                // stoull, не stol/stoi - адреса устройств вроде 0xF0000FE9
+                // превышают диапазон 32-битного signed long (см. такой же
+                // приём в Assembler::parseNumber).
+                long long value = static_cast<long long>(std::stoull(text.substr(2), nullptr, 16));
+                tokens.push_back({ TokType::NUMBER, text, value, line });
+            }
+            else
+            {
+                while (i < n && std::isdigit(static_cast<unsigned char>(source[i]))) i++;
+                std::string text = source.substr(start, i - start);
+                long long value = static_cast<long long>(std::stoull(text));
+                tokens.push_back({ TokType::NUMBER, text, value, line });
+            }
+            continue;
+        }
+
+        if (std::isalpha(static_cast<unsigned char>(c)) || c == '_')
+        {
+            size_t start = i;
+            while (i < n && (std::isalnum(static_cast<unsigned char>(source[i])) || source[i] == '_')) i++;
+            std::string text = source.substr(start, i - start);
+            bool isKeyword = false;
+            for (const char* kw : keywords)
+            {
+                if (text == kw) { isKeyword = true; break; }
+            }
+            tokens.push_back({ isKeyword ? TokType::KEYWORD : TokType::IDENT, text, 0, line });
+            continue;
+        }
+
+        // Многосимвольные операторы (максимальное совпадение).
+        static const char* twoChar[] = {
+            "==", "!=", "<=", ">=", "&&", "||", "<<", ">>"
+        };
+        bool matchedTwo = false;
+        if (i + 1 < n)
+        {
+            std::string two = source.substr(i, 2);
+            for (const char* op : twoChar)
+            {
+                if (two == op)
+                {
+                    tokens.push_back({ TokType::PUNCT, two, 0, line });
+                    i += 2;
+                    matchedTwo = true;
+                    break;
+                }
+            }
+        }
+        if (matchedTwo) continue;
+
+        static const std::string oneChar = "+-*/%&|^~!<>=(){}[],;";
+        if (oneChar.find(c) != std::string::npos)
+        {
+            tokens.push_back({ TokType::PUNCT, std::string(1, c), 0, line });
+            i++;
+            continue;
+        }
+
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(line) +
+            ": неожиданный символ '" + std::string(1, c) + "'");
+    }
+
+    tokens.push_back({ TokType::END, "", 0, line });
+}
+
+const Compiler::Token& Compiler::peek() const
+{
+    return tokens[pos];
+}
+
+const Compiler::Token& Compiler::advance()
+{
+    const Token& t = tokens[pos];
+    if (pos + 1 < tokens.size()) pos++;
+    return t;
+}
+
+bool Compiler::check(const std::string& text) const
+{
+    return peek().text == text &&
+        (peek().type == TokType::PUNCT || peek().type == TokType::KEYWORD);
+}
+
+bool Compiler::match(const std::string& text)
+{
+    if (check(text)) { advance(); return true; }
+    return false;
+}
+
+const Compiler::Token& Compiler::expect(const std::string& text)
+{
+    if (!check(text))
+    {
+        error("ожидалось '" + text + "', встречено '" + peek().text + "'");
+    }
+    return advance();
+}
+
+const Compiler::Token& Compiler::expectIdent()
+{
+    if (peek().type != TokType::IDENT)
+    {
+        error("ожидался идентификатор, встречено '" + peek().text + "'");
+    }
+    return advance();
+}
+
+void Compiler::error(const std::string& message) const
+{
+    throw std::runtime_error(
+        "Мини-C: строка " + std::to_string(peek().line) + ": " + message);
+}
+
+Compiler::NodePtr Compiler::node(NodeKind kind)
+{
+    auto n = std::make_shared<Node>();
+    n->kind = kind;
+    n->line = peek().line;
+    return n;
+}
+
+// ---------------- Парсер ----------------
+
+Compiler::NodePtr Compiler::parseProgram()
+{
+    auto prog = node(NodeKind::Program);
+    while (peek().type != TokType::END)
+    {
+        prog->children.push_back(parseTopLevelDecl());
+    }
+    return prog;
+}
+
+Compiler::NodePtr Compiler::parseTopLevelDecl()
+{
+    if (match("const"))
+    {
+        auto n = node(NodeKind::ConstDecl);
+        n->text = expectIdent().text;
+        expect("=");
+        n->children.push_back(parseExpr());
+        expect(";");
+        return n;
+    }
+
+    expect("int");
+    std::string name = expectIdent().text;
+
+    if (check("("))
+    {
+        return parseFuncDecl(name);
+    }
+
+    if (match("["))
+    {
+        auto n = node(NodeKind::ArrayDecl);
+        n->text = name;
+        NodePtr sizeExpr = parseExpr();
+        n->children.push_back(sizeExpr);
+        expect("]");
+        expect(";");
+        return n;
+    }
+
+    auto n = node(NodeKind::VarDecl);
+    n->text = name;
+    if (match("="))
+    {
+        n->children.push_back(parseExpr());
+    }
+    expect(";");
+    return n;
+}
+
+Compiler::NodePtr Compiler::parseFuncDecl(const std::string& name)
+{
+    auto n = node(NodeKind::FuncDecl);
+    n->text = name;
+    expect("(");
+    if (!check(")"))
+    {
+        do
+        {
+            expect("int");
+            auto p = node(NodeKind::Param);
+            p->text = expectIdent().text;
+            n->children.push_back(p);
+        } while (match(","));
+    }
+    expect(")");
+    n->children.push_back(parseBlock());
+    return n;
+}
+
+Compiler::NodePtr Compiler::parseBlock()
+{
+    auto n = node(NodeKind::Block);
+    expect("{");
+    while (!check("}"))
+    {
+        n->children.push_back(parseStatement());
+    }
+    expect("}");
+    return n;
+}
+
+Compiler::NodePtr Compiler::parseVarDeclStatement()
+{
+    expect("int");
+    auto n = node(NodeKind::VarDecl);
+    n->text = expectIdent().text;
+    if (match("="))
+    {
+        n->children.push_back(parseExpr());
+    }
+    expect(";");
+    return n;
+}
+
+Compiler::NodePtr Compiler::parseExprStatement()
+{
+    auto n = node(NodeKind::ExprStmt);
+    n->children.push_back(parseExpr());
+    expect(";");
+    return n;
+}
+
+Compiler::NodePtr Compiler::parseStatement()
+{
+    if (check("int")) return parseVarDeclStatement();
+    if (check("{")) return parseBlock();
+
+    if (match("if"))
+    {
+        auto n = node(NodeKind::If);
+        expect("(");
+        n->children.push_back(parseExpr());
+        expect(")");
+        n->children.push_back(parseStatement());
+        if (match("else"))
+        {
+            n->children.push_back(parseStatement());
+        }
+        return n;
+    }
+
+    if (match("while"))
+    {
+        auto n = node(NodeKind::While);
+        expect("(");
+        n->children.push_back(parseExpr());
+        expect(")");
+        n->children.push_back(parseStatement());
+        return n;
+    }
+
+    if (match("for"))
+    {
+        auto n = node(NodeKind::For);
+        expect("(");
+        n->children.push_back(parseExpr());   // init (присваивание)
+        expect(";");
+        n->children.push_back(parseExpr());   // условие
+        expect(";");
+        n->children.push_back(parseExpr());   // post (присваивание)
+        expect(")");
+        n->children.push_back(parseStatement());
+        return n;
+    }
+
+    if (match("return"))
+    {
+        auto n = node(NodeKind::Return);
+        if (!check(";"))
+        {
+            n->children.push_back(parseExpr());
+        }
+        expect(";");
+        return n;
+    }
+
+    return parseExprStatement();
+}
+
+Compiler::NodePtr Compiler::parseExpr()
+{
+    return parseAssignment();
+}
+
+Compiler::NodePtr Compiler::parseAssignment()
+{
+    NodePtr left = parseLogicalOr();
+    if (match("="))
+    {
+        NodePtr value = parseAssignment();
+        if (left->kind == NodeKind::Ident)
+        {
+            auto n = node(NodeKind::Assign);
+            n->text = left->text;
+            n->children.push_back(value);
+            return n;
+        }
+        if (left->kind == NodeKind::Index)
+        {
+            auto n = node(NodeKind::IndexAssign);
+            n->text = left->text;
+            n->children.push_back(left->children[0]);   // индекс
+            n->children.push_back(value);
+            return n;
+        }
+        error("в левой части присваивания должна быть переменная или элемент массива");
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseLogicalOr()
+{
+    NodePtr left = parseLogicalAnd();
+    while (match("||"))
+    {
+        auto n = node(NodeKind::LogicalOr);
+        n->children.push_back(left);
+        n->children.push_back(parseLogicalAnd());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseLogicalAnd()
+{
+    NodePtr left = parseEquality();
+    while (match("&&"))
+    {
+        auto n = node(NodeKind::LogicalAnd);
+        n->children.push_back(left);
+        n->children.push_back(parseEquality());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseEquality()
+{
+    NodePtr left = parseRelational();
+    while (check("==") || check("!="))
+    {
+        std::string op = advance().text;
+        auto n = node(NodeKind::BinOp);
+        n->text = op;
+        n->children.push_back(left);
+        n->children.push_back(parseRelational());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseRelational()
+{
+    NodePtr left = parseBitwiseOr();
+    while (check("<") || check(">") || check("<=") || check(">="))
+    {
+        std::string op = advance().text;
+        auto n = node(NodeKind::BinOp);
+        n->text = op;
+        n->children.push_back(left);
+        n->children.push_back(parseBitwiseOr());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseBitwiseOr()
+{
+    NodePtr left = parseBitwiseXor();
+    while (check("|"))
+    {
+        advance();
+        auto n = node(NodeKind::BinOp);
+        n->text = "|";
+        n->children.push_back(left);
+        n->children.push_back(parseBitwiseXor());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseBitwiseXor()
+{
+    NodePtr left = parseBitwiseAnd();
+    while (check("^"))
+    {
+        advance();
+        auto n = node(NodeKind::BinOp);
+        n->text = "^";
+        n->children.push_back(left);
+        n->children.push_back(parseBitwiseAnd());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseBitwiseAnd()
+{
+    NodePtr left = parseShift();
+    while (check("&"))
+    {
+        advance();
+        auto n = node(NodeKind::BinOp);
+        n->text = "&";
+        n->children.push_back(left);
+        n->children.push_back(parseShift());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseShift()
+{
+    NodePtr left = parseAdditive();
+    while (check("<<") || check(">>"))
+    {
+        std::string op = advance().text;
+        auto n = node(NodeKind::BinOp);
+        n->text = op;
+        n->children.push_back(left);
+        n->children.push_back(parseAdditive());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseAdditive()
+{
+    NodePtr left = parseMultiplicative();
+    while (check("+") || check("-"))
+    {
+        std::string op = advance().text;
+        auto n = node(NodeKind::BinOp);
+        n->text = op;
+        n->children.push_back(left);
+        n->children.push_back(parseMultiplicative());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseMultiplicative()
+{
+    NodePtr left = parseUnary();
+    while (check("*") || check("/") || check("%"))
+    {
+        std::string op = advance().text;
+        auto n = node(NodeKind::BinOp);
+        n->text = op;
+        n->children.push_back(left);
+        n->children.push_back(parseUnary());
+        left = n;
+    }
+    return left;
+}
+
+Compiler::NodePtr Compiler::parseUnary()
+{
+    if (check("-") || check("~") || check("!"))
+    {
+        std::string op = advance().text;
+        auto n = node(NodeKind::UnaryOp);
+        n->text = op;
+        n->children.push_back(parseUnary());
+        return n;
+    }
+    return parsePrimary();
+}
+
+Compiler::NodePtr Compiler::parsePrimary()
+{
+    if (peek().type == TokType::NUMBER)
+    {
+        auto n = node(NodeKind::Number);
+        n->value = advance().value;
+        return n;
+    }
+
+    if (match("("))
+    {
+        NodePtr n = parseExpr();
+        expect(")");
+        return n;
+    }
+
+    if (check("peek") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::Peek);
+        expect("(");
+        n->children.push_back(parseExpr());
+        expect(")");
+        return n;
+    }
+
+    if (check("poke") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::Poke);
+        expect("(");
+        n->children.push_back(parseExpr());
+        expect(",");
+        n->children.push_back(parseExpr());
+        expect(")");
+        return n;
+    }
+
+    if (peek().type == TokType::IDENT)
+    {
+        std::string name = advance().text;
+
+        if (match("("))
+        {
+            auto n = node(NodeKind::Call);
+            n->text = name;
+            if (!check(")"))
+            {
+                do
+                {
+                    n->children.push_back(parseExpr());
+                } while (match(","));
+            }
+            expect(")");
+            return n;
+        }
+
+        if (match("["))
+        {
+            auto n = node(NodeKind::Index);
+            n->text = name;
+            n->children.push_back(parseExpr());
+            expect("]");
+            return n;
+        }
+
+        auto n = node(NodeKind::Ident);
+        n->text = name;
+        return n;
+    }
+
+    error("ожидалось выражение, встречено '" + peek().text + "'");
+}
+
+// ---------------- Семантика ----------------
+
+long long Compiler::foldConst(const NodePtr& expr) const
+{
+    switch (expr->kind)
+    {
+    case NodeKind::Number:
+        return expr->value;
+
+    case NodeKind::Ident:
+    {
+        auto it = constants.find(expr->text);
+        if (it == constants.end())
+        {
+            throw std::runtime_error(
+                "Мини-C: строка " + std::to_string(expr->line) +
+                ": '" + expr->text + "' не является константой времени компиляции");
+        }
+        return it->second;
+    }
+
+    case NodeKind::UnaryOp:
+    {
+        // Без маски & 0xFF - foldConst используется только для адресов
+        // poke/peek, значений const и размеров массивов, а не для
+        // рантайм-арифметики над int (та заворачивается сама, в железе,
+        // через реальные 8-битные опкоды CPU - см. genExprToA). Адреса
+        // устройств (0xF0000007 и т.п.) не помещаются в один байт, и
+        // маска их бы попросту обрезала.
+        long long v = foldConst(expr->children[0]);
+        if (expr->text == "-") return -v;
+        if (expr->text == "~") return ~v;
+        if (expr->text == "!") return v == 0 ? 1 : 0;
+        break;
+    }
+
+    case NodeKind::BinOp:
+    {
+        long long a = foldConst(expr->children[0]);
+        long long b = foldConst(expr->children[1]);
+        const std::string& op = expr->text;
+        if (op == "+") return a + b;
+        if (op == "-") return a - b;
+        if (op == "*") return a * b;
+        if (op == "/") return b == 0 ? a : a / b;
+        if (op == "%") return b == 0 ? a : a % b;
+        if (op == "&") return a & b;
+        if (op == "|") return a | b;
+        if (op == "^") return a ^ b;
+        if (op == "<<") return a << b;
+        if (op == ">>") return a >> b;
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    throw std::runtime_error(
+        "Мини-C: строка " + std::to_string(expr->line) +
+        ": выражение не является константой времени компиляции");
+}
+
+void Compiler::collectVarDecls(const NodePtr& n)
+{
+    if (!n) return;
+
+    if (n->kind == NodeKind::VarDecl)
+    {
+        bool seen = false;
+        for (const auto& name : globalVars)
+        {
+            if (name == n->text) { seen = true; break; }
+        }
+        if (!seen) globalVars.push_back(n->text);
+    }
+
+    for (const auto& child : n->children)
+    {
+        collectVarDecls(child);
+    }
+}
+
+void Compiler::collectDeclarations(const NodePtr& program)
+{
+    for (const auto& decl : program->children)
+    {
+        if (decl->kind == NodeKind::ConstDecl)
+        {
+            constants[decl->text] = foldConst(decl->children[0]);
+        }
+        else if (decl->kind == NodeKind::ArrayDecl)
+        {
+            arraySizes[decl->text] = static_cast<int>(foldConst(decl->children[0]));
+        }
+        else if (decl->kind == NodeKind::FuncDecl)
+        {
+            FunctionInfo info;
+            for (size_t i = 0; i + 1 < decl->children.size(); i++)
+            {
+                info.paramGlobals.push_back(decl->children[i]->text);
+            }
+            functions[decl->text] = info;
+        }
+    }
+
+    // `int x;` внутри тела функции - не настоящая локальная переменная
+    // (см. Compiler.h) - под неё тоже нужна глобальная DB-ячейка, как
+    // и для `int x;` верхнего уровня, поэтому ищем ВСЕ VarDecl во всём
+    // дереве, а не только среди прямых детей Program.
+    collectVarDecls(program);
+}
+
+// ---------------- Кодоген ----------------
+
+std::string Compiler::newLabel(const std::string& hint)
+{
+    return "__mc_" + hint + "_" + std::to_string(labelCounter++);
+}
+
+std::string Compiler::mangleParam(const std::string& func, const std::string& param) const
+{
+    return func + "__" + param;
+}
+
+void Compiler::genComparisonToA(const NodePtr& expr)
+{
+    // Результат сравнения материализуется как 0/1 в A - см.
+    // Compiler.h, комментарий про "простой, единообразный" подход.
+    const std::string& op = expr->text;
+
+    genExprToA(expr->children[1]);
+    *codeOut << "    PUSH A\n";
+    genExprToA(expr->children[0]);
+    *codeOut << "    POP B\n";
+    *codeOut << "    CMP B\n";
+
+    std::string trueLabel = newLabel("cmp_true");
+    std::string endLabel = newLabel("cmp_end");
+
+    if (op == "==") *codeOut << "    JZ " << trueLabel << "\n";
+    else if (op == "!=") *codeOut << "    JNZ " << trueLabel << "\n";
+    else if (op == "<") *codeOut << "    JC " << trueLabel << "\n";
+    else if (op == ">=") *codeOut << "    JNC " << trueLabel << "\n";
+    else if (op == ">")
+    {
+        // A > B  <=>  не(A < B) и не(A == B)
+        *codeOut << "    JC " << endLabel << "_false\n";
+        *codeOut << "    JZ " << endLabel << "_false\n";
+        *codeOut << "    JMP " << trueLabel << "\n";
+        *codeOut << endLabel << "_false:\n";
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << "    JMP " << endLabel << "\n";
+        *codeOut << trueLabel << ":\n";
+        *codeOut << "    LDI A, 1\n";
+        *codeOut << endLabel << ":\n";
+        return;
+    }
+    else if (op == "<=")
+    {
+        // A <= B  <=>  (A < B) или (A == B)
+        *codeOut << "    JC " << trueLabel << "\n";
+        *codeOut << "    JZ " << trueLabel << "\n";
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << "    JMP " << endLabel << "\n";
+        *codeOut << trueLabel << ":\n";
+        *codeOut << "    LDI A, 1\n";
+        *codeOut << endLabel << ":\n";
+        return;
+    }
+
+    *codeOut << "    LDI A, 0\n";
+    *codeOut << "    JMP " << endLabel << "\n";
+    *codeOut << trueLabel << ":\n";
+    *codeOut << "    LDI A, 1\n";
+    *codeOut << endLabel << ":\n";
+}
+
+void Compiler::genAddressOf(const NodePtr& indexNode)
+{
+    auto it = arraySizes.find(indexNode->text);
+    if (it == arraySizes.end())
+    {
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(indexNode->line) +
+            ": '" + indexNode->text + "' не является массивом");
+    }
+
+    *codeOut << "    LDHL " << indexNode->text << "\n";
+    genExprToA(indexNode->children[0]);
+    *codeOut << "    CALL __mc_hladd\n";
+}
+
+void Compiler::genExprToA(const NodePtr& expr)
+{
+    switch (expr->kind)
+    {
+    case NodeKind::Number:
+        *codeOut << "    LDI A, " << expr->value << "\n";
+        return;
+
+    case NodeKind::Assign:
+    {
+        genExprToA(expr->children[0]);
+        if (!currentFunction.empty())
+        {
+            const auto& params = functions[currentFunction].paramGlobals;
+            bool isParam = false;
+            for (const auto& p : params)
+            {
+                if (p == expr->text)
+                {
+                    *codeOut << "    STA " << mangleParam(currentFunction, expr->text) << "\n";
+                    isParam = true;
+                    break;
+                }
+            }
+            if (isParam) return;
+        }
+        *codeOut << "    STA " << expr->text << "\n";
+        return;
+    }
+
+    case NodeKind::IndexAssign:
+    {
+        auto indexNode = std::make_shared<Node>();
+        indexNode->kind = NodeKind::Index;
+        indexNode->text = expr->text;
+        indexNode->line = expr->line;
+        indexNode->children.push_back(expr->children[0]);
+
+        genExprToA(expr->children[1]);
+        *codeOut << "    PUSH A\n";
+        genAddressOf(indexNode);
+        *codeOut << "    POP A\n";
+        *codeOut << "    STX\n";
+        return;
+    }
+
+    case NodeKind::Ident:
+    {
+        std::string name = expr->text;
+        auto constIt = constants.find(name);
+        if (constIt != constants.end())
+        {
+            *codeOut << "    LDI A, " << constIt->second << "\n";
+            return;
+        }
+        if (!currentFunction.empty())
+        {
+            const auto& params = functions[currentFunction].paramGlobals;
+            for (const auto& p : params)
+            {
+                if (p == name)
+                {
+                    *codeOut << "    LDA " << mangleParam(currentFunction, name) << "\n";
+                    return;
+                }
+            }
+        }
+        *codeOut << "    LDA " << name << "\n";
+        return;
+    }
+
+    case NodeKind::Index:
+        genAddressOf(expr);
+        *codeOut << "    LDX\n";
+        return;
+
+    case NodeKind::Peek:
+    {
+        long long addr = foldConst(expr->children[0]);
+        *codeOut << "    LDA " << addr << "\n";
+        return;
+    }
+
+    case NodeKind::Poke:
+    {
+        long long addr = foldConst(expr->children[0]);
+        genExprToA(expr->children[1]);
+        *codeOut << "    STA " << addr << "\n";
+        return;
+    }
+
+    case NodeKind::Call:
+    {
+        auto it = functions.find(expr->text);
+        if (it == functions.end())
+        {
+            throw std::runtime_error(
+                "Мини-C: строка " + std::to_string(expr->line) +
+                ": вызов необъявленной функции '" + expr->text + "'");
+        }
+        if (it->second.paramGlobals.size() != expr->children.size())
+        {
+            throw std::runtime_error(
+                "Мини-C: строка " + std::to_string(expr->line) +
+                ": '" + expr->text + "' ожидает " +
+                std::to_string(it->second.paramGlobals.size()) + " аргумент(ов)");
+        }
+        for (size_t i = 0; i < expr->children.size(); i++)
+        {
+            genExprToA(expr->children[i]);
+            *codeOut << "    STA " << mangleParam(expr->text, it->second.paramGlobals[i]) << "\n";
+        }
+        *codeOut << "    CALL " << expr->text << "\n";
+        return;
+    }
+
+    case NodeKind::UnaryOp:
+    {
+        if (expr->text == "~")
+        {
+            genExprToA(expr->children[0]);
+            *codeOut << "    NOT\n";
+            return;
+        }
+        if (expr->text == "-")
+        {
+            genExprToA(expr->children[0]);
+            *codeOut << "    PUSH A\n";
+            *codeOut << "    LDI A, 0\n";
+            *codeOut << "    POP B\n";
+            *codeOut << "    SUB B\n";
+            return;
+        }
+        if (expr->text == "!")
+        {
+            genExprToA(expr->children[0]);
+            *codeOut << "    PUSH A\n";
+            *codeOut << "    POP B\n";
+            *codeOut << "    LDI A, 0\n";
+            *codeOut << "    CMP B\n";
+            std::string trueLabel = newLabel("not_true");
+            std::string endLabel = newLabel("not_end");
+            *codeOut << "    JZ " << trueLabel << "\n";
+            *codeOut << "    LDI A, 0\n";
+            *codeOut << "    JMP " << endLabel << "\n";
+            *codeOut << trueLabel << ":\n";
+            *codeOut << "    LDI A, 1\n";
+            *codeOut << endLabel << ":\n";
+            return;
+        }
+        break;
+    }
+
+    case NodeKind::LogicalAnd:
+    {
+        std::string falseLabel = newLabel("and_false");
+        std::string endLabel = newLabel("and_end");
+        genCondition(expr->children[0], falseLabel);
+        genCondition(expr->children[1], falseLabel);
+        *codeOut << "    LDI A, 1\n";
+        *codeOut << "    JMP " << endLabel << "\n";
+        *codeOut << falseLabel << ":\n";
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << endLabel << ":\n";
+        return;
+    }
+
+    case NodeKind::LogicalOr:
+    {
+        std::string trueLabel = newLabel("or_true");
+        std::string endLabel = newLabel("or_end");
+
+        genExprToA(expr->children[0]);
+        *codeOut << "    LDI B, 0\n";
+        *codeOut << "    CMP B\n";
+        *codeOut << "    JNZ " << trueLabel << "\n";
+
+        genExprToA(expr->children[1]);
+        *codeOut << "    LDI B, 0\n";
+        *codeOut << "    CMP B\n";
+        *codeOut << "    JNZ " << trueLabel << "\n";
+
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << "    JMP " << endLabel << "\n";
+        *codeOut << trueLabel << ":\n";
+        *codeOut << "    LDI A, 1\n";
+        *codeOut << endLabel << ":\n";
+        return;
+    }
+
+    case NodeKind::BinOp:
+    {
+        const std::string& op = expr->text;
+        if (op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=")
+        {
+            genComparisonToA(expr);
+            return;
+        }
+        if (op == "<<" || op == ">>")
+        {
+            genExprToA(expr->children[1]);
+            *codeOut << "    PUSH A\n";
+            genExprToA(expr->children[0]);
+            *codeOut << "    POP B\n";
+            *codeOut << "    PUSH B\n";
+            *codeOut << "    POP C\n";
+            *codeOut << "    LDI D, 0\n";
+            std::string loopLabel = newLabel("shift_loop");
+            std::string endLabel = newLabel("shift_end");
+            *codeOut << loopLabel << ":\n";
+            *codeOut << "    PUSH A\n";
+            *codeOut << "    PUSH C\n";
+            *codeOut << "    POP A\n";
+            *codeOut << "    CMP D\n";
+            *codeOut << "    POP A\n";
+            *codeOut << "    JZ " << endLabel << "\n";
+            *codeOut << "    " << (op == "<<" ? "SHL" : "SHR") << "\n";
+            *codeOut << "    PUSH A\n";
+            *codeOut << "    PUSH C\n";
+            *codeOut << "    POP A\n";
+            *codeOut << "    LDI B, 1\n";
+            *codeOut << "    SUB B\n";
+            *codeOut << "    PUSH A\n";
+            *codeOut << "    POP C\n";
+            *codeOut << "    POP A\n";
+            *codeOut << "    JMP " << loopLabel << "\n";
+            *codeOut << endLabel << ":\n";
+            return;
+        }
+
+        genExprToA(expr->children[1]);
+        *codeOut << "    PUSH A\n";
+        genExprToA(expr->children[0]);
+        *codeOut << "    POP B\n";
+
+        if (op == "+") *codeOut << "    ADD B\n";
+        else if (op == "-") *codeOut << "    SUB B\n";
+        else if (op == "*") *codeOut << "    MUL B\n";
+        else if (op == "/") *codeOut << "    DIV B\n";
+        else if (op == "%") *codeOut << "    MOD B\n";
+        else if (op == "&") *codeOut << "    AND B\n";
+        else if (op == "|") *codeOut << "    OR B\n";
+        else if (op == "^") *codeOut << "    XOR B\n";
+        return;
+    }
+
+    default:
+        break;
+    }
+
+    throw std::runtime_error(
+        "Мини-C: строка " + std::to_string(expr->line) + ": некорректное выражение");
+}
+
+void Compiler::genCondition(const NodePtr& expr, const std::string& falseLabel)
+{
+    genExprToA(expr);
+    *codeOut << "    LDI B, 0\n";
+    *codeOut << "    CMP B\n";
+    *codeOut << "    JZ " << falseLabel << "\n";
+}
+
+void Compiler::genStatement(const NodePtr& stmt)
+{
+    switch (stmt->kind)
+    {
+    case NodeKind::Block:
+        genBlock(stmt);
+        return;
+
+    case NodeKind::VarDecl:
+        if (!stmt->children.empty())
+        {
+            genExprToA(stmt->children[0]);
+            *codeOut << "    STA " << stmt->text << "\n";
+        }
+        return;
+
+    case NodeKind::ExprStmt:
+        genExprToA(stmt->children[0]);
+        return;
+
+    case NodeKind::If:
+    {
+        std::string elseLabel = newLabel("if_else");
+        std::string endLabel = newLabel("if_end");
+        genCondition(stmt->children[0], elseLabel);
+        genStatement(stmt->children[1]);
+        if (stmt->children.size() > 2)
+        {
+            *codeOut << "    JMP " << endLabel << "\n";
+            *codeOut << elseLabel << ":\n";
+            genStatement(stmt->children[2]);
+            *codeOut << endLabel << ":\n";
+        }
+        else
+        {
+            *codeOut << elseLabel << ":\n";
+        }
+        return;
+    }
+
+    case NodeKind::While:
+    {
+        std::string startLabel = newLabel("while_start");
+        std::string endLabel = newLabel("while_end");
+        *codeOut << startLabel << ":\n";
+        genCondition(stmt->children[0], endLabel);
+        genStatement(stmt->children[1]);
+        *codeOut << "    JMP " << startLabel << "\n";
+        *codeOut << endLabel << ":\n";
+        return;
+    }
+
+    case NodeKind::For:
+    {
+        std::string startLabel = newLabel("for_start");
+        std::string endLabel = newLabel("for_end");
+        genExprToA(stmt->children[0]);   // init
+        *codeOut << startLabel << ":\n";
+        genCondition(stmt->children[1], endLabel);
+        genStatement(stmt->children[3]);
+        genExprToA(stmt->children[2]);   // post
+        *codeOut << "    JMP " << startLabel << "\n";
+        *codeOut << endLabel << ":\n";
+        return;
+    }
+
+    case NodeKind::Return:
+        if (!stmt->children.empty())
+        {
+            genExprToA(stmt->children[0]);
+        }
+        *codeOut << "    RET\n";
+        return;
+
+    default:
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(stmt->line) + ": недопустимый оператор");
+    }
+}
+
+void Compiler::genBlock(const NodePtr& block)
+{
+    for (const auto& stmt : block->children)
+    {
+        genStatement(stmt);
+    }
+}
+
+void Compiler::genFunction(const NodePtr& fn)
+{
+    currentFunction = fn->text;
+    *codeOut << fn->text << ":\n";
+    genBlock(fn->children.back());
+    *codeOut << "    LDI A, 0\n";
+    *codeOut << "    RET\n";
+    currentFunction.clear();
+}
+
+std::string Compiler::compile(const std::string& source)
+{
+    pos = 0;
+    labelCounter = 0;
+    currentFunction.clear();
+    constants.clear();
+    functions.clear();
+    arraySizes.clear();
+    globalVars.clear();
+
+    lex(source);
+    NodePtr program = parseProgram();
+    collectDeclarations(program);
+
+    std::ostringstream code;
+    std::ostringstream data;
+    codeOut = &code;
+    dataOut = &data;
+
+    bool hasMain = functions.find("main") != functions.end();
+    if (!hasMain)
+    {
+        throw std::runtime_error("Мини-C: не найдена функция int main()");
+    }
+
+    code << "    JMP main\n";
+
+    bool usesArrays = !arraySizes.empty();
+
+    for (const auto& decl : program->children)
+    {
+        if (decl->kind == NodeKind::FuncDecl)
+        {
+            genFunction(decl);
+        }
+    }
+
+    if (usesArrays)
+    {
+        code << "__mc_hladd:\n";
+        code << "    PUSH A\n";
+        code << "    POP B\n";
+        code << "__mc_hladd_loop:\n";
+        code << "    LDI A, 0\n";
+        code << "    CMP B\n";
+        code << "    JZ __mc_hladd_done\n";
+        code << "    INCHL\n";
+        code << "    PUSH B\n";
+        code << "    POP A\n";
+        code << "    LDI C, 1\n";
+        code << "    SUB C\n";
+        code << "    PUSH A\n";
+        code << "    POP B\n";
+        code << "    JMP __mc_hladd_loop\n";
+        code << "__mc_hladd_done:\n";
+        code << "    RET\n";
+    }
+
+    for (const auto& name : globalVars)
+    {
+        data << name << ": DB 0\n";
+    }
+
+    for (const auto& decl : program->children)
+    {
+        if (decl->kind == NodeKind::ArrayDecl)
+        {
+            int size = arraySizes[decl->text];
+            data << decl->text << ": DB 0\n";
+            for (int i = 1; i < size; i++)
+            {
+                data << "    DB 0\n";
+            }
+        }
+        else if (decl->kind == NodeKind::FuncDecl)
+        {
+            for (const auto& paramName : functions[decl->text].paramGlobals)
+            {
+                data << mangleParam(decl->text, paramName) << ": DB 0\n";
+            }
+        }
+    }
+
+    codeOut = nullptr;
+    dataOut = nullptr;
+
+    return code.str() + data.str();
+}

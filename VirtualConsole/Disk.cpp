@@ -1,6 +1,8 @@
 #include "Disk.h"
 #include "Bus.h"
+#include "Compiler.h"
 
+#include <cctype>
 #include <sstream>
 
 Disk* Disk::lastExecDisk = nullptr;
@@ -391,11 +393,37 @@ void Disk::build()
     std::stringstream buffer;
     buffer << sourceFile.rdbuf();
 
+    std::string sourceText = buffer.str();
+
+    // Расширение .MC (регистронезависимо) - сначала прогоняем через
+    // компилятор мини-C, получаем ASM-текст и отдаём его тому же
+    // ассемблеру, что и обычный .ASM - см. Compiler.h/ASSEMBLY.md,
+    // "Мини-C".
+    {
+        std::string nameUpper = nameAsString();
+        for (char& c : nameUpper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+        if (nameUpper.size() >= 3 && nameUpper.substr(nameUpper.size() - 3) == ".MC")
+        {
+            try
+            {
+                Compiler compiler;
+                sourceText = compiler.compile(sourceText);
+            }
+            catch (const std::exception&)
+            {
+                status = 2;
+                fileSize = 0;
+                return;
+            }
+        }
+    }
+
     std::vector<uint8_t> machineCode;
 
     try
     {
-        machineCode = assembler.assemble(buffer.str(), LOAD_ADDRESS);
+        machineCode = assembler.assemble(sourceText, LOAD_ADDRESS);
     }
     catch (const std::exception&)
     {
