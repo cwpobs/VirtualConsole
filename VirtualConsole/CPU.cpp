@@ -574,6 +574,63 @@ void CPU::step()
     }
 
     // -------------------------
+    // MUL reg (A = A * reg, обрезано до 8 бит)
+    // -------------------------
+
+    case 0x16:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            A = static_cast<uint8_t>(A * (*reg));
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // DIV reg (A = A / reg, деление на 0 - no-op)
+    // -------------------------
+
+    case 0x17:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr && *reg != 0)
+        {
+            A = A / *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // MOD reg (A = A % reg, деление на 0 - no-op)
+    // -------------------------
+
+    case 0x18:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr && *reg != 0)
+        {
+            A = A % *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
     // HLT
     // -------------------------
 

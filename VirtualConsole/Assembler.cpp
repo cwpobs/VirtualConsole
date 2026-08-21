@@ -166,7 +166,10 @@ void Assembler::firstPass(
             instruction == "SUB" ||
             instruction == "CMP" ||
             instruction == "PUSH" ||
-            instruction == "POP")
+            instruction == "POP" ||
+            instruction == "MUL" ||
+            instruction == "DIV" ||
+            instruction == "MOD")
         {
             // opcode + register
 
@@ -357,6 +360,72 @@ void Assembler::secondPass(
                 );
 
             output.push_back(0x06);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // MUL register
+        // -------------------------
+
+        else if (instruction == "MUL")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x16);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // DIV register
+        // -------------------------
+
+        else if (instruction == "DIV")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x17);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // MOD register
+        // -------------------------
+
+        else if (instruction == "MOD")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x18);
             output.push_back(static_cast<uint8_t>(reg));
         }
 

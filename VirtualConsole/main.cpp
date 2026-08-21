@@ -144,6 +144,7 @@ int main()
 
     uint8_t lastKeyCount = 0;
     uint8_t lastBannerReady = 0;
+    uint8_t lastDoneReady = 0;
 
     while (cpu.running)
     {
@@ -151,12 +152,15 @@ int main()
 
         uint8_t currentKeyCount = bus.read(0x00001000);
         uint8_t currentBannerReady = bus.read(0x00001002);
+        uint8_t currentDoneReady = bus.read(0x00001003);
 
         if (currentKeyCount != lastKeyCount ||
-            currentBannerReady != lastBannerReady)
+            currentBannerReady != lastBannerReady ||
+            currentDoneReady != lastDoneReady)
         {
             lastKeyCount = currentKeyCount;
             lastBannerReady = currentBannerReady;
+            lastDoneReady = currentDoneReady;
 
             redraw();
         }
