@@ -61,4 +61,5 @@ private:
     void closeFiles();
 
     void loadProgram();
+    void deleteFile();
 };

@@ -902,14 +902,19 @@ check_dir:
 
 check_type:
 
-    ; "type " + ровно 7 символов имени файла (см. help) = 12 символов,
-    ; как у "poke NNN VVV" - фиксированная длина, т.к. без флага CARRY
-    ; нет способа проверить "длина >= N", только точное равенство.
+    ; "type " + имя файла, переменная длина 1-12 символов (настоящий
+    ; 8.3) - диапазон проверяем через CARRY (CMP выставляет его как
+    ; "A < B"), само имя копирует copy_name_to_disk*.
 
     LDA cmdlen
-    LDI B, 12
+    LDI B, 6        ; минимум: "type " (5) + 1 символ
     CMP B
-    JNZ check_cd
+    JC check_cd
+
+    LDA cmdlen
+    LDI B, 18       ; максимум: "type " (5) + 12 символов = 17
+    CMP B
+    JNC check_cd
 
     LDA cmdbuf0
     LDI B, 116      ; 't'
@@ -964,28 +969,154 @@ check_cd:
 
 check_exec:
 
-    ; "exec " + ровно 7 символов имени файла (та же схема, что у
-    ; "type" - фиксированная длина, без переменного аргумента)
+    ; "exec " + имя файла, переменная длина 1-12 символов (см. check_type)
 
     LDA cmdlen
-    LDI B, 12
+    LDI B, 6
     CMP B
-    JNZ dispatch_done
+    JC check_create
+
+    LDA cmdlen
+    LDI B, 18
+    CMP B
+    JNC check_create
 
     LDA cmdbuf0
     LDI B, 101      ; 'e'
     CMP B
-    JNZ dispatch_done
+    JNZ check_create
     LDA cmdbuf1
     LDI B, 120      ; 'x'
     CMP B
-    JNZ dispatch_done
+    JNZ check_create
     LDA cmdbuf2
     LDI B, 101      ; 'e'
     CMP B
-    JNZ dispatch_done
+    JNZ check_create
     LDA cmdbuf3
     LDI B, 99       ; 'c'
+    CMP B
+    JNZ check_create
+    LDA cmdbuf4
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_create
+
+    CALL cmd_exec
+    JMP dispatch_done
+
+
+check_create:
+
+    ; "create " + имя файла, переменная длина 1-12 символов
+
+    LDA cmdlen
+    LDI B, 8        ; "create " (7) + 1 символ
+    CMP B
+    JC check_del
+
+    LDA cmdlen
+    LDI B, 20       ; "create " (7) + 12 символов = 19
+    CMP B
+    JNC check_del
+
+    LDA cmdbuf0
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ check_del
+    LDA cmdbuf1
+    LDI B, 114      ; 'r'
+    CMP B
+    JNZ check_del
+    LDA cmdbuf2
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_del
+    LDA cmdbuf3
+    LDI B, 97       ; 'a'
+    CMP B
+    JNZ check_del
+    LDA cmdbuf4
+    LDI B, 116      ; 't'
+    CMP B
+    JNZ check_del
+    LDA cmdbuf5
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_del
+    LDA cmdbuf6
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_del
+
+    CALL cmd_create
+    JMP dispatch_done
+
+
+check_del:
+
+    ; "del " + имя файла, переменная длина 1-12 символов
+
+    LDA cmdlen
+    LDI B, 5        ; "del " (4) + 1 символ
+    CMP B
+    JC check_copy
+
+    LDA cmdlen
+    LDI B, 17       ; "del " (4) + 12 символов = 16
+    CMP B
+    JNC check_copy
+
+    LDA cmdbuf0
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ check_copy
+    LDA cmdbuf1
+    LDI B, 101      ; 'e'
+    CMP B
+    JNZ check_copy
+    LDA cmdbuf2
+    LDI B, 108      ; 'l'
+    CMP B
+    JNZ check_copy
+    LDA cmdbuf3
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_copy
+
+    CALL cmd_del
+    JMP dispatch_done
+
+
+check_copy:
+
+    ; "copy " + имя файла, переменная длина 1-12 символов - копирует
+    ; между дисками C/D под тем же именем (см. cmd_copy)
+
+    LDA cmdlen
+    LDI B, 6        ; "copy " (5) + 1 символ
+    CMP B
+    JC dispatch_done
+
+    LDA cmdlen
+    LDI B, 18       ; "copy " (5) + 12 символов = 17
+    CMP B
+    JNC dispatch_done
+
+    LDA cmdbuf0
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf1
+    LDI B, 111      ; 'o'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf2
+    LDI B, 112      ; 'p'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf3
+    LDI B, 121      ; 'y'
     CMP B
     JNZ dispatch_done
     LDA cmdbuf4
@@ -993,7 +1124,7 @@ check_exec:
     CMP B
     JNZ dispatch_done
 
-    CALL cmd_exec
+    CALL cmd_copy
 
 dispatch_done:
 
@@ -1092,19 +1223,7 @@ cmd_help:
     LDI A, 32
     CALL print_char
     LDI A, 78
-    CALL print_char   ; N (имя - ровно 7 символов, дополнить пробелами)
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
+    CALL print_char   ; N (имя файла, 1-12 символов - настоящий 8.3)
 
     CALL print_newline
 
@@ -1134,17 +1253,52 @@ cmd_help:
     LDI A, 32
     CALL print_char
     LDI A, 78
-    CALL print_char   ; N (имя - ровно 7 символов)
+    CALL print_char   ; N
+
+    CALL print_newline
+
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 114
+    CALL print_char   ; r
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 97
+    CALL print_char   ; a
+    LDI A, 116
+    CALL print_char   ; t
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 32
+    CALL print_char
     LDI A, 78
     CALL print_char   ; N
+
+    CALL print_newline
+
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 101
+    CALL print_char   ; e
+    LDI A, 108
+    CALL print_char   ; l
+    LDI A, 32
+    CALL print_char
     LDI A, 78
     CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
-    LDI A, 78
-    CALL print_char   ; N
+
+    CALL print_newline
+
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 111
+    CALL print_char   ; o
+    LDI A, 112
+    CALL print_char   ; p
+    LDI A, 121
+    CALL print_char   ; y
+    LDI A, 32
+    CALL print_char
     LDI A, 78
     CALL print_char   ; N
 
@@ -1645,31 +1799,12 @@ cmd_type:
 
 cmd_type_c:
 
-    ; "type ИМЯ" - ИМЯ должно быть ровно 7 символов (см. check_type/
-    ; help): cmdbuf5..cmdbuf11 -> DiskC NAME0..6, NAME7..11 обнуляем,
-    ; чтобы не осталось "хвоста" от предыдущего имени.
+    ; "type ИМЯ" - ИМЯ теперь переменной длины (1-12 символов, см.
+    ; check_type) - копирует copy_name_to_diskc.
 
-    LDA cmdbuf5
-    STA 0xF00007E6
-    LDA cmdbuf6
-    STA 0xF00007E7
-    LDA cmdbuf7
-    STA 0xF00007E8
-    LDA cmdbuf8
-    STA 0xF00007E9
-    LDA cmdbuf9
-    STA 0xF00007EA
-    LDA cmdbuf10
-    STA 0xF00007EB
-    LDA cmdbuf11
-    STA 0xF00007EC
-
-    LDI A, 0
-    STA 0xF00007ED
-    STA 0xF00007EE
-    STA 0xF00007EF
-    STA 0xF00007F0
-    STA 0xF00007F1
+    LDI A, 5
+    STA cn_prefix_len   ; длина префикса "type "
+    CALL copy_name_to_diskc
 
     LDI A, 3
     STA 0xF00007F2
@@ -1724,27 +1859,9 @@ cmd_type_d:
     ; NAME7..11 = 0xF0000800..0xF0000804, COMMAND = 0xF0000805,
     ; STATUS = 0xF0000806, DATA = 0xF0000807.
 
-    LDA cmdbuf5
-    STA 0xF00007F9
-    LDA cmdbuf6
-    STA 0xF00007FA
-    LDA cmdbuf7
-    STA 0xF00007FB
-    LDA cmdbuf8
-    STA 0xF00007FC
-    LDA cmdbuf9
-    STA 0xF00007FD
-    LDA cmdbuf10
-    STA 0xF00007FE
-    LDA cmdbuf11
-    STA 0xF00007FF
-
-    LDI A, 0
-    STA 0xF0000800
-    STA 0xF0000801
-    STA 0xF0000802
-    STA 0xF0000803
-    STA 0xF0000804
+    LDI A, 5
+    STA cn_prefix_len   ; длина префикса "type "
+    CALL copy_name_to_diskd
 
     LDI A, 3
     STA 0xF0000805
@@ -1828,27 +1945,9 @@ cmd_exec:
 
 cmd_exec_c:
 
-    LDA cmdbuf5
-    STA 0xF00007E6
-    LDA cmdbuf6
-    STA 0xF00007E7
-    LDA cmdbuf7
-    STA 0xF00007E8
-    LDA cmdbuf8
-    STA 0xF00007E9
-    LDA cmdbuf9
-    STA 0xF00007EA
-    LDA cmdbuf10
-    STA 0xF00007EB
-    LDA cmdbuf11
-    STA 0xF00007EC
-
-    LDI A, 0
-    STA 0xF00007ED
-    STA 0xF00007EE
-    STA 0xF00007EF
-    STA 0xF00007F0
-    STA 0xF00007F1
+    LDI A, 5
+    STA cn_prefix_len   ; длина префикса "exec "
+    CALL copy_name_to_diskc
 
     LDI A, 8
     STA 0xF00007F2      ; DiskC COMMAND = LOAD
@@ -1863,27 +1962,9 @@ cmd_exec_c:
 
 cmd_exec_d:
 
-    LDA cmdbuf5
-    STA 0xF00007F9
-    LDA cmdbuf6
-    STA 0xF00007FA
-    LDA cmdbuf7
-    STA 0xF00007FB
-    LDA cmdbuf8
-    STA 0xF00007FC
-    LDA cmdbuf9
-    STA 0xF00007FD
-    LDA cmdbuf10
-    STA 0xF00007FE
-    LDA cmdbuf11
-    STA 0xF00007FF
-
-    LDI A, 0
-    STA 0xF0000800
-    STA 0xF0000801
-    STA 0xF0000802
-    STA 0xF0000803
-    STA 0xF0000804
+    LDI A, 5
+    STA cn_prefix_len   ; длина префикса "exec "
+    CALL copy_name_to_diskd
 
     LDI A, 8
     STA 0xF0000805      ; DiskD COMMAND = LOAD
@@ -1917,6 +1998,353 @@ cmd_exec_run:
     CALL goto_row_start   ; программа могла сама сдвинуть HL
 
 cmd_exec_done:
+
+    RET
+
+
+cmd_create:
+
+    ; "create ИМЯ" - создаёт пустой файл на currentDisk (OPEN_WRITE
+    ; сразу создаёт/обрезает файл, CLOSE фиксирует - ничего писать
+    ; в DATA не нужно для пустого файла).
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_create_d
+    JMP cmd_create_c
+
+
+cmd_create_c:
+
+    LDI A, 7
+    STA cn_prefix_len   ; длина префикса "create "
+    CALL copy_name_to_diskc
+
+    LDI A, 5
+    STA 0xF00007F2      ; OPEN_WRITE
+    LDI A, 7
+    STA 0xF00007F2      ; CLOSE
+
+    RET
+
+
+cmd_create_d:
+
+    LDI A, 7
+    STA cn_prefix_len   ; длина префикса "create "
+    CALL copy_name_to_diskd
+
+    LDI A, 5
+    STA 0xF0000805
+    LDI A, 7
+    STA 0xF0000805
+
+    RET
+
+
+cmd_del:
+
+    ; "del ИМЯ" - удаляет файл с currentDisk (DELETE = 9 в Disk)
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_del_d
+    JMP cmd_del_c
+
+
+cmd_del_c:
+
+    LDI A, 4
+    STA cn_prefix_len   ; длина префикса "del "
+    CALL copy_name_to_diskc
+
+    LDI A, 9
+    STA 0xF00007F2      ; DELETE
+
+    RET
+
+
+cmd_del_d:
+
+    LDI A, 4
+    STA cn_prefix_len   ; длина префикса "del "
+    CALL copy_name_to_diskd
+
+    LDI A, 9
+    STA 0xF0000805
+
+    RET
+
+
+cmd_copy:
+
+    ; "copy ИМЯ" - копирует файл с currentDisk на другой диск под тем
+    ; же именем (побайтовый цикл через OPEN_READ/READ_BYTE на
+    ; источнике и OPEN_WRITE/WRITE_BYTE на приёмнике - никакого HL,
+    ; всё по фиксированным адресам, как в cmd_type).
+
+    LDI A, 5
+    STA cn_prefix_len   ; длина префикса "copy "
+    CALL copy_name_to_diskc
+
+    LDI A, 5
+    STA cn_prefix_len
+    CALL copy_name_to_diskd
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_copy_d_to_c
+    JMP cmd_copy_c_to_d
+
+
+cmd_copy_c_to_d:
+
+    LDI A, 3
+    STA 0xF00007F2      ; DiskC COMMAND = OPEN_READ
+
+    LDA 0xF00007F3      ; DiskC STATUS
+    LDI B, 2
+    CMP B
+    JZ cmd_copy_done    ; файл-источник не найден
+
+    LDI A, 5
+    STA 0xF0000805      ; DiskD COMMAND = OPEN_WRITE
+
+cmd_copy_c_to_d_loop:
+
+    LDI A, 4
+    STA 0xF00007F2      ; DiskC COMMAND = READ_BYTE
+
+    LDA 0xF00007F3      ; DiskC STATUS
+    LDI B, 1
+    CMP B
+    JZ cmd_copy_c_to_d_close    ; EOF
+
+    LDA 0xF00007F4      ; DiskC DATA
+    STA 0xF0000807      ; DiskD DATA
+
+    LDI A, 6
+    STA 0xF0000805      ; DiskD COMMAND = WRITE_BYTE
+
+    JMP cmd_copy_c_to_d_loop
+
+cmd_copy_c_to_d_close:
+
+    LDI A, 7
+    STA 0xF00007F2      ; DiskC COMMAND = CLOSE
+    LDI A, 7
+    STA 0xF0000805      ; DiskD COMMAND = CLOSE
+
+    JMP cmd_copy_done
+
+
+cmd_copy_d_to_c:
+
+    LDI A, 3
+    STA 0xF0000805      ; DiskD COMMAND = OPEN_READ
+
+    LDA 0xF0000806      ; DiskD STATUS
+    LDI B, 2
+    CMP B
+    JZ cmd_copy_done
+
+    LDI A, 5
+    STA 0xF00007F2      ; DiskC COMMAND = OPEN_WRITE
+
+cmd_copy_d_to_c_loop:
+
+    LDI A, 4
+    STA 0xF0000805      ; DiskD COMMAND = READ_BYTE
+
+    LDA 0xF0000806      ; DiskD STATUS
+    LDI B, 1
+    CMP B
+    JZ cmd_copy_d_to_c_close
+
+    LDA 0xF0000807      ; DiskD DATA
+    STA 0xF00007F4      ; DiskC DATA
+
+    LDI A, 6
+    STA 0xF00007F2      ; DiskC COMMAND = WRITE_BYTE
+
+    JMP cmd_copy_d_to_c_loop
+
+cmd_copy_d_to_c_close:
+
+    LDI A, 7
+    STA 0xF0000805      ; DiskD COMMAND = CLOSE
+    LDI A, 7
+    STA 0xF00007F2      ; DiskC COMMAND = CLOSE
+
+cmd_copy_done:
+
+    RET
+
+
+copy_name_to_diskc:
+
+    ; Копирует cmdbuf[prefix_len]..cmdbuf[prefix_len+len-1] в DiskC
+    ; NAME0..NAME(len-1) и обнуляет остаток NAME(len)..NAME11.
+    ; prefix_len - длина префикса команды ("type "=5, "create "=7,
+    ; "del "=4, "copy "=5 и т.д.) - вызывающий код обязан положить её
+    ; в cn_prefix_len ДО этого CALL (раньше здесь было захардкожено
+    ; "5", из-за чего "create"/"del" с другой длиной префикса резали
+    ; имя со сдвигом - живое тестирование поймало на "create a.txt").
+    ; len = cmdlen - prefix_len (в tmp1). cmdbuf0 и NAME0 - оба
+    ; физически непрерывные блоки в памяти (cmdbuf0..11 -
+    ; последовательные DB, NAME0..11 - последовательные MMIO-
+    ; регистры), поэтому используем hl_add_offset дважды на байт -
+    ; один раз для чтения (HL на cmdbuf), один раз для записи (HL на
+    ; NAME) - HL держит только один адрес одновременно.
+
+    LDA cn_prefix_len
+    PUSH A
+    POP B
+    LDA cmdlen
+    SUB B
+    STA tmp1            ; tmp1 = len
+
+    LDI A, 0
+    STA tmp2            ; tmp2 = i
+
+cnc_loop:
+
+    LDA tmp1
+    PUSH A
+    POP B               ; B = len
+
+    LDA tmp2
+    CMP B
+    JZ cnc_pad          ; i == len -> копирование окончено
+
+    LDHL cmdbuf0
+    LDA cn_prefix_len
+    PUSH A
+    POP B
+    LDA tmp2
+    ADD B               ; A = prefix_len + i
+    CALL hl_add_offset  ; HL = cmdbuf0 + prefix_len + i
+
+    LDX
+    STA cn_char
+
+    LDHL 0xF00007E6     ; DiskC NAME0
+    LDA tmp2
+    CALL hl_add_offset  ; HL = NAME0 + i
+
+    LDA cn_char
+    STX
+
+    LDA tmp2
+    LDI B, 1
+    ADD B
+    STA tmp2
+
+    JMP cnc_loop
+
+cnc_pad:
+
+    LDA tmp2
+    LDI B, 12
+    CMP B
+    JZ cnc_done         ; i == 12 -> весь остаток обнулён
+
+    LDHL 0xF00007E6
+    LDA tmp2
+    CALL hl_add_offset
+
+    LDI A, 0
+    STX
+
+    LDA tmp2
+    LDI B, 1
+    ADD B
+    STA tmp2
+
+    JMP cnc_pad
+
+cnc_done:
+
+    CALL goto_row_start   ; HL всё это время был занят под NAME -
+                           ; возвращаем его на экранный курсор
+
+    RET
+
+
+copy_name_to_diskd:
+
+    ; То же самое, но диск D: NAME0 = 0xF00007F9. См. copy_name_to_diskc
+    ; про cn_prefix_len.
+
+    LDA cn_prefix_len
+    PUSH A
+    POP B
+    LDA cmdlen
+    SUB B
+    STA tmp1
+
+    LDI A, 0
+    STA tmp2
+
+cnd_loop:
+
+    LDA tmp1
+    PUSH A
+    POP B
+
+    LDA tmp2
+    CMP B
+    JZ cnd_pad
+
+    LDHL cmdbuf0
+    LDA cn_prefix_len
+    PUSH A
+    POP B
+    LDA tmp2
+    ADD B
+    CALL hl_add_offset
+
+    LDX
+    STA cn_char
+
+    LDHL 0xF00007F9     ; DiskD NAME0
+    LDA tmp2
+    CALL hl_add_offset
+
+    LDA cn_char
+    STX
+
+    LDA tmp2
+    LDI B, 1
+    ADD B
+    STA tmp2
+
+    JMP cnd_loop
+
+cnd_pad:
+
+    LDA tmp2
+    LDI B, 12
+    CMP B
+    JZ cnd_done
+
+    LDHL 0xF00007F9
+    LDA tmp2
+    CALL hl_add_offset
+
+    LDI A, 0
+    STX
+
+    LDA tmp2
+    LDI B, 1
+    ADD B
+    STA tmp2
+
+    JMP cnd_pad
+
+cnd_done:
+
+    CALL goto_row_start   ; см. cnc_done
 
     RET
 
@@ -2130,6 +2558,14 @@ gas_outer:  DB 0   ; счётчики goto_attr_row_start (см. grs_outer/inner
 gas_inner:  DB 0
 
 pcn_char:   DB 0   ; символ/цвет, который print_char_n сейчас печатает
+
+cn_char:    DB 0   ; байт имени файла на время переноса cmdbuf->NAME
+                    ; (copy_name_to_diskc/d)
+
+cn_prefix_len: DB 0 ; длина префикса команды перед именем файла -
+                    ; вызывающий код обязан установить перед CALL
+                    ; copy_name_to_diskc/d (5 для type/exec/copy,
+                    ; 7 для create, 4 для del)
 
 ; Буфер команды - 12 отдельных байт (0..11), не единый массив (см.
 ; комментарий в do_echo). Хватает на самую длинную команду - "poke

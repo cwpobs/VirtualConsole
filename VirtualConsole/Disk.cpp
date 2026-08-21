@@ -67,6 +67,7 @@ void Disk::write(uint32_t address, uint8_t value)
         case 6: writeByte(); break;
         case 7: closeFiles(); break;
         case 8: loadProgram(); break;
+        case 9: deleteFile(); break;
         default: break;
         }
 
@@ -282,4 +283,13 @@ void Disk::loadProgram()
 
     fileSize = static_cast<uint32_t>(machineCode.size());
     status = 0;
+}
+
+void Disk::deleteFile()
+{
+    std::error_code ec;
+
+    bool removed = std::filesystem::remove(basePath / nameAsString(), ec);
+
+    status = (!ec && removed) ? 0 : 2;
 }
