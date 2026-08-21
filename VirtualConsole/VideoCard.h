@@ -8,6 +8,11 @@
 #include <thread>
 #include <vector>
 
+#define NOMINMAX       // иначе windows.h определит макросы min/max,
+                        // которые ломают std::min/std::max везде, где
+                        // транзитивно подключён этот заголовок
+#include <Windows.h>   // HWND/WPARAM/LPARAM/LRESULT - для WindowProc ниже
+
 // Видеокарта: растровый режим 320x240 RGB, рисуется в отдельном
 // родном окне (Win32 + OpenGL/WGL), пока консоль остаётся текстовым
 // терминалом. Framebuffer живёт целиком на C++ стороне устройства -
@@ -22,11 +27,18 @@
 // секунду, см. CPU::busRead/busWrite) - любая тяжёлая работа там
 // повторила бы баг с Keyboard (см. Keyboard.h), только гораздо хуже.
 // VideoCard вообще не переопределяет tick().
+class Keyboard;
+
 class VideoCard : public Device
 {
 public:
 
-    VideoCard();
+    // keyboard - куда класть нажатия, пойманные графическим окном
+    // (WM_CHAR), пока у него фокус ОС - иначе клавиатура "не
+    // работала" бы, стоило кликнуть по графическому окну (консольные
+    // _kbhit()/_getch() у Keyboard получают ввод только когда фокус
+    // на окне консоли). См. WindowProc/injectKey.
+    explicit VideoCard(Keyboard* keyboard);
     ~VideoCard() override;
 
     uint8_t read(uint32_t address) override;
@@ -161,9 +173,16 @@ private:
     std::vector<uint8_t> threeDTouched;   // WIDTH*HEIGHT, 0/1
     bool threeDActive;
 
+    Keyboard* keyboard;
+
     std::thread renderThread;
     std::atomic<bool> windowOpen;
     std::atomic<bool> stopRequested;
+
+    // Статический метод (не свободная функция) - чтобы обработчик
+    // сообщений окна мог достать VideoCard* через GWLP_USERDATA и
+    // положить нажатую клавишу в keyboard (см. .cpp).
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     uint16_t regX() const;
     uint16_t regY() const;

@@ -1,12 +1,13 @@
 #include "ModLoader.h"
 #include "SoundCard.h"
+#include "Disk.h"
 
 #include <algorithm>
 #include <fstream>
 #include <vector>
 
-ModLoader::ModLoader(SoundCard* soundCard)
-    : soundCard(soundCard), basePath("C/")
+ModLoader::ModLoader(SoundCard* soundCard, Disk* diskC)
+    : soundCard(soundCard), diskC(diskC)
 {
     for (int i = 0; i < 32; i++)
     {
@@ -67,7 +68,7 @@ namespace
 
 void ModLoader::load()
 {
-    std::ifstream file(basePath + nameAsString(), std::ios::binary);
+    std::ifstream file(diskC->getCurrentPath() / nameAsString(), std::ios::binary);
 
     if (!file)
     {

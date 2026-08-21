@@ -1,7 +1,9 @@
 #include "VideoCard.h"
+#include "Keyboard.h"
 
 #include <cstring>
 
+#define NOMINMAX
 #include <Windows.h>
 #include <GL/gl.h>
 
@@ -12,24 +14,59 @@
 namespace
 {
     const wchar_t* WINDOW_CLASS_NAME = L"VirtualConsoleVideoCard";
-
-    LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-    {
-        if (msg == WM_CLOSE || msg == WM_DESTROY)
-        {
-            // Пользователь закрыл окно крестиком - не подвешиваем
-            // рендер-поток, он сам заметит WM_QUIT в своём цикле
-            // сообщений и завершится (см. renderThreadMain).
-            PostQuitMessage(0);
-            return 0;
-        }
-
-        return DefWindowProc(hwnd, msg, wParam, lParam);
-    }
 }
 
-VideoCard::VideoCard()
-    : windowOpen(false), stopRequested(false)
+LRESULT CALLBACK VideoCard::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_CLOSE || msg == WM_DESTROY)
+    {
+        // Пользователь закрыл окно крестиком - не подвешиваем
+        // рендер-поток, он сам заметит WM_QUIT в своём цикле
+        // сообщений и завершится (см. renderThreadMain).
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    if (msg == WM_CHAR)
+    {
+        // Окно видеокарты живёт своим отдельным HWND - если у него
+        // фокус ОС, консольные _kbhit()/_getch() у Keyboard ничего не
+        // получают (это отдельная консоль). Ловим нажатия сами и
+        // кладём их в ту же очередь Keyboard, что и обычный
+        // консольный ввод - тогда неважно, какое окно в фокусе.
+        // TranslateMessage (уже вызывается в цикле сообщений, см.
+        // renderThreadMain) сам превращает Ctrl+буква в управляющий
+        // код 1-26 - Ctrl+Q придёт сюда уже как wParam==17, ровно то
+        // же значение, что даёт _getch() в консоли.
+        VideoCard* self = reinterpret_cast<VideoCard*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+        if (self != nullptr && self->keyboard != nullptr)
+        {
+            wchar_t wch = static_cast<wchar_t>(wParam);
+            uint8_t byte;
+
+            if (wch < 128)
+            {
+                byte = static_cast<uint8_t>(wch);
+            }
+            else
+            {
+                char converted = 0;
+                WideCharToMultiByte(866, 0, &wch, 1, &converted, 1, nullptr, nullptr);
+                byte = static_cast<uint8_t>(converted);
+            }
+
+            self->keyboard->injectKey(byte);
+        }
+
+        return 0;
+    }
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+VideoCard::VideoCard(Keyboard* keyboard)
+    : keyboard(keyboard), windowOpen(false), stopRequested(false)
 {
     xLow = xHigh = yLow = yHigh = 0;
     wLow = wHigh = hLow = hHigh = 0;
@@ -601,7 +638,7 @@ void VideoCard::renderThreadMain()
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_OWNDC;
-    wc.lpfnWndProc = WindowProc;
+    wc.lpfnWndProc = &VideoCard::WindowProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = WINDOW_CLASS_NAME;
@@ -625,6 +662,11 @@ void VideoCard::renderThreadMain()
         windowOpen = false;
         return;
     }
+
+    // Чтобы WindowProc (статический метод - у него нет неявного this)
+    // мог достать этот экземпляр VideoCard и положить нажатую клавишу
+    // в keyboard - см. WM_CHAR выше.
+    SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     HDC hdc = GetDC(hwnd);
 

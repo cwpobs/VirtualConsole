@@ -52,6 +52,8 @@ uint8_t Keyboard::queuePop()
 
 uint8_t Keyboard::read(uint32_t address)
 {
+    std::lock_guard<std::mutex> lock(queueMutex);
+
     switch (address)
     {
     case 0:
@@ -102,14 +104,23 @@ void Keyboard::tick()
     {
         int key = _getch();
 
+        std::lock_guard<std::mutex> lock(queueMutex);
         queuePush(static_cast<uint8_t>(key));
     }
 }
 
 bool Keyboard::interruptPending()
 {
+    std::lock_guard<std::mutex> lock(queueMutex);
+
     // Уровневое прерывание: активно, пока включено и в очереди
     // есть непрочитанные данные (не защёлка, чтобы не терять
     // запросы, если в очереди накопилось несколько клавиш)
     return enabled && !queueEmpty();
+}
+
+void Keyboard::injectKey(uint8_t key)
+{
+    std::lock_guard<std::mutex> lock(queueMutex);
+    queuePush(key);
 }

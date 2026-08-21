@@ -1,12 +1,13 @@
 #include "PngLoader.h"
 #include "VideoCard.h"
+#include "Disk.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #include "stb_image.h"
 
-PngLoader::PngLoader(VideoCard* videoCard)
-    : videoCard(videoCard), basePath("C/")
+PngLoader::PngLoader(VideoCard* videoCard, Disk* diskC)
+    : videoCard(videoCard), diskC(diskC)
 {
     for (int i = 0; i < 12; i++)
     {
@@ -91,7 +92,7 @@ void PngLoader::write(uint32_t address, uint8_t value)
 
 void PngLoader::load()
 {
-    std::string path = basePath + nameAsString();
+    std::string path = (diskC->getCurrentPath() / nameAsString()).string();
 
     int width = 0;
     int height = 0;

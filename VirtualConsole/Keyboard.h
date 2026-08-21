@@ -3,6 +3,7 @@
 #include "Device.h"
 
 #include <chrono>
+#include <mutex>
 
 class Keyboard : public Device
 {
@@ -17,6 +18,14 @@ public:
 
     bool interruptPending() override;
 
+    // Кладёт байт клавиши в очередь извне (не через _kbhit()) - для
+    // VideoCard: её графическое окно живёт в отдельном потоке и само
+    // ловит нажатия (WM_CHAR), пока у него фокус ОС - иначе клавиатура
+    // "не работала" бы, стоило кликнуть по графическому окну (см.
+    // ASSEMBLY.md/VideoCard.cpp про WM_CHAR). Потокобезопасно -
+    // единственный публичный метод, вызываемый НЕ из потока CPU.
+    void injectKey(uint8_t key);
+
 private:
 
     static const int QUEUE_SIZE = 16;
@@ -25,6 +34,11 @@ private:
     int head;
     int tail;
     int count;
+
+    // Очередь теперь пишется из двух потоков (CPU через tick(), и
+    // рендер-поток VideoCard через injectKey()) - раньше писатель был
+    // один, гонки не было.
+    std::mutex queueMutex;
 
     bool enabled;
 

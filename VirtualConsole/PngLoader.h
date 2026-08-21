@@ -7,6 +7,7 @@
 #include <vector>
 
 class VideoCard;
+class Disk;
 
 // Устройство "загрузчик PNG" - декодирует спрайтшит (PNG со сжатием
 // zlib/deflate - декодировать такое в ассемблере этого CPU нереально)
@@ -20,9 +21,12 @@ class PngLoader : public Device
 public:
 
     // videoCard - куда складывать вырезанные спрайты (см.
-    // VideoCard::setSpriteBitmap). Как и Disk, читает файлы из
-    // папки "C" (без поддиректорий - v1).
-    explicit PngLoader(VideoCard* videoCard);
+    // VideoCard::setSpriteBitmap). diskC - откуда брать ТЕКУЩУЮ папку
+    // (Disk::getCurrentPath()) - файл ищется там же, где сейчас "стоит"
+    // диск C (меняется командой cd), а не всегда в корне - так
+    // запущенная из C/DEMOS программа находит свои же ресурсы рядом
+    // с собой.
+    PngLoader(VideoCard* videoCard, Disk* diskC);
 
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
@@ -43,7 +47,7 @@ private:
     static const uint32_t REG_TILE_INDEX = 19;
 
     VideoCard* videoCard;
-    std::string basePath;
+    Disk* diskC;
 
     uint8_t name[12];
     uint8_t srcXLow, srcXHigh, srcYLow, srcYHigh;

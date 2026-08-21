@@ -56,12 +56,12 @@ int main()
     DebugPort debugPort(&cpu);
     Disk diskC("C", &bus);
     Disk diskD("D", &bus);
-    VideoCard videoCard;
+    VideoCard videoCard(&keyboard);
     Clock clock;
-    PngLoader pngLoader(&videoCard);
-    MapLoader mapLoader(&videoCard);
+    PngLoader pngLoader(&videoCard, &diskC);
+    MapLoader mapLoader(&videoCard, &diskC);
     SoundCard soundCard;
-    ModLoader modLoader(&soundCard);
+    ModLoader modLoader(&soundCard, &diskC);
     Gpu3D gpu3D(&videoCard);
     Assembler assembler;
 

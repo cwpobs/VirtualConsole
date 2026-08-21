@@ -1,12 +1,13 @@
 #include "MapLoader.h"
 #include "VideoCard.h"
+#include "Disk.h"
 
 #include <fstream>
 #include <sstream>
 #include <vector>
 
-MapLoader::MapLoader(VideoCard* videoCard)
-    : videoCard(videoCard), basePath("C/")
+MapLoader::MapLoader(VideoCard* videoCard, Disk* diskC)
+    : videoCard(videoCard), diskC(diskC)
 {
     for (int i = 0; i < 12; i++)
     {
@@ -59,7 +60,7 @@ void MapLoader::write(uint32_t address, uint8_t value)
 
 void MapLoader::load()
 {
-    std::ifstream file(basePath + nameAsString());
+    std::ifstream file(diskC->getCurrentPath() / nameAsString());
 
     if (!file)
     {

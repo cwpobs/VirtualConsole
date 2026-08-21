@@ -26,6 +26,12 @@ public:
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
 
+    // Текущая папка диска (меняется командой cd) - для устройств вроде
+    // PngLoader/MapLoader/ModLoader, которым нужно резолвить СВОИ
+    // файлы относительно того же места, откуда пользователь запустил
+    // программу через exec, а не всегда от корня диска.
+    std::filesystem::path getCurrentPath() const { return basePath / currentDir; }
+
 private:
 
     // Адрес в RAM, куда LOAD (8) кладёт собранный код - та же
