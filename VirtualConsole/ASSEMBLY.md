@@ -68,11 +68,22 @@ Program Counter.
 
 Stack Pointer.
 
-Указывает на вершину стека.
+Указывает на следующий свободный байт стека.
+
+Стек растёт вниз (от старших адресов к младшим) и
+занимает верхнюю часть RAM, сразу под MMIO-устройствами.
 
 Текущая начальная позиция:
 
-    0xFFFF
+    0xEFFF
+
+`PUSH register`:
+
+    Записать register по адресу SP, затем SP--
+
+`POP register`:
+
+    SP++, затем прочитать register по адресу SP
 
 
 ## FLAGS
@@ -315,6 +326,52 @@ Jump if Not Zero.
 
 ---
 
+## PUSH
+
+Положить значение регистра на стек.
+
+Синтаксис:
+
+    PUSH register
+
+Примеры:
+
+    PUSH A
+    PUSH B
+
+Машинный формат:
+
+    0A register
+
+
+---
+
+## POP
+
+Снять значение со стека в регистр.
+
+Синтаксис:
+
+    POP register
+
+Примеры:
+
+    POP A
+    POP B
+
+Машинный формат:
+
+    0B register
+
+Пример сохранения и восстановления A:
+
+    PUSH A
+    LDI A, 0
+    POP A   ; A снова равен исходному значению
+
+
+---
+
 ## HLT
 
 Остановить процессор.
@@ -451,6 +508,8 @@ success:
 | 07 | JMP | address | Unconditional jump |
 | 08 | JZ | address | Jump if ZERO |
 | 09 | JNZ | address | Jump if NOT ZERO |
+| 0A | PUSH | register | Push register to stack |
+| 0B | POP | register | Pop register from stack |
 | FF | HLT | — | Halt CPU |
 
 
@@ -516,11 +575,8 @@ success:
 Следующие возможности пока не реализованы,
 но предполагаются в будущих версиях процессора:
 
-- Stack instructions
 - CALL
 - RET
-- PUSH
-- POP
 - Additional flags
 - Bit operations
 - AND

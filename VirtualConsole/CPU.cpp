@@ -15,7 +15,7 @@ void CPU::reset()
 
     PC = 0;
 
-    SP = 0xFFFF;
+    SP = 0xEFFF;
 
     FLAGS = 0;
 
@@ -264,6 +264,46 @@ void CPU::step()
         if (!(FLAGS & FLAG_ZERO))
         {
             PC = address;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // PUSH reg
+    // -------------------------
+
+    case 0x0A:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            busWrite(SP, *reg);
+            SP--;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // POP reg
+    // -------------------------
+
+    case 0x0B:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            SP++;
+            *reg = busRead(SP);
         }
 
         break;

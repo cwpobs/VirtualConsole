@@ -161,7 +161,9 @@ void Assembler::firstPass(
         }
         else if (instruction == "ADD" ||
             instruction == "SUB" ||
-            instruction == "CMP")
+            instruction == "CMP" ||
+            instruction == "PUSH" ||
+            instruction == "POP")
         {
             // opcode + register
 
@@ -341,6 +343,50 @@ void Assembler::secondPass(
                 );
 
             output.push_back(0x06);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // PUSH register
+        // -------------------------
+
+        else if (instruction == "PUSH")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x0A);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // POP register
+        // -------------------------
+
+        else if (instruction == "POP")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x0B);
             output.push_back(static_cast<uint8_t>(reg));
         }
 

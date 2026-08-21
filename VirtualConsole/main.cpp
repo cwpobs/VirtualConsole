@@ -45,6 +45,10 @@ int main()
 
     success:
 
+        PUSH A
+        LDI A, 0
+        POP A
+
         LDI D, 123
 
         HLT
@@ -130,6 +134,10 @@ int main()
 
     std::cout << "PC = "
         << cpu.PC
+        << "\n";
+
+    std::cout << "SP = "
+        << cpu.SP
         << "\n";
 
     std::cout << "FLAGS = "
