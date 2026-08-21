@@ -172,7 +172,9 @@ void Assembler::firstPass(
             instruction == "MOD" ||
             instruction == "AND" ||
             instruction == "OR" ||
-            instruction == "XOR")
+            instruction == "XOR" ||
+            instruction == "ADC" ||
+            instruction == "SBC")
         {
             // opcode + register
 
@@ -183,6 +185,8 @@ void Assembler::firstPass(
             instruction == "JMP" ||
             instruction == "JZ" ||
             instruction == "JNZ" ||
+            instruction == "JC" ||
+            instruction == "JNC" ||
             instruction == "CALL" ||
             instruction == "LDHL")
         {
@@ -533,6 +537,50 @@ void Assembler::secondPass(
 
 
         // -------------------------
+        // ADC register
+        // -------------------------
+
+        else if (instruction == "ADC")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x1F);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
+        // SBC register
+        // -------------------------
+
+        else if (instruction == "SBC")
+        {
+            std::string regName;
+
+            ss >> regName;
+
+            int reg = parseRegister(regName);
+
+            if (reg < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regName
+                );
+
+            output.push_back(0x20);
+            output.push_back(static_cast<uint8_t>(reg));
+        }
+
+
+        // -------------------------
         // PUSH register
         // -------------------------
 
@@ -585,6 +633,8 @@ void Assembler::secondPass(
             instruction == "JMP" ||
             instruction == "JZ" ||
             instruction == "JNZ" ||
+            instruction == "JC" ||
+            instruction == "JNC" ||
             instruction == "CALL" ||
             instruction == "LDHL")
         {
@@ -628,6 +678,12 @@ void Assembler::secondPass(
 
             else if (instruction == "JNZ")
                 opcode = 0x09;
+
+            else if (instruction == "JC")
+                opcode = 0x21;
+
+            else if (instruction == "JNC")
+                opcode = 0x22;
 
             else if (instruction == "CALL")
                 opcode = 0x0C;

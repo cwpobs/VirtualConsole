@@ -33,6 +33,7 @@ public:
     uint8_t FLAGS;
 
     static const uint8_t FLAG_ZERO = 1 << 0;
+    static const uint8_t FLAG_CARRY = 1 << 1;
 
     // =========================
     // State

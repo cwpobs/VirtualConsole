@@ -196,7 +196,18 @@ void CPU::step()
 
         if (reg != nullptr)
         {
-            A += *reg;
+            uint16_t result = static_cast<uint16_t>(A) + *reg;
+
+            A = static_cast<uint8_t>(result);
+
+            if (result > 0xFF)
+            {
+                FLAGS |= FLAG_CARRY;
+            }
+            else
+            {
+                FLAGS &= ~FLAG_CARRY;
+            }
         }
 
         break;
@@ -215,6 +226,15 @@ void CPU::step()
 
         if (reg != nullptr)
         {
+            if (A < *reg)
+            {
+                FLAGS |= FLAG_CARRY;
+            }
+            else
+            {
+                FLAGS &= ~FLAG_CARRY;
+            }
+
             A -= *reg;
         }
 
@@ -241,6 +261,15 @@ void CPU::step()
             else
             {
                 FLAGS &= ~FLAG_ZERO;
+            }
+
+            if (A < *reg)
+            {
+                FLAGS |= FLAG_CARRY;
+            }
+            else
+            {
+                FLAGS &= ~FLAG_CARRY;
             }
         }
 
@@ -333,6 +362,70 @@ void CPU::step()
             (static_cast<uint32_t>(b3) << 24);
 
         if (!(FLAGS & FLAG_ZERO))
+        {
+            PC = address;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // JC address (переход, если CARRY установлен)
+    // -------------------------
+
+    case 0x21:
+    {
+        uint8_t b0 = busRead(PC);
+        PC++;
+
+        uint8_t b1 = busRead(PC);
+        PC++;
+
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
+
+        if (FLAGS & FLAG_CARRY)
+        {
+            PC = address;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // JNC address (переход, если CARRY не установлен)
+    // -------------------------
+
+    case 0x22:
+    {
+        uint8_t b0 = busRead(PC);
+        PC++;
+
+        uint8_t b1 = busRead(PC);
+        PC++;
+
+        uint8_t b2 = busRead(PC);
+        PC++;
+
+        uint8_t b3 = busRead(PC);
+        PC++;
+
+        uint32_t address =
+            b0 |
+            (b1 << 8) |
+            (b2 << 16) |
+            (static_cast<uint32_t>(b3) << 24);
+
+        if (!(FLAGS & FLAG_CARRY))
         {
             PC = address;
         }
@@ -716,6 +809,68 @@ void CPU::step()
     case 0x1E:
     {
         A = A >> 1;
+
+        break;
+    }
+
+    // -------------------------
+    // ADC reg (A = A + reg + CARRY)
+    // -------------------------
+
+    case 0x1F:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            uint16_t carryIn = (FLAGS & FLAG_CARRY) ? 1 : 0;
+            uint16_t result = static_cast<uint16_t>(A) + *reg + carryIn;
+
+            A = static_cast<uint8_t>(result);
+
+            if (result > 0xFF)
+            {
+                FLAGS |= FLAG_CARRY;
+            }
+            else
+            {
+                FLAGS &= ~FLAG_CARRY;
+            }
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // SBC reg (A = A - reg - CARRY)
+    // -------------------------
+
+    case 0x20:
+    {
+        uint8_t registerIndex = busRead(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            uint16_t carryIn = (FLAGS & FLAG_CARRY) ? 1 : 0;
+            uint16_t operand = static_cast<uint16_t>(*reg) + carryIn;
+
+            if (static_cast<uint16_t>(A) < operand)
+            {
+                FLAGS |= FLAG_CARRY;
+            }
+            else
+            {
+                FLAGS &= ~FLAG_CARRY;
+            }
+
+            A = static_cast<uint8_t>(A - operand);
+        }
 
         break;
     }
