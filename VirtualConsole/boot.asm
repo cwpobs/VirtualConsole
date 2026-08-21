@@ -25,7 +25,7 @@ main:
     STA 0xF0000006      ; включить прерывания клавиатуры
 
     LDI A, 0
-    STA 0x00001000      ; keyCount = 0
+    STA 0x00010000      ; keyCount = 0
     STA quit            ; quit = 0
     STA cmdlen          ; cmdlen = 0
 
@@ -37,7 +37,7 @@ main:
     CALL print_char
 
     LDI A, 1
-    STA 0x00001002      ; bannerReady = 1 (баннер готов к отрисовке)
+    STA 0x00010002      ; bannerReady = 1 (баннер готов к отрисовке)
 
     EI
 
@@ -72,11 +72,11 @@ wait:
     LDI A, 32
     CALL print_char   ; (пробел)
 
-    LDA 0x00001000      ; keyCount
+    LDA 0x00010000      ; keyCount
     CALL print_number
 
     LDI A, 1
-    STA 0x00001003      ; doneReady = 1 (финальная надпись готова)
+    STA 0x00010003      ; doneReady = 1 (финальная надпись готова)
 
     HLT
 
@@ -91,9 +91,9 @@ irq_handler:
     STA 0xF0000006      ; подтвердить прерывание
 
     LDA 0xF0000005
-    STA 0x00001001      ; lastKey = код клавиши
+    STA 0x00010001      ; lastKey = код клавиши
 
-    LDA 0x00001001      ; A = код клавиши
+    LDA 0x00010001      ; A = код клавиши
 
     LDI B, 27       ; ESC
     CMP B
@@ -802,30 +802,56 @@ check_type:
     LDA cmdlen
     LDI B, 12
     CMP B
-    JNZ dispatch_done
+    JNZ check_cd
 
     LDA cmdbuf0
     LDI B, 116      ; 't'
     CMP B
-    JNZ dispatch_done
+    JNZ check_cd
     LDA cmdbuf1
     LDI B, 121      ; 'y'
     CMP B
-    JNZ dispatch_done
+    JNZ check_cd
     LDA cmdbuf2
     LDI B, 112      ; 'p'
     CMP B
-    JNZ dispatch_done
+    JNZ check_cd
     LDA cmdbuf3
     LDI B, 101      ; 'e'
     CMP B
-    JNZ dispatch_done
+    JNZ check_cd
     LDA cmdbuf4
+    LDI B, 32       ; (пробел)
+    CMP B
+    JNZ check_cd
+
+    CALL cmd_type
+    JMP dispatch_done
+
+
+check_cd:
+
+    ; "cd c" / "cd d" (4 символа)
+
+    LDA cmdlen
+    LDI B, 4
+    CMP B
+    JNZ dispatch_done
+
+    LDA cmdbuf0
+    LDI B, 99       ; 'c'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf1
+    LDI B, 100      ; 'd'
+    CMP B
+    JNZ dispatch_done
+    LDA cmdbuf2
     LDI B, 32       ; (пробел)
     CMP B
     JNZ dispatch_done
 
-    CALL cmd_type
+    CALL cmd_cd
 
 dispatch_done:
 
@@ -937,6 +963,21 @@ cmd_help:
     CALL print_char   ; N
     LDI A, 78
     CALL print_char   ; N
+
+    CALL print_newline
+
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 100
+    CALL print_char   ; d
+    LDI A, 32
+    CALL print_char
+    LDI A, 99
+    CALL print_char   ; c
+    LDI A, 47
+    CALL print_char   ; /
+    LDI A, 100
+    CALL print_char   ; d
 
     CALL print_newline
 
@@ -1236,157 +1277,369 @@ cmd_reset:
 
 cmd_dir:
 
-    ; Список файлов на диске C. Регистры диска - по фиксированным
-    ; MMIO-адресам (см. ASSEMBLY.md, "Disk"), HL не нужен:
+    ; Печатаем, какой диск смотрим ("C:"/"D:"), затем список файлов.
+    ; DiskC и DiskD - независимые устройства на разных фиксированных
+    ; MMIO-адресах (не общий регистр выбора), поэтому тело команды
+    ; продублировано под каждый диск (cmd_dir_c/cmd_dir_d) -
+    ; переключаться HL между "указатель на регистр диска" и "курсор
+    ; экрана" на каждый байт было бы тем же классом проблем, что и с
+    ; dump/poke/run (нет PUSH HL, см. goto_row_start).
+
+    LDA currentDisk
+    CMP D
+    JNZ cmd_dir_prefix_d
+
+    LDI A, 67    ; 'C'
+    CALL print_char
+    LDI A, 58    ; ':'
+    CALL print_char
+    CALL print_newline
+    JMP cmd_dir_c
+
+cmd_dir_prefix_d:
+
+    LDI A, 68    ; 'D'
+    CALL print_char
+    LDI A, 58    ; ':'
+    CALL print_char
+    CALL print_newline
+    JMP cmd_dir_d
+
+
+cmd_dir_c:
+
     ; NAME0..11 = 0xF00007E6..0xF00007F1, COMMAND = 0xF00007F2,
-    ; STATUS = 0xF00007F3.
+    ; STATUS = 0xF00007F3 (диск C, см. ASSEMBLY.md "Disk").
 
     LDI A, 1
-    STA 0xF00007F2    ; DiskC COMMAND = LIST_FIRST
+    STA 0xF00007F2
 
-cmd_dir_loop:
+cmd_dir_c_loop:
 
-    LDA 0xF00007F3    ; DiskC STATUS
+    LDA 0xF00007F3
     LDI B, 1
     CMP B
-    JZ cmd_dir_done   ; больше файлов нет
+    JZ cmd_dir_c_done
 
     LDI B, 0
 
     LDA 0xF00007E6
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007E7
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007E8
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007E9
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007EA
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007EB
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007EC
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007ED
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007EE
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007EF
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007F0
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
     LDA 0xF00007F1
     CMP B
-    JZ cmd_dir_after_name
+    JZ cmd_dir_c_after_name
     CALL print_char
 
-cmd_dir_after_name:
+cmd_dir_c_after_name:
 
     CALL print_newline
 
     LDI A, 2
-    STA 0xF00007F2    ; DiskC COMMAND = LIST_NEXT
-    JMP cmd_dir_loop
+    STA 0xF00007F2
+    JMP cmd_dir_c_loop
 
-cmd_dir_done:
+cmd_dir_c_done:
+
+    RET
+
+
+cmd_dir_d:
+
+    ; NAME0..11 = 0xF00007F9..0xF0000804, COMMAND = 0xF0000805,
+    ; STATUS = 0xF0000806 (диск D, см. ASSEMBLY.md "Disk").
+
+    LDI A, 1
+    STA 0xF0000805
+
+cmd_dir_d_loop:
+
+    LDA 0xF0000806
+    LDI B, 1
+    CMP B
+    JZ cmd_dir_d_done
+
+    LDI B, 0
+
+    LDA 0xF00007F9
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF00007FA
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF00007FB
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF00007FC
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF00007FD
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF00007FE
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF00007FF
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF0000800
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF0000801
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF0000802
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF0000803
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+    LDA 0xF0000804
+    CMP B
+    JZ cmd_dir_d_after_name
+    CALL print_char
+
+cmd_dir_d_after_name:
+
+    CALL print_newline
+
+    LDI A, 2
+    STA 0xF0000805
+    JMP cmd_dir_d_loop
+
+cmd_dir_d_done:
 
     RET
 
 
 cmd_type:
 
+    LDA currentDisk
+    CMP D
+    JNZ cmd_type_d
+    JMP cmd_type_c
+
+
+cmd_type_c:
+
     ; "type ИМЯ" - ИМЯ должно быть ровно 7 символов (см. check_type/
     ; help): cmdbuf5..cmdbuf11 -> DiskC NAME0..6, NAME7..11 обнуляем,
     ; чтобы не осталось "хвоста" от предыдущего имени.
 
     LDA cmdbuf5
-    STA 0xF00007E6    ; NAME0
+    STA 0xF00007E6
     LDA cmdbuf6
-    STA 0xF00007E7    ; NAME1
+    STA 0xF00007E7
     LDA cmdbuf7
-    STA 0xF00007E8    ; NAME2
+    STA 0xF00007E8
     LDA cmdbuf8
-    STA 0xF00007E9    ; NAME3
+    STA 0xF00007E9
     LDA cmdbuf9
-    STA 0xF00007EA    ; NAME4
+    STA 0xF00007EA
     LDA cmdbuf10
-    STA 0xF00007EB    ; NAME5
+    STA 0xF00007EB
     LDA cmdbuf11
-    STA 0xF00007EC    ; NAME6
+    STA 0xF00007EC
 
     LDI A, 0
-    STA 0xF00007ED    ; NAME7
-    STA 0xF00007EE    ; NAME8
-    STA 0xF00007EF    ; NAME9
-    STA 0xF00007F0    ; NAME10
-    STA 0xF00007F1    ; NAME11
+    STA 0xF00007ED
+    STA 0xF00007EE
+    STA 0xF00007EF
+    STA 0xF00007F0
+    STA 0xF00007F1
 
     LDI A, 3
-    STA 0xF00007F2    ; COMMAND = OPEN_READ
+    STA 0xF00007F2
 
-    LDA 0xF00007F3    ; STATUS
+    LDA 0xF00007F3
     LDI B, 2
     CMP B
-    JZ cmd_type_done   ; ошибка открытия - молча выходим
+    JZ cmd_type_c_done
 
-cmd_type_loop:
+cmd_type_c_loop:
 
     LDI A, 4
-    STA 0xF00007F2    ; COMMAND = READ_BYTE
+    STA 0xF00007F2
 
-    LDA 0xF00007F3    ; STATUS
+    LDA 0xF00007F3
     LDI B, 1
     CMP B
-    JZ cmd_type_close  ; EOF
+    JZ cmd_type_c_close
 
-    LDA 0xF00007F4    ; DATA
+    LDA 0xF00007F4
 
-    LDI B, 10          ; '\n'
+    LDI B, 10
     CMP B
-    JNZ cmd_type_check_cr
+    JNZ cmd_type_c_check_cr
     CALL print_newline
-    JMP cmd_type_loop
+    JMP cmd_type_c_loop
 
-cmd_type_check_cr:
+cmd_type_c_check_cr:
 
-    LDI B, 13          ; '\r' - игнорируем
+    LDI B, 13
     CMP B
-    JZ cmd_type_loop
+    JZ cmd_type_c_loop
 
     CALL print_char
-    JMP cmd_type_loop
+    JMP cmd_type_c_loop
 
-cmd_type_close:
+cmd_type_c_close:
 
     LDI A, 7
-    STA 0xF00007F2    ; COMMAND = CLOSE
+    STA 0xF00007F2
 
-cmd_type_done:
+cmd_type_c_done:
 
     CALL print_newline
 
+    RET
+
+
+cmd_type_d:
+
+    ; То же самое, но диск D: NAME0..6 = 0xF00007F9..0xF00007FF,
+    ; NAME7..11 = 0xF0000800..0xF0000804, COMMAND = 0xF0000805,
+    ; STATUS = 0xF0000806, DATA = 0xF0000807.
+
+    LDA cmdbuf5
+    STA 0xF00007F9
+    LDA cmdbuf6
+    STA 0xF00007FA
+    LDA cmdbuf7
+    STA 0xF00007FB
+    LDA cmdbuf8
+    STA 0xF00007FC
+    LDA cmdbuf9
+    STA 0xF00007FD
+    LDA cmdbuf10
+    STA 0xF00007FE
+    LDA cmdbuf11
+    STA 0xF00007FF
+
+    LDI A, 0
+    STA 0xF0000800
+    STA 0xF0000801
+    STA 0xF0000802
+    STA 0xF0000803
+    STA 0xF0000804
+
+    LDI A, 3
+    STA 0xF0000805
+
+    LDA 0xF0000806
+    LDI B, 2
+    CMP B
+    JZ cmd_type_d_done
+
+cmd_type_d_loop:
+
+    LDI A, 4
+    STA 0xF0000805
+
+    LDA 0xF0000806
+    LDI B, 1
+    CMP B
+    JZ cmd_type_d_close
+
+    LDA 0xF0000807
+
+    LDI B, 10
+    CMP B
+    JNZ cmd_type_d_check_cr
+    CALL print_newline
+    JMP cmd_type_d_loop
+
+cmd_type_d_check_cr:
+
+    LDI B, 13
+    CMP B
+    JZ cmd_type_d_loop
+
+    CALL print_char
+    JMP cmd_type_d_loop
+
+cmd_type_d_close:
+
+    LDI A, 7
+    STA 0xF0000805
+
+cmd_type_d_done:
+
+    CALL print_newline
+
+    RET
+
+
+cmd_cd:
+
+    ; "cd c" / "cd d" (4 символа) - переключает currentDisk для
+    ; dir/type. Символ диска - cmdbuf3.
+
+    LDA cmdbuf3
+    LDI B, 100    ; 'd'
+    CMP B
+    JNZ cmd_cd_c
+
+    LDI A, 1
+    STA currentDisk
+    RET
+
+cmd_cd_c:
+
+    LDI A, 0
+    STA currentDisk
     RET
 
 
@@ -1470,10 +1723,10 @@ grs_outer_done:
 
 irq_done:
 
-    LDA 0x00001000
+    LDA 0x00010000
     LDI B, 1
     ADD B
-    STA 0x00001000      ; keyCount++ (после того, как весь эффект нажатия
+    STA 0x00010000      ; keyCount++ (после того, как весь эффект нажатия
                      ; уже применён к VRAM - иначе main.cpp перерисует
                      ; экран до того, как символ реально записан)
 
@@ -1491,7 +1744,7 @@ irq_done:
 ; счётчиком, что и адреса инструкций - наложение на код исключено
 ; структурно, а не по договорённости.
 ;
-; keyCount/lastKey/bannerReady/doneReady (0x00001000-0x00001003) сюда не
+; keyCount/lastKey/bannerReady/doneReady (0x00010000-0x00010003) сюда не
 ; входят: их напрямую читает main.cpp, который не видит меток
 ; ассемблера, поэтому они остаются фиксированными адресами - это
 ; осознанный интерфейс хост-VM, а не магический адрес наугад.
@@ -1502,6 +1755,7 @@ column:     DB 0
 row:        DB 0
 cmdlen:     DB 0
 lastChar:   DB 0
+currentDisk: DB 0   ; 0 = диск C, 1 = диск D (см. cmd_cd)
 
 savedA:     DB 0
 savedB:     DB 0

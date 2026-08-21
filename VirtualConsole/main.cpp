@@ -158,9 +158,9 @@ int main()
     {
         cpu.step();
 
-        uint8_t currentKeyCount = bus.read(0x00001000);
-        uint8_t currentBannerReady = bus.read(0x00001002);
-        uint8_t currentDoneReady = bus.read(0x00001003);
+        uint8_t currentKeyCount = bus.read(0x00010000);
+        uint8_t currentBannerReady = bus.read(0x00010002);
+        uint8_t currentDoneReady = bus.read(0x00010003);
 
         if (currentKeyCount != lastKeyCount ||
             currentBannerReady != lastBannerReady ||
@@ -197,8 +197,8 @@ int main()
     std::cout << "FLAGS = " << (int)cpu.FLAGS << "\n";
     std::cout << "CYCLES = " << cpu.cycles << "\n";
 
-    std::cout << "keyCount = " << (int)bus.read(0x00001000) << "\n";
-    std::cout << "lastKey = " << (int)bus.read(0x00001001) << "\n";
+    std::cout << "keyCount = " << (int)bus.read(0x00010000) << "\n";
+    std::cout << "lastKey = " << (int)bus.read(0x00010001) << "\n";
 
     return 0;
 }
