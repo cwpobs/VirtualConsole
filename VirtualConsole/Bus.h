@@ -18,6 +18,8 @@ public:
 
     void tick();
 
+    bool pollInterrupt();
+
 private:
 
     struct MappedDevice

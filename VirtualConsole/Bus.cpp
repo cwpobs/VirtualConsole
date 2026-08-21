@@ -55,3 +55,16 @@ void Bus::tick()
         mapped.device->tick();
     }
 }
+
+bool Bus::pollInterrupt()
+{
+    for (MappedDevice& mapped : devices)
+    {
+        if (mapped.device->interruptPending())
+        {
+            return true;
+        }
+    }
+
+    return false;
+}

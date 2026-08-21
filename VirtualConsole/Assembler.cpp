@@ -181,7 +181,10 @@ void Assembler::firstPass(
             address += 3;
         }
         else if (instruction == "HLT" ||
-            instruction == "RET")
+            instruction == "RET" ||
+            instruction == "EI" ||
+            instruction == "DI" ||
+            instruction == "RETI")
         {
             address += 1;
         }
@@ -476,6 +479,36 @@ void Assembler::secondPass(
         else if (instruction == "RET")
         {
             output.push_back(0x0D);
+        }
+
+
+        // -------------------------
+        // EI
+        // -------------------------
+
+        else if (instruction == "EI")
+        {
+            output.push_back(0x0E);
+        }
+
+
+        // -------------------------
+        // DI
+        // -------------------------
+
+        else if (instruction == "DI")
+        {
+            output.push_back(0x0F);
+        }
+
+
+        // -------------------------
+        // RETI
+        // -------------------------
+
+        else if (instruction == "RETI")
+        {
+            output.push_back(0x10);
         }
 
 

@@ -43,6 +43,16 @@ public:
     uint64_t cycles;
 
     // =========================
+    // Interrupts
+    // =========================
+
+    bool interruptsEnabled;
+
+    // Адрес, по которому должен находиться JMP на
+    // реальный обработчик прерывания (см. ASSEMBLY.md)
+    static const uint16_t INTERRUPT_VECTOR = 0x0003;
+
+    // =========================
     // Functions
     // =========================
 

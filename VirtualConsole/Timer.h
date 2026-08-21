@@ -13,7 +13,12 @@ public:
 
     void tick() override;
 
+    bool interruptPending() override;
+
 private:
 
     uint16_t counter;
+    uint16_t compare;
+    bool enabled;
+    bool pending;
 };

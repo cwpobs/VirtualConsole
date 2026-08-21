@@ -22,6 +22,8 @@ void CPU::reset()
     running = false;
 
     cycles = 0;
+
+    interruptsEnabled = false;
 }
 
 uint8_t CPU::busRead(uint16_t address)
@@ -58,6 +60,27 @@ uint8_t* CPU::getRegister(uint8_t index)
 
 void CPU::step()
 {
+    // =========================
+    // Interrupt check
+    // =========================
+
+    if (interruptsEnabled && bus->pollInterrupt())
+    {
+        busWrite(SP, (PC >> 8) & 0xFF);
+        SP--;
+
+        busWrite(SP, PC & 0xFF);
+        SP--;
+
+        busWrite(SP, FLAGS);
+        SP--;
+
+        interruptsEnabled = false;
+        PC = INTERRUPT_VECTOR;
+
+        return;
+    }
+
     // =========================
     // Fetch
     // =========================
@@ -349,6 +372,50 @@ void CPU::step()
         uint8_t high = busRead(SP);
 
         PC = low | (high << 8);
+
+        break;
+    }
+
+    // -------------------------
+    // EI
+    // -------------------------
+
+    case 0x0E:
+    {
+        interruptsEnabled = true;
+
+        break;
+    }
+
+    // -------------------------
+    // DI
+    // -------------------------
+
+    case 0x0F:
+    {
+        interruptsEnabled = false;
+
+        break;
+    }
+
+    // -------------------------
+    // RETI
+    // -------------------------
+
+    case 0x10:
+    {
+        SP++;
+        FLAGS = busRead(SP);
+
+        SP++;
+        uint8_t low = busRead(SP);
+
+        SP++;
+        uint8_t high = busRead(SP);
+
+        PC = low | (high << 8);
+
+        interruptsEnabled = true;
 
         break;
     }

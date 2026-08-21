@@ -20,9 +20,9 @@ int main()
     Assembler assembler;
 
     // Память занимает нижнюю часть адресного пространства,
-    // верхняя часть (0xF000-0xF001) отдана таймеру
+    // верхняя часть (0xF000-0xF004) отдана таймеру
     bus.mapDevice(&memory, 0x0000, 0xEFFF);
-    bus.mapDevice(&timer, 0xF000, 0xF001);
+    bus.mapDevice(&timer, 0xF000, 0xF004);
 
 
     // ========================================
@@ -30,6 +30,11 @@ int main()
     // ========================================
 
     std::string program = R"(
+        JMP main
+        JMP irq_handler
+
+    main:
+
         LDI A, 10
         LDI B, 20
 
@@ -49,6 +54,42 @@ int main()
         LDI A, 0
         POP A
 
+        ; ==== Демонстрация прерываний от таймера ====
+
+        PUSH A          ; сохранить A=30, дальше A используется как scratch
+
+        LDI A, 0
+        STA 0x0100      ; irqCount = 0
+
+        LDI A, 100
+        STA 0xF002      ; таймер: compare LOW = 100
+        LDI A, 0
+        STA 0xF003      ; таймер: compare HIGH = 0
+        LDI A, 1
+        STA 0xF004      ; таймер: включить прерывания
+
+        EI
+
+        PUSH B
+        PUSH C
+
+        LDI A, 100
+        LDI B, 5
+        LDI C, 0
+
+    delay:
+
+        SUB B
+        CMP C
+        JNZ delay
+
+        POP C
+        POP B
+
+        DI
+
+        POP A           ; восстановить исходный A=30
+
         CALL setD
 
         HLT
@@ -58,6 +99,25 @@ int main()
 
         LDI D, 123
         RET
+
+
+    irq_handler:
+
+        PUSH A
+        PUSH B
+
+        LDI A, 1
+        STA 0xF004      ; подтвердить прерывание, таймер остаётся включён
+
+        LDA 0x0100
+        LDI B, 1
+        ADD B
+        STA 0x0100      ; irqCount++
+
+        POP B
+        POP A
+
+        RETI
     )";
 
 
@@ -160,6 +220,10 @@ int main()
 
     std::cout << "CYCLES = "
         << cpu.cycles
+        << "\n";
+
+    std::cout << "IRQ_COUNT = "
+        << (int)bus.read(0x0100)
         << "\n";
 
 
