@@ -147,11 +147,6 @@ irq_handler:
     LDA 0xF005
     STA 0x0902      ; lastKey = код клавиши
 
-    LDA 0x0900
-    LDI B, 1
-    ADD B
-    STA 0x0900      ; keyCount++
-
     LDA 0x0902      ; A = код клавиши
 
     LDI B, 27       ; ESC
@@ -272,6 +267,13 @@ advance_row_done:
 
 
 irq_done:
+
+    LDA 0x0900
+    LDI B, 1
+    ADD B
+    STA 0x0900      ; keyCount++ (после того, как весь эффект нажатия
+                     ; уже применён к VRAM - иначе main.cpp перерисует
+                     ; экран до того, как символ реально записан)
 
     POP C
     POP B
