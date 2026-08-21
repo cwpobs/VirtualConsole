@@ -20,6 +20,26 @@ void CPU::reset()
     FLAGS = 0;
 
     running = false;
+
+    cycles = 0;
+}
+
+uint8_t CPU::busRead(uint16_t address)
+{
+    uint8_t value = bus->read(address);
+
+    cycles++;
+    bus->tick();
+
+    return value;
+}
+
+void CPU::busWrite(uint16_t address, uint8_t value)
+{
+    bus->write(address, value);
+
+    cycles++;
+    bus->tick();
 }
 
 uint8_t* CPU::getRegister(uint8_t index)
@@ -42,7 +62,7 @@ void CPU::step()
     // Fetch
     // =========================
 
-    uint8_t opcode = bus->read(PC);
+    uint8_t opcode = busRead(PC);
 
     PC++;
 
@@ -58,10 +78,10 @@ void CPU::step()
 
     case 0x01:
     {
-        uint8_t registerIndex = bus->read(PC);
+        uint8_t registerIndex = busRead(PC);
         PC++;
 
-        uint8_t value = bus->read(PC);
+        uint8_t value = busRead(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -80,17 +100,17 @@ void CPU::step()
 
     case 0x02:
     {
-        uint8_t low = bus->read(PC);
+        uint8_t low = busRead(PC);
         PC++;
 
-        uint8_t high = bus->read(PC);
+        uint8_t high = busRead(PC);
         PC++;
 
         uint16_t address =
             low |
             (high << 8);
 
-        A = bus->read(address);
+        A = busRead(address);
 
         break;
     }
@@ -101,17 +121,17 @@ void CPU::step()
 
     case 0x03:
     {
-        uint8_t low = bus->read(PC);
+        uint8_t low = busRead(PC);
         PC++;
 
-        uint8_t high = bus->read(PC);
+        uint8_t high = busRead(PC);
         PC++;
 
         uint16_t address =
             low |
             (high << 8);
 
-        bus->write(address, A);
+        busWrite(address, A);
 
         break;
     }
@@ -122,7 +142,7 @@ void CPU::step()
 
     case 0x04:
     {
-        uint8_t registerIndex = bus->read(PC);
+        uint8_t registerIndex = busRead(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -141,7 +161,7 @@ void CPU::step()
 
     case 0x05:
     {
-        uint8_t registerIndex = bus->read(PC);
+        uint8_t registerIndex = busRead(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -160,7 +180,7 @@ void CPU::step()
 
     case 0x06:
     {
-        uint8_t registerIndex = bus->read(PC);
+        uint8_t registerIndex = busRead(PC);
         PC++;
 
         uint8_t* reg = getRegister(registerIndex);
@@ -186,10 +206,10 @@ void CPU::step()
 
     case 0x07:
     {
-        uint8_t low = bus->read(PC);
+        uint8_t low = busRead(PC);
         PC++;
 
-        uint8_t high = bus->read(PC);
+        uint8_t high = busRead(PC);
         PC++;
 
         uint16_t address =
@@ -207,10 +227,10 @@ void CPU::step()
 
     case 0x08:
     {
-        uint8_t low = bus->read(PC);
+        uint8_t low = busRead(PC);
         PC++;
 
-        uint8_t high = bus->read(PC);
+        uint8_t high = busRead(PC);
         PC++;
 
         uint16_t address =
@@ -231,10 +251,10 @@ void CPU::step()
 
     case 0x09:
     {
-        uint8_t low = bus->read(PC);
+        uint8_t low = busRead(PC);
         PC++;
 
-        uint8_t high = bus->read(PC);
+        uint8_t high = busRead(PC);
         PC++;
 
         uint16_t address =

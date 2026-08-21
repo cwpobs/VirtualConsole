@@ -39,6 +39,9 @@ public:
 
     Bus* bus;
 
+    // Общее количество тактов, выполненных процессором
+    uint64_t cycles;
+
     // =========================
     // Functions
     // =========================
@@ -52,4 +55,7 @@ public:
 private:
 
     uint8_t* getRegister(uint8_t index);
+
+    uint8_t busRead(uint16_t address);
+    void busWrite(uint16_t address, uint8_t value);
 };

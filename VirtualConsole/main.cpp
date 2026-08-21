@@ -101,7 +101,6 @@ int main()
     while (cpu.running)
     {
         cpu.step();
-        bus.tick();
     }
 
 
@@ -143,6 +142,10 @@ int main()
 
     std::cout << "TIMER = "
         << timerValue
+        << "\n";
+
+    std::cout << "CYCLES = "
+        << cpu.cycles
         << "\n";
 
 
