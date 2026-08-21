@@ -173,13 +173,15 @@ void Assembler::firstPass(
             instruction == "STA" ||
             instruction == "JMP" ||
             instruction == "JZ" ||
-            instruction == "JNZ")
+            instruction == "JNZ" ||
+            instruction == "CALL")
         {
             // opcode + 16-bit address
 
             address += 3;
         }
-        else if (instruction == "HLT")
+        else if (instruction == "HLT" ||
+            instruction == "RET")
         {
             address += 1;
         }
@@ -399,7 +401,8 @@ void Assembler::secondPass(
             instruction == "STA" ||
             instruction == "JMP" ||
             instruction == "JZ" ||
-            instruction == "JNZ")
+            instruction == "JNZ" ||
+            instruction == "CALL")
         {
             std::string addressText;
 
@@ -437,8 +440,11 @@ void Assembler::secondPass(
             else if (instruction == "JZ")
                 opcode = 0x08;
 
-            else
+            else if (instruction == "JNZ")
                 opcode = 0x09;
+
+            else
+                opcode = 0x0C;
 
 
             output.push_back(opcode);
@@ -460,6 +466,16 @@ void Assembler::secondPass(
         else if (instruction == "HLT")
         {
             output.push_back(0xFF);
+        }
+
+
+        // -------------------------
+        // RET
+        // -------------------------
+
+        else if (instruction == "RET")
+        {
+            output.push_back(0x0D);
         }
 
 

@@ -49,9 +49,15 @@ int main()
         LDI A, 0
         POP A
 
-        LDI D, 123
+        CALL setD
 
         HLT
+
+
+    setD:
+
+        LDI D, 123
+        RET
     )";
 
 

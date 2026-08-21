@@ -310,6 +310,50 @@ void CPU::step()
     }
 
     // -------------------------
+    // CALL address
+    // -------------------------
+
+    case 0x0C:
+    {
+        uint8_t low = busRead(PC);
+        PC++;
+
+        uint8_t high = busRead(PC);
+        PC++;
+
+        uint16_t address =
+            low |
+            (high << 8);
+
+        busWrite(SP, (PC >> 8) & 0xFF);
+        SP--;
+
+        busWrite(SP, PC & 0xFF);
+        SP--;
+
+        PC = address;
+
+        break;
+    }
+
+    // -------------------------
+    // RET
+    // -------------------------
+
+    case 0x0D:
+    {
+        SP++;
+        uint8_t low = busRead(SP);
+
+        SP++;
+        uint8_t high = busRead(SP);
+
+        PC = low | (high << 8);
+
+        break;
+    }
+
+    // -------------------------
     // HLT
     // -------------------------
 

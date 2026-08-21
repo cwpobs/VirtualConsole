@@ -372,6 +372,61 @@ Jump if Not Zero.
 
 ---
 
+## CALL
+
+Вызвать подпрограмму.
+
+Кладёт на стек адрес возврата (адрес инструкции,
+следующей за CALL), затем переходит по указанному адресу.
+
+Синтаксис:
+
+    CALL address
+
+Пример:
+
+    CALL subroutine
+
+Можно использовать метку:
+
+    CALL setD
+
+Машинный формат:
+
+    0C low high
+
+
+---
+
+## RET
+
+Вернуться из подпрограммы.
+
+Снимает со стека адрес возврата, положенный туда
+инструкцией CALL, и переходит по нему.
+
+Синтаксис:
+
+    RET
+
+Машинный код:
+
+    0D
+
+Пример вызова и возврата подпрограммы:
+
+    CALL setD
+
+    HLT
+
+setD:
+
+    LDI D, 123
+    RET
+
+
+---
+
 ## HLT
 
 Остановить процессор.
@@ -510,6 +565,8 @@ success:
 | 09 | JNZ | address | Jump if NOT ZERO |
 | 0A | PUSH | register | Push register to stack |
 | 0B | POP | register | Pop register from stack |
+| 0C | CALL | address | Call subroutine |
+| 0D | RET | — | Return from subroutine |
 | FF | HLT | — | Halt CPU |
 
 
@@ -549,6 +606,10 @@ success:
 | JMP | 3 |
 | JZ | 3 |
 | JNZ | 3 |
+| PUSH | 3 |
+| POP | 3 |
+| CALL | 5 |
+| RET | 3 |
 | HLT | 1 |
 
 | Адрес | Регистр | Чтение | Запись |
@@ -575,8 +636,6 @@ success:
 Следующие возможности пока не реализованы,
 но предполагаются в будущих версиях процессора:
 
-- CALL
-- RET
 - Additional flags
 - Bit operations
 - AND
