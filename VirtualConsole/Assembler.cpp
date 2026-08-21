@@ -188,7 +188,8 @@ void Assembler::firstPass(
             instruction == "RETI" ||
             instruction == "STX" ||
             instruction == "LDX" ||
-            instruction == "INCHL")
+            instruction == "INCHL" ||
+            instruction == "DECHL")
         {
             address += 1;
         }
@@ -547,6 +548,16 @@ void Assembler::secondPass(
         else if (instruction == "INCHL")
         {
             output.push_back(0x14);
+        }
+
+
+        // -------------------------
+        // DECHL
+        // -------------------------
+
+        else if (instruction == "DECHL")
+        {
+            output.push_back(0x15);
         }
 
 
