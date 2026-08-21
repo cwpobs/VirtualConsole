@@ -12,6 +12,7 @@
 #include "DebugPort.h"
 #include "Disk.h"
 #include "VideoCard.h"
+#include "Clock.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -51,6 +52,7 @@ int main()
     Disk diskC("C", &bus);
     Disk diskD("D", &bus);
     VideoCard videoCard;
+    Clock clock;
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -66,6 +68,7 @@ int main()
     bus.mapDevice(&diskD, 0xF00007F9, 0xF000080B);     // диск D (папка "D")
     bus.mapDevice(&attr, 0xF000080C, 0xF0000FDD);      // цвет (fg/bg) + SCROLL + CLEAR
     bus.mapDevice(&videoCard, 0xF0000FDE, 0xF0000FEA); // видеокарта 320x240 (отдельное окно)
+    bus.mapDevice(&clock, 0xF0000FEB, 0xF0000FEC);     // часы реального времени (мс, std::chrono)
 
 
     // ========================================

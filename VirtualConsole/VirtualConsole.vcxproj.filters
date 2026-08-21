@@ -51,6 +51,9 @@
     <ClCompile Include="VideoCard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Clock.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CPU.h">
@@ -87,6 +90,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="VideoCard.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Clock.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

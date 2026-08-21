@@ -151,6 +151,7 @@
   <ItemGroup>
     <ClCompile Include="Assembler.cpp" />
     <ClCompile Include="Bus.cpp" />
+    <ClCompile Include="Clock.cpp" />
     <ClCompile Include="CPU.cpp" />
     <ClCompile Include="DebugPort.cpp" />
     <ClCompile Include="Disk.cpp" />
@@ -165,6 +166,7 @@
   <ItemGroup>
     <ClInclude Include="Assembler.h" />
     <ClInclude Include="Bus.h" />
+    <ClInclude Include="Clock.h" />
     <ClInclude Include="CPU.h" />
     <ClInclude Include="DebugPort.h" />
     <ClInclude Include="Device.h" />
