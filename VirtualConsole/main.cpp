@@ -15,6 +15,8 @@
 #include "Clock.h"
 #include "PngLoader.h"
 #include "MapLoader.h"
+#include "SoundCard.h"
+#include "ModLoader.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -57,6 +59,8 @@ int main()
     Clock clock;
     PngLoader pngLoader(&videoCard);
     MapLoader mapLoader(&videoCard);
+    SoundCard soundCard;
+    ModLoader modLoader(&soundCard);
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -75,6 +79,8 @@ int main()
     bus.mapDevice(&clock, 0xF0000FFC, 0xF0000FFD);     // часы реального времени (мс, std::chrono)
     bus.mapDevice(&pngLoader, 0xF0000FFE, 0xF0001011); // загрузчик PNG (спрайты и тайлы, stb_image)
     bus.mapDevice(&mapLoader, 0xF0001012, 0xF000101F); // загрузчик текстовой карты тайлов
+    bus.mapDevice(&modLoader, 0xF0001020, 0xF0001041); // загрузчик .mod-файлов
+    bus.mapDevice(&soundCard, 0xF0001042, 0xF0001044); // звуковая карта (PLAY/STOP/VOLUME)
 
 
     // ========================================

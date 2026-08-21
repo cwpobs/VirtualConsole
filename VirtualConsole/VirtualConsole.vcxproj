@@ -159,7 +159,9 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MapLoader.cpp" />
     <ClCompile Include="Memory.cpp" />
+    <ClCompile Include="ModLoader.cpp" />
     <ClCompile Include="PngLoader.cpp" />
+    <ClCompile Include="SoundCard.cpp" />
     <ClCompile Include="TextAttr.cpp" />
     <ClCompile Include="TextVRAM.cpp" />
     <ClCompile Include="Timer.cpp" />
@@ -176,7 +178,9 @@
     <ClInclude Include="Keyboard.h" />
     <ClInclude Include="MapLoader.h" />
     <ClInclude Include="Memory.h" />
+    <ClInclude Include="ModLoader.h" />
     <ClInclude Include="PngLoader.h" />
+    <ClInclude Include="SoundCard.h" />
     <ClInclude Include="stb_image.h" />
     <ClInclude Include="TextAttr.h" />
     <ClInclude Include="TextVRAM.h" />
