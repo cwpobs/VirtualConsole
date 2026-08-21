@@ -61,6 +61,19 @@ VideoCard::VideoCard()
         spriteY[s] = 0;
         spriteVisible[s] = false;
     }
+
+    for (int t = 0; t < TILE_SET_COUNT; t++)
+    {
+        for (int i = 0; i < TILE_PIXELS * CHANNELS; i++)
+        {
+            tileSetData[t][i] = 0;
+        }
+    }
+
+    mapWidth = 0;
+    mapHeight = 0;   // 0 = карта не загружена, compositeTiles ничего не рисует
+    scrollX = 0;
+    scrollY = 0;
 }
 
 VideoCard::~VideoCard()
@@ -103,6 +116,11 @@ uint8_t VideoCard::read(uint32_t address)
     case REG_SPRITE_G: return spriteG;
     case REG_SPRITE_B: return spriteB;
     case REG_SPRITE_STATUS: return spriteStatus;
+
+    case REG_SCROLL_X_LOW: return scrollX & 0xFF;
+    case REG_SCROLL_X_HIGH: return (scrollX >> 8) & 0xFF;
+    case REG_SCROLL_Y_LOW: return scrollY & 0xFF;
+    case REG_SCROLL_Y_HIGH: return (scrollY >> 8) & 0xFF;
 
     default: return 0;
     }
@@ -196,6 +214,35 @@ void VideoCard::write(uint32_t address, uint8_t value)
         default: break;
         }
         return;
+
+    case REG_SCROLL_X_LOW:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        scrollX = (scrollX & 0xFF00) | value;
+        clampScroll();
+        return;
+    }
+    case REG_SCROLL_X_HIGH:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        scrollX = (scrollX & 0x00FF) | (static_cast<uint16_t>(value) << 8);
+        clampScroll();
+        return;
+    }
+    case REG_SCROLL_Y_LOW:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        scrollY = (scrollY & 0xFF00) | value;
+        clampScroll();
+        return;
+    }
+    case REG_SCROLL_Y_HIGH:
+    {
+        std::lock_guard<std::mutex> lock(framebufferMutex);
+        scrollY = (scrollY & 0x00FF) | (static_cast<uint16_t>(value) << 8);
+        clampScroll();
+        return;
+    }
 
     default:
         return;
@@ -313,6 +360,102 @@ void VideoCard::spriteClear()
     }
 
     spriteStatus = 0;
+}
+
+void VideoCard::clampScroll()
+{
+    // Вызывается уже под framebufferMutex (см. write() выше) -
+    // отдельной блокировки тут нет и не должно быть.
+    if (mapWidth <= 0 || mapHeight <= 0)
+    {
+        scrollX = 0;
+        scrollY = 0;
+        return;
+    }
+
+    int maxScrollX = mapWidth * TILE_SIZE - WIDTH;
+    int maxScrollY = mapHeight * TILE_SIZE - HEIGHT;
+
+    if (maxScrollX < 0) maxScrollX = 0;
+    if (maxScrollY < 0) maxScrollY = 0;
+
+    if (scrollX > maxScrollX) scrollX = static_cast<uint16_t>(maxScrollX);
+    if (scrollY > maxScrollY) scrollY = static_cast<uint16_t>(maxScrollY);
+}
+
+void VideoCard::setTileBitmap(int index, const uint8_t* rgb)
+{
+    if (index < 0 || index >= TILE_SET_COUNT)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(framebufferMutex);
+    memcpy(tileSetData[index], rgb, TILE_PIXELS * CHANNELS);
+}
+
+void VideoCard::setTileMap(int width, int height, const uint8_t* indices)
+{
+    std::lock_guard<std::mutex> lock(framebufferMutex);
+
+    if (width <= 0 || height <= 0)
+    {
+        tileMap.clear();
+        mapWidth = 0;
+        mapHeight = 0;
+        clampScroll();
+        return;
+    }
+
+    tileMap.assign(indices, indices + (static_cast<size_t>(width) * height));
+    mapWidth = width;
+    mapHeight = height;
+
+    // Новая карта могла оказаться меньше предыдущей - сбрасываем
+    // скролл в начало, а не оставляем его висеть за новым краем карты.
+    scrollX = 0;
+    scrollY = 0;
+}
+
+void VideoCard::compositeTiles(uint8_t* staging) const
+{
+    // Вызывающий (renderThreadMain) уже держит framebufferMutex - см.
+    // compositeSprites про тот же приём.
+    if (mapHeight <= 0 || mapWidth <= 0)
+    {
+        return;
+    }
+
+    for (int py = 0; py < HEIGHT; py++)
+    {
+        int worldY = scrollY + py;
+        int tileRow = worldY / TILE_SIZE;
+        int localY = worldY % TILE_SIZE;
+
+        for (int px = 0; px < WIDTH; px++)
+        {
+            int dstIndex = (py * WIDTH + px) * CHANNELS;
+
+            int worldX = scrollX + px;
+            int tileCol = worldX / TILE_SIZE;
+
+            if (tileRow < 0 || tileRow >= mapHeight || tileCol < 0 || tileCol >= mapWidth)
+            {
+                staging[dstIndex] = 0;
+                staging[dstIndex + 1] = 0;
+                staging[dstIndex + 2] = 0;
+                continue;
+            }
+
+            int localX = worldX % TILE_SIZE;
+            uint8_t tileIndex = tileMap[tileRow * mapWidth + tileCol];
+
+            int srcIndex = (localY * TILE_SIZE + localX) * CHANNELS;
+            staging[dstIndex] = tileSetData[tileIndex][srcIndex];
+            staging[dstIndex + 1] = tileSetData[tileIndex][srcIndex + 1];
+            staging[dstIndex + 2] = tileSetData[tileIndex][srcIndex + 2];
+        }
+    }
 }
 
 void VideoCard::setSpriteBitmap(int index, const uint8_t* rgb)
@@ -497,7 +640,8 @@ void VideoCard::renderThreadMain()
         {
             std::lock_guard<std::mutex> lock(framebufferMutex);
             memcpy(staging, framebuffer, FB_SIZE);
-            compositeSprites(staging);
+            compositeTiles(staging);    // тайлы (если карта загружена) поверх фона
+            compositeSprites(staging);  // спрайты - всегда поверх тайлов
         }
 
         glClear(GL_COLOR_BUFFER_BIT);

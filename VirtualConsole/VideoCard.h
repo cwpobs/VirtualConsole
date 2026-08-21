@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 // Видеокарта: растровый режим 320x240 RGB, рисуется в отдельном
 // родном окне (Win32 + OpenGL/WGL), пока консоль остаётся текстовым
@@ -37,6 +38,19 @@ public:
     // C++, без похода через регистры/WRITE_PIXEL по одному пикселю.
     // index вне 0-15 молча игнорируется.
     void setSpriteBitmap(int index, const uint8_t* rgb);
+
+    // Заливает битмап тайла index (32*32*3 байт RGB) - для PngLoader
+    // (EXTRACT_TILE), аналог setSpriteBitmap для тайлсета. index вне
+    // 0-127 молча игнорируется.
+    void setTileBitmap(int index, const uint8_t* rgb);
+
+    // Кладёт карту тайлов width x height (индексы 0-127, по одному
+    // байту на ячейку, width*height байт) - для MapLoader. Заменяет
+    // предыдущую карту целиком (включая размеры) и сбрасывает
+    // scrollX/scrollY, чтобы не остаться со скроллом за пределами
+    // новой карты. width/height <= 0 отключает тайловый слой
+    // (compositeTiles ничего не рисует, пока карта не загружена).
+    void setTileMap(int width, int height, const uint8_t* indices);
 
 private:
 
@@ -79,9 +93,21 @@ private:
     static const uint32_t REG_SPRITE_COMMAND = 24;
     static const uint32_t REG_SPRITE_STATUS = 25;
 
+    // Скролл тайловой карты - продолжение блока (см. ASSEMBLY.md,
+    // "VideoCard"). Пишутся напрямую, без команды (как SPRITE_X/Y) -
+    // клэмпятся к границам карты сразу при записи.
+    static const uint32_t REG_SCROLL_X_LOW = 26;
+    static const uint32_t REG_SCROLL_X_HIGH = 27;
+    static const uint32_t REG_SCROLL_Y_LOW = 28;
+    static const uint32_t REG_SCROLL_Y_HIGH = 29;
+
     static const int SPRITE_COUNT = 16;
     static const int SPRITE_SIZE = 32;
     static const int SPRITE_PIXELS = SPRITE_SIZE * SPRITE_SIZE;
+
+    static const int TILE_SET_COUNT = 128;
+    static const int TILE_SIZE = 32;
+    static const int TILE_PIXELS = TILE_SIZE * TILE_SIZE;
 
     // Цвет-ключ прозрачности - пиксель спрайта такого цвета не
     // рисуется при композиции поверх фона (см. compositeSprites).
@@ -107,6 +133,18 @@ private:
     uint16_t spriteY[SPRITE_COUNT];
     bool spriteVisible[SPRITE_COUNT];
 
+    uint8_t tileSetData[TILE_SET_COUNT][TILE_PIXELS * CHANNELS];
+
+    // Карта - индексы тайлов, mapWidth*mapHeight байт, пусто/mapHeight
+    // == 0 значит "карта не загружена" - compositeTiles тогда ничего
+    // не делает (старые демо без карты не видят разницы).
+    std::vector<uint8_t> tileMap;
+    int mapWidth;
+    int mapHeight;
+
+    uint16_t scrollX;
+    uint16_t scrollY;
+
     std::thread renderThread;
     std::atomic<bool> windowOpen;
     std::atomic<bool> stopRequested;
@@ -126,6 +164,9 @@ private:
     void spriteWritePixel();
     void spriteClear();
     void compositeSprites(uint8_t* staging) const;
+
+    void clampScroll();
+    void compositeTiles(uint8_t* staging) const;
 
     void renderThreadMain();
 };

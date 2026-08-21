@@ -15,6 +15,7 @@ PngLoader::PngLoader(VideoCard* videoCard)
 
     srcXLow = srcXHigh = srcYLow = srcYHigh = 0;
     spriteIndex = 0;
+    tileIndex = 0;
     status = 0;
 
     imageWidth = 0;
@@ -51,6 +52,7 @@ uint8_t PngLoader::read(uint32_t address)
     case REG_SRC_Y_HIGH: return srcYHigh;
     case REG_SPRITE_INDEX: return spriteIndex;
     case REG_STATUS: return status;
+    case REG_TILE_INDEX: return tileIndex;
     default: return 0;
     }
 }
@@ -70,12 +72,14 @@ void PngLoader::write(uint32_t address, uint8_t value)
     case REG_SRC_Y_LOW: srcYLow = value; return;
     case REG_SRC_Y_HIGH: srcYHigh = value; return;
     case REG_SPRITE_INDEX: spriteIndex = value; return;
+    case REG_TILE_INDEX: tileIndex = value; return;
 
     case REG_COMMAND:
         switch (value)
         {
         case 1: load(); break;
         case 2: extract(); break;
+        case 3: extractTile(); break;
         default: break;
         }
         return;
@@ -117,9 +121,9 @@ void PngLoader::load()
     status = 0;
 }
 
-void PngLoader::extract()
+void PngLoader::extractInto(int targetIndex, int indexLimit, bool isTile)
 {
-    if (spriteIndex >= 16)
+    if (targetIndex < 0 || targetIndex >= indexLimit)
     {
         status = 3;
         return;
@@ -134,17 +138,17 @@ void PngLoader::extract()
     uint16_t x = srcX();
     uint16_t y = srcY();
 
-    if (x + SPRITE_SIZE > imageWidth || y + SPRITE_SIZE > imageHeight)
+    if (x + CELL_SIZE > imageWidth || y + CELL_SIZE > imageHeight)
     {
         status = 2;
         return;
     }
 
-    uint8_t rgb[SPRITE_SIZE * SPRITE_SIZE * 3];
+    uint8_t rgb[CELL_SIZE * CELL_SIZE * 3];
 
-    for (int sy = 0; sy < SPRITE_SIZE; sy++)
+    for (int sy = 0; sy < CELL_SIZE; sy++)
     {
-        for (int sx = 0; sx < SPRITE_SIZE; sx++)
+        for (int sx = 0; sx < CELL_SIZE; sx++)
         {
             size_t srcIndex = (static_cast<size_t>(y + sy) * imageWidth + (x + sx)) * 4;
             uint8_t r = pixels[srcIndex];
@@ -152,13 +156,13 @@ void PngLoader::extract()
             uint8_t b = pixels[srcIndex + 2];
             uint8_t a = pixels[srcIndex + 3];
 
-            int dstIndex = (sy * SPRITE_SIZE + sx) * 3;
+            int dstIndex = (sy * CELL_SIZE + sx) * 3;
 
             if (a < 128)
             {
                 // Прозрачный пиксель PNG -> цвет-ключ VideoCard (см.
-                // ASSEMBLY.md, "Аппаратные спрайты") - модель спрайтов
-                // не хранит альфу, только chroma-key прозрачность.
+                // ASSEMBLY.md, "Аппаратные спрайты") - ни спрайты, ни
+                // тайлы не хранят альфу, только chroma-key.
                 rgb[dstIndex] = 255;
                 rgb[dstIndex + 1] = 0;
                 rgb[dstIndex + 2] = 255;
@@ -172,6 +176,24 @@ void PngLoader::extract()
         }
     }
 
-    videoCard->setSpriteBitmap(spriteIndex, rgb);
+    if (isTile)
+    {
+        videoCard->setTileBitmap(targetIndex, rgb);
+    }
+    else
+    {
+        videoCard->setSpriteBitmap(targetIndex, rgb);
+    }
+
     status = 0;
+}
+
+void PngLoader::extract()
+{
+    extractInto(spriteIndex, 16, false);
+}
+
+void PngLoader::extractTile()
+{
+    extractInto(tileIndex, 128, true);
 }

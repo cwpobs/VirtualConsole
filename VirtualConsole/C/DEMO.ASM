@@ -176,17 +176,17 @@ move_y_done:
     ; ~16.7 мс между кадрами, порог 17 округляет чуть вверх.
 
     LDI A, 0
-    STA 0xF0000FF8      ; Clock: запись в MILLIS_LOW сбрасывает часы
+    STA 0xF0000FFC      ; Clock: запись в MILLIS_LOW сбрасывает часы
 
 delay_loop:
 
-    LDA 0xF0000FF9      ; Clock: MILLIS_HIGH
+    LDA 0xF0000FFD      ; Clock: MILLIS_HIGH
     LDI B, 0
     CMP B
     JNZ demo_loop       ; прошло >=256 мс - явно достаточно, страховка
                          ; на случай зависания хоста между опросами
 
-    LDA 0xF0000FF8      ; Clock: MILLIS_LOW
+    LDA 0xF0000FFC      ; Clock: MILLIS_LOW
     LDI B, 17           ; ~16.7 мс = 60 кадров/сек
     CMP B
     JC delay_loop

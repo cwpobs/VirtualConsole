@@ -29,7 +29,7 @@ public:
 
 private:
 
-    static const int SPRITE_SIZE = 32;
+    static const int CELL_SIZE = 32;   // и спрайты, и тайлы - 32x32
 
     static const uint32_t REG_NAME_FIRST = 0;
     static const uint32_t REG_NAME_LAST = 11;
@@ -40,6 +40,7 @@ private:
     static const uint32_t REG_SPRITE_INDEX = 16;
     static const uint32_t REG_COMMAND = 17;
     static const uint32_t REG_STATUS = 18;
+    static const uint32_t REG_TILE_INDEX = 19;
 
     VideoCard* videoCard;
     std::string basePath;
@@ -48,10 +49,11 @@ private:
     uint8_t srcXLow, srcXHigh, srcYLow, srcYHigh;
     uint8_t spriteIndex;
     uint8_t status;
+    uint8_t tileIndex;
 
     // Кэш последнего успешно декодированного изображения (RGBA,
-    // 4 байта/пиксель) - один LOAD обслуживает много EXTRACT без
-    // повторного декодирования того же файла.
+    // 4 байта/пиксель) - один LOAD обслуживает много EXTRACT/
+    // EXTRACT_TILE без повторного декодирования того же файла.
     std::vector<uint8_t> pixels;
     int imageWidth;
     int imageHeight;
@@ -61,5 +63,13 @@ private:
     uint16_t srcY() const;
 
     void load();
+
+    // extractInto - общая логика вырезания квадрата CELL_SIZE и
+    // передачи его в VideoCard; extract()/extractTile() - тонкие
+    // обёртки, различающиеся только тем, куда кладут результат
+    // (спрайт по SPRITE_INDEX или тайл по TILE_INDEX) и какой предел
+    // проверяют у индекса (16 спрайтов / 128 тайлов).
+    void extractInto(int targetIndex, int indexLimit, bool isTile);
     void extract();
+    void extractTile();
 };

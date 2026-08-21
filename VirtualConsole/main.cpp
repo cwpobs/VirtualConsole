@@ -14,6 +14,7 @@
 #include "VideoCard.h"
 #include "Clock.h"
 #include "PngLoader.h"
+#include "MapLoader.h"
 #include "Bus.h"
 #include "Assembler.h"
 
@@ -55,6 +56,7 @@ int main()
     VideoCard videoCard;
     Clock clock;
     PngLoader pngLoader(&videoCard);
+    MapLoader mapLoader(&videoCard);
     Assembler assembler;
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
@@ -69,9 +71,10 @@ int main()
     bus.mapDevice(&diskC, 0xF00007E6, 0xF00007F8);     // диск C (папка "C")
     bus.mapDevice(&diskD, 0xF00007F9, 0xF000080B);     // диск D (папка "D")
     bus.mapDevice(&attr, 0xF000080C, 0xF0000FDD);      // цвет (fg/bg) + SCROLL + CLEAR
-    bus.mapDevice(&videoCard, 0xF0000FDE, 0xF0000FF7); // видеокарта 320x240 + 16 спрайтов 32x32
-    bus.mapDevice(&clock, 0xF0000FF8, 0xF0000FF9);     // часы реального времени (мс, std::chrono)
-    bus.mapDevice(&pngLoader, 0xF0000FFA, 0xF000100C); // загрузчик PNG-спрайтшитов (stb_image)
+    bus.mapDevice(&videoCard, 0xF0000FDE, 0xF0000FFB); // видеокарта 320x240 + 16 спрайтов + тайлы/скролл
+    bus.mapDevice(&clock, 0xF0000FFC, 0xF0000FFD);     // часы реального времени (мс, std::chrono)
+    bus.mapDevice(&pngLoader, 0xF0000FFE, 0xF0001011); // загрузчик PNG (спрайты и тайлы, stb_image)
+    bus.mapDevice(&mapLoader, 0xF0001012, 0xF000101F); // загрузчик текстовой карты тайлов
 
 
     // ========================================

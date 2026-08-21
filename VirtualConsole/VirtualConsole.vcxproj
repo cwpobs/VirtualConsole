@@ -157,6 +157,7 @@
     <ClCompile Include="Disk.cpp" />
     <ClCompile Include="Keyboard.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="MapLoader.cpp" />
     <ClCompile Include="Memory.cpp" />
     <ClCompile Include="PngLoader.cpp" />
     <ClCompile Include="TextAttr.cpp" />
@@ -173,6 +174,7 @@
     <ClInclude Include="Device.h" />
     <ClInclude Include="Disk.h" />
     <ClInclude Include="Keyboard.h" />
+    <ClInclude Include="MapLoader.h" />
     <ClInclude Include="Memory.h" />
     <ClInclude Include="PngLoader.h" />
     <ClInclude Include="stb_image.h" />
