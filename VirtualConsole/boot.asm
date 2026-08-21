@@ -193,6 +193,8 @@ do_echo:
     LDI A, 0
     STA column      ; column дошёл до 80 - перенос на новую строку
 
+    CALL advance_row
+
     JMP irq_done
 
 
@@ -237,6 +239,37 @@ newline_loop:
     LDI A, 0
     STA column      ; column = 0
 
+    CALL advance_row
+
+    JMP irq_done
+
+
+advance_row:
+
+    LDA row
+    LDI B, 1
+    ADD B
+    STA row         ; row++
+
+    LDI B, 25
+    CMP B
+    JNZ advance_row_done
+
+    ; row дошёл до 25 (за пределом экрана 0-24) - прокрутить и остаться
+    ; на последней строке
+
+    LDI A, 1
+    STA 0x87D0      ; SCROLL - сдвинуть экран на одну строку вверх
+
+    LDHL 0x8780     ; последняя строка (24), столбец 0 (0x8000 + 24*80)
+
+    LDI A, 24
+    STA row
+
+advance_row_done:
+
+    RET
+
 
 irq_done:
 
@@ -262,3 +295,4 @@ irq_done:
 
 quit:   DB 0
 column: DB 0
+row:    DB 0

@@ -38,11 +38,12 @@ int main()
 
     // Память занимает нижнюю часть адресного пространства,
     // верхняя часть (0xF000-0xF006) отдана таймеру и клавиатуре,
-    // 0x8000-0x87CF - текстовая видеопамять (80x25 символов).
+    // 0x8000-0x87CF - текстовая видеопамять (80x25 символов),
+    // 0x87D0 - её регистр SCROLL.
     // VRAM регистрируется до Memory: диапазон VRAM физически лежит
     // внутри диапазона Memory, а Bus отдаёт адрес первому подходящему
     // по порядку регистрации устройству
-    bus.mapDevice(&vram, 0x8000, 0x87CF);
+    bus.mapDevice(&vram, 0x8000, 0x87D0);
     bus.mapDevice(&memory, 0x0000, 0xEFFF);
     bus.mapDevice(&timer, 0xF000, 0xF004);
     bus.mapDevice(&keyboard, 0xF005, 0xF006);
@@ -110,9 +111,27 @@ int main()
 
     cpu.running = true;
 
-    std::cout << "\x1b[2J\x1b[H";
-    vram.render();
-    std::cout.flush();
+    // Отрисовать экран и поставить настоящий курсор консоли в позицию,
+    // соответствующую cpu.HL (в границах видеопамяти)
+    auto redraw = [&]()
+    {
+        std::cout << "\x1b[2J\x1b[H";
+        vram.render();
+
+        int offset = cpu.HL - 0x8000;
+
+        if (offset >= 0 && offset < TextVRAM::SIZE)
+        {
+            int row = offset / TextVRAM::WIDTH;
+            int col = offset % TextVRAM::WIDTH;
+
+            std::cout << "\x1b[" << (row + 1) << ";" << (col + 1) << "H";
+        }
+
+        std::cout.flush();
+    };
+
+    redraw();
 
     uint8_t lastKeyCount = 0;
     uint8_t lastBannerReady = 0;
@@ -130,9 +149,7 @@ int main()
             lastKeyCount = currentKeyCount;
             lastBannerReady = currentBannerReady;
 
-            std::cout << "\x1b[2J\x1b[H";
-            vram.render();
-            std::cout.flush();
+            redraw();
         }
     }
 

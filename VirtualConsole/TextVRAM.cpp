@@ -12,12 +12,38 @@ TextVRAM::TextVRAM()
 
 uint8_t TextVRAM::read(uint16_t address)
 {
+    if (address == SIZE)
+    {
+        // SCROLL - только для записи, чтение возвращает 0
+        return 0;
+    }
+
     return data[address];
 }
 
 void TextVRAM::write(uint16_t address, uint8_t value)
 {
+    if (address == SIZE)
+    {
+        // SCROLL - любая запись сдвигает экран на одну строку вверх
+        scrollUp();
+        return;
+    }
+
     data[address] = value;
+}
+
+void TextVRAM::scrollUp()
+{
+    for (int i = 0; i < (HEIGHT - 1) * WIDTH; i++)
+    {
+        data[i] = data[i + WIDTH];
+    }
+
+    for (int i = (HEIGHT - 1) * WIDTH; i < SIZE; i++)
+    {
+        data[i] = ' ';
+    }
 }
 
 void TextVRAM::render() const
