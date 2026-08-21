@@ -1,0 +1,274 @@
+#include "CPU.h"
+#include "Memory.h"
+
+void CPU::connectMemory(Memory* memory)
+{
+    this->memory = memory;
+}
+
+void CPU::reset()
+{
+    A = 0;
+    B = 0;
+    C = 0;
+    D = 0;
+
+    PC = 0;
+
+    SP = 0xFFFF;
+
+    FLAGS = 0;
+
+    running = false;
+}
+
+uint8_t* CPU::getRegister(uint8_t index)
+{
+    switch (index)
+    {
+    case 0: return &A;
+    case 1: return &B;
+    case 2: return &C;
+    case 3: return &D;
+
+    default:
+        return nullptr;
+    }
+}
+
+void CPU::step()
+{
+    // =========================
+    // Fetch
+    // =========================
+
+    uint8_t opcode = memory->read(PC);
+
+    PC++;
+
+    // =========================
+    // Decode + Execute
+    // =========================
+
+    switch (opcode)
+    {
+        // -------------------------
+        // LDI reg, value
+        // -------------------------
+
+    case 0x01:
+    {
+        uint8_t registerIndex = memory->read(PC);
+        PC++;
+
+        uint8_t value = memory->read(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            *reg = value;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // LDA address
+    // -------------------------
+
+    case 0x02:
+    {
+        uint8_t low = memory->read(PC);
+        PC++;
+
+        uint8_t high = memory->read(PC);
+        PC++;
+
+        uint16_t address =
+            low |
+            (high << 8);
+
+        A = memory->read(address);
+
+        break;
+    }
+
+    // -------------------------
+    // STA address
+    // -------------------------
+
+    case 0x03:
+    {
+        uint8_t low = memory->read(PC);
+        PC++;
+
+        uint8_t high = memory->read(PC);
+        PC++;
+
+        uint16_t address =
+            low |
+            (high << 8);
+
+        memory->write(address, A);
+
+        break;
+    }
+
+    // -------------------------
+    // ADD reg
+    // -------------------------
+
+    case 0x04:
+    {
+        uint8_t registerIndex = memory->read(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            A += *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // SUB reg
+    // -------------------------
+
+    case 0x05:
+    {
+        uint8_t registerIndex = memory->read(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            A -= *reg;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // CMP reg
+    // -------------------------
+
+    case 0x06:
+    {
+        uint8_t registerIndex = memory->read(PC);
+        PC++;
+
+        uint8_t* reg = getRegister(registerIndex);
+
+        if (reg != nullptr)
+        {
+            if (A == *reg)
+            {
+                FLAGS |= FLAG_ZERO;
+            }
+            else
+            {
+                FLAGS &= ~FLAG_ZERO;
+            }
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // JMP address
+    // -------------------------
+
+    case 0x07:
+    {
+        uint8_t low = memory->read(PC);
+        PC++;
+
+        uint8_t high = memory->read(PC);
+        PC++;
+
+        uint16_t address =
+            low |
+            (high << 8);
+
+        PC = address;
+
+        break;
+    }
+
+    // -------------------------
+    // JZ address
+    // -------------------------
+
+    case 0x08:
+    {
+        uint8_t low = memory->read(PC);
+        PC++;
+
+        uint8_t high = memory->read(PC);
+        PC++;
+
+        uint16_t address =
+            low |
+            (high << 8);
+
+        if (FLAGS & FLAG_ZERO)
+        {
+            PC = address;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // JNZ address
+    // -------------------------
+
+    case 0x09:
+    {
+        uint8_t low = memory->read(PC);
+        PC++;
+
+        uint8_t high = memory->read(PC);
+        PC++;
+
+        uint16_t address =
+            low |
+            (high << 8);
+
+        if (!(FLAGS & FLAG_ZERO))
+        {
+            PC = address;
+        }
+
+        break;
+    }
+
+    // -------------------------
+    // HLT
+    // -------------------------
+
+    case 0xFF:
+    {
+        running = false;
+
+        break;
+    }
+
+    // -------------------------
+    // Unknown opcode
+    // -------------------------
+
+    default:
+    {
+        running = false;
+
+        break;
+    }
+    }
+}
