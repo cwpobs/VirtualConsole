@@ -73,12 +73,12 @@ Visual Studio и собрать конфигурацию `x64` (то же сам
 - `VirtualConsole/C/` - "диск C": `SHELL.ASM`, а также `DEMOS/`,
   `GAMES/`, `TOOLS/`, `DEV/SRC/` (исходники демок/инструментов).
 - `VirtualConsole/D/` - "диск D": пустой рабочий диск.
-- [`VirtualConsole/ASSEMBLY.md`](VirtualConsole/ASSEMBLY.md) - полная
+- [`VirtualConsole/ASSEMBLY.ru.md`](VirtualConsole/ASSEMBLY.ru.md) - полная
   техническая документация.
 
 ## Документация
 
-[`ASSEMBLY.md`](VirtualConsole/ASSEMBLY.md) - полный технический
+[`ASSEMBLY.ru.md`](VirtualConsole/ASSEMBLY.ru.md) - полный технический
 референс: система команд, все MMIO-устройства с их адресами, модель
 прерываний и полное руководство по языку Мини-C (со шпаргалкой в
 конце).

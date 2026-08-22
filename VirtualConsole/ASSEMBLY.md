@@ -1,80 +1,83 @@
+**English** | [Русский](ASSEMBLY.ru.md)
+
 # Virtual Console Assembly Language
 
-Документация ассемблера виртуального процессора.
+Documentation for the virtual processor's assembler.
 
-Документ будет дополняться по мере развития виртуальной машины.
+This document will keep growing as the virtual machine develops.
 
 ---
 
-# 1. Общая информация
+# 1. General information
 
-Виртуальный процессор 8-битный: регистры общего назначения,
-АЛУ и шина данных оперируют байтами. Адресация памяти при
-этом 32-битная — адреса и указатели (`PC`/`SP`/`HL`) занимают
-4 байта, что позволяет в будущем расширять память практически
-неограниченно, не меняя формат команд.
+The virtual processor is 8-bit: the general-purpose registers, the
+ALU, and the data bus all operate on bytes. Memory addressing,
+however, is 32-bit — addresses and pointers (`PC`/`SP`/`HL`) take up
+4 bytes, which leaves room to expand memory almost without limit in
+the future without changing the instruction format.
 
-Размер оперативной памяти:
+RAM size:
 
-    4 МБ (4 * 1024 * 1024 байт)
+    4 MB (4 * 1024 * 1024 bytes)
 
-Карта адресного пространства:
+Address space map:
 
-| Диапазон | Назначение |
+| Range | Purpose |
 |----------|------------|
-| `0x00000000 - 0x003FFFFF` | RAM (4 МБ) |
-| `0xF0000000` и выше | MMIO-устройства (см. раздел 9) |
+| `0x00000000 - 0x003FFFFF` | RAM (4 MB) |
+| `0xF0000000` and above | MMIO devices (see section 9) |
 
-MMIO специально вынесено далеко от RAM — между ними огромный
-запас адресов, так что RAM можно расширять в будущем, не
-трогая и не переезжая устройства.
+MMIO is deliberately placed far away from RAM — the huge gap between
+them means RAM can be expanded in the future without touching or
+relocating any device.
 
-## Устройства - сводка
+## Devices - summary
 
-Подключённые к шине устройства (подробности по каждому - раздел 9):
+Devices attached to the bus (details on each one are in section 9):
 
-| Устройство | Диапазон | Размер | Назначение |
+| Device | Range | Size | Purpose |
 |---|---|---|---|
-| Timer | `0xF0000000-0xF0000004` | 5 Б | такты, прерывание по таймеру |
-| Keyboard | `0xF0000005-0xF0000006` | 2 Б | очередь нажатий, прерывание |
-| Text VRAM | `0xF0000007-0xF00007D8` | 2002 Б | текст 80x25, кодировка CP866 |
-| DebugPort | `0xF00007D9-0xF00007E5` | 13 Б | `PC`/`SP`/`HL`/`FLAGS`, только чтение |
-| Disk C | `0xF00007E6-0xF00007F8` | 19 Б | файловая система (папка `C/` на хосте) |
-| Disk D | `0xF00007F9-0xF000080B` | 19 Б | файловая система (папка `D/` на хосте) |
-| TextAttr | `0xF000080C-0xF0000FDD` | 2002 Б | цвет символов 80x25 (fg/bg) |
-| VideoCard | `0xF0000FDE-0xF0000FFB` | 30 Б | графика 320x240, спрайты, тайлы |
-| Clock | `0xF0000FFC-0xF0000FFD` | 2 Б | часы реального времени (мс) |
-| PngLoader | `0xF0000FFE-0xF0001011` | 20 Б | загрузка PNG (спрайты/тайлы) |
-| MapLoader | `0xF0001012-0xF000101F` | 14 Б | загрузка текстовой карты тайлов |
-| ModLoader | `0xF0001020-0xF0001041` | 34 Б | загрузка `.mod`-музыки (ProTracker) |
-| SoundCard | `0xF0001042-0xF0001044` | 3 Б | воспроизведение (PLAY/STOP/VOLUME) |
-| Gpu3D | `0xF0001045-0xF0001065` | 33 Б | 3D-ускоритель (вершины/треугольники/PRESENT) |
+| Timer | `0xF0000000-0xF0000004` | 5 B | tick counter, timer interrupt |
+| Keyboard | `0xF0000005-0xF0000006` | 2 B | keypress queue, interrupt |
+| Text VRAM | `0xF0000007-0xF00007D8` | 2002 B | 80x25 text, CP866 encoding |
+| DebugPort | `0xF00007D9-0xF00007E5` | 13 B | `PC`/`SP`/`HL`/`FLAGS`, read-only |
+| Disk C | `0xF00007E6-0xF00007F8` | 19 B | filesystem (host folder `C/`) |
+| Disk D | `0xF00007F9-0xF000080B` | 19 B | filesystem (host folder `D/`) |
+| TextAttr | `0xF000080C-0xF0000FDD` | 2002 B | character color 80x25 (fg/bg) |
+| VideoCard | `0xF0000FDE-0xF0000FFB` | 30 B | 320x240 graphics, sprites, tiles |
+| Clock | `0xF0000FFC-0xF0000FFD` | 2 B | real-time clock (ms) |
+| PngLoader | `0xF0000FFE-0xF0001011` | 20 B | PNG loading (sprites/tiles) |
+| MapLoader | `0xF0001012-0xF000101F` | 14 B | text tile-map loading |
+| ModLoader | `0xF0001020-0xF0001041` | 34 B | `.mod` music loading (ProTracker) |
+| SoundCard | `0xF0001042-0xF0001044` | 3 B | playback (PLAY/STOP/VOLUME) |
+| Gpu3D | `0xF0001045-0xF0001065` | 33 B | 3D accelerator (vertices/triangles/PRESENT) |
 
-Тактовой частоты у CPU нет как таковой — это программный интерпретатор
-(`CPU::step()`), а не настоящая электронная схема, поэтому "скорость"
-целиком зависит от хост-машины и не гарантируется. Для ориентира: в
-ходе разработки headless-тесты этого же проекта показывали пропускную
-способность порядка ~6 млн `step()`/сек на разработческой машине — это
-не спецификация, а просто наблюдение, полезное для оценки, сколько
-шагов заложить в собственный тест.
+The CPU has no clock frequency as such — it's a software interpreter
+(`CPU::step()`), not real electronic circuitry, so "speed" depends
+entirely on the host machine and isn't guaranteed. As a rough
+reference point: during development, headless tests of this same
+project measured interpreter throughput around ~6 million `step()`
+calls/sec on the dev machine — this isn't a spec, just an observation
+useful for sizing your own tests.
 
-Клавиатура и консольный вывод — настоящие, хостовые: ввод идёт через
-`_getch()` реальной консоли, вывод — обычный терминал с ANSI-
-последовательностями; кодировка ввода/вывода — CP866 (см. `main.cpp`).
+The keyboard and console output are real and host-backed: input comes
+through the real console's `_getch()`, output goes to a regular
+terminal with ANSI escape sequences; input/output encoding is CP866
+(see `main.cpp`).
 
 
 ---
 
-# 2. Регистры
+# 2. Registers
 
-Процессор имеет четыре основных 8-битных регистра:
+The processor has four general-purpose 8-bit registers:
 
     A
     B
     C
     D
 
-Также существуют специальные регистры:
+There are also special registers:
 
     PC      Program Counter
     SP      Stack Pointer
@@ -83,13 +86,13 @@ MMIO специально вынесено далеко от RAM — между 
 
 ## A, B, C, D
 
-Универсальные 8-битные регистры.
+General-purpose 8-bit registers.
 
-Диапазон:
+Range:
 
     0 - 255
 
-Пример:
+Example:
 
     LDI A, 100
     LDI B, 20
@@ -99,112 +102,110 @@ MMIO специально вынесено далеко от RAM — между 
 
 Program Counter.
 
-32-битный адрес следующей выполняемой инструкции.
+A 32-bit address of the next instruction to execute.
 
-После обычного выполнения инструкции PC
-автоматически увеличивается.
+After a normal instruction executes, PC is automatically incremented.
 
-Инструкции перехода могут изменить PC.
+Jump instructions can change PC.
 
 
 ## SP
 
 Stack Pointer.
 
-32-битный. Указывает на следующий свободный байт стека.
+32-bit. Points at the next free byte of the stack.
 
-Стек растёт вниз (от старших адресов к младшим) и
-занимает верхнюю часть RAM.
+The stack grows downward (from higher addresses toward lower ones)
+and occupies the top of RAM.
 
-Текущая начальная позиция:
+Current starting position:
 
-    0x003FFFFF (последний байт RAM)
+    0x003FFFFF (the last byte of RAM)
 
 `PUSH register`:
 
-    Записать register по адресу SP, затем SP--
+    Write register to the address SP, then SP--
 
 `POP register`:
 
-    SP++, затем прочитать register по адресу SP
+    SP++, then read register from the address SP
 
 
 ## HL
 
-Регистр-указатель для косвенной адресации.
+Pointer register for indirect addressing.
 
-32-битный, используется инструкциями `STX`/`LDX` как
-адрес в памяти. Позволяет обращаться к памяти по адресу,
-вычисленному во время выполнения программы (а не зашитому
-в саму инструкцию, как у `LDA`/`STA`) — например, для
-последовательной записи символов в `Text VRAM`.
+32-bit, used by the `STX`/`LDX` instructions as a memory address. Lets
+you access memory at an address computed at run time (rather than
+baked into the instruction itself, as with `LDA`/`STA`) — for example,
+to write a sequence of characters into `Text VRAM`.
 
-Начальное значение:
+Initial value:
 
     0x00000000
 
 
 ## FLAGS
 
-Регистр флагов.
+Flags register.
 
-Текущие флаги:
+Current flags:
 
     Bit 0 - ZERO
     Bit 1 - CARRY
 
-ZERO устанавливается инструкцией `CMP`, если значения равны.
+ZERO is set by the `CMP` instruction if the values are equal.
 
-CARRY - флаг переноса/заёма, нужен для многобайтовой арифметики
-(складывать/вычитать числа шире одного байта) и для сравнения
-"меньше/больше" (в дополнение к "равно" у `ZERO`):
+CARRY is the carry/borrow flag, needed for multi-byte arithmetic
+(adding/subtracting numbers wider than one byte) and for "less
+than/greater than" comparisons (in addition to "equal" from `ZERO`):
 
-- `ADD`/`ADC`: `CARRY=1`, если сумма превысила 255 (было переполнение).
-- `SUB`/`SBC`: `CARRY=1`, если потребовался заём (`A` было меньше
-  вычитаемого).
-- `CMP`: `CARRY=1`, если `A < register` (без изменения `A`).
+- `ADD`/`ADC`: `CARRY=1` if the sum exceeded 255 (there was overflow).
+- `SUB`/`SBC`: `CARRY=1` if a borrow was needed (`A` was less than the
+  subtrahend).
+- `CMP`: `CARRY=1` if `A < register` (without changing `A`).
 
-Например, после `CMP B`: `ZERO=1` значит `A == B`; `CARRY=1` значит
-`A < B`; оба сброшены - значит `A > B`. Так получается полноценное
-беззнаковое сравнение "меньше/больше/равно", а не только "равно".
+For example, after `CMP B`: `ZERO=1` means `A == B`; `CARRY=1` means
+`A < B`; both clear means `A > B`. That gives a full unsigned
+"less/greater/equal" comparison, not just "equal".
 
 
 ---
 
-# 3. Инструкции
+# 3. Instructions
 
 ## LDI
 
 Load Immediate.
 
-Загрузить непосредственное значение в регистр.
+Load an immediate value into a register.
 
-Синтаксис:
+Syntax:
 
     LDI register, value
 
-Примеры:
+Examples:
 
     LDI A, 10
     LDI B, 255
     LDI C, 0xFF
 
-Машинный формат:
+Machine format:
 
     01 register value
 
-Коды регистров:
+Register codes:
 
     A = 0
     B = 1
     C = 2
     D = 3
 
-Пример:
+Example:
 
     LDI A, 10
 
-Машинный код:
+Machine code:
 
     01 00 0A
 
@@ -215,26 +216,26 @@ Load Immediate.
 
 Load A.
 
-Загрузить значение из памяти в регистр A.
+Load a value from memory into register A.
 
-Синтаксис:
+Syntax:
 
     LDA address
 
-Пример:
+Example:
 
     LDA 1000
 
-или:
+or:
 
     LDA 0x03E8
 
-Машинный формат:
+Machine format:
 
     02 b0 b1 b2 b3
 
-Адрес — 32-битный, 4 байта little-endian
-(`b0` — младший байт, `b3` — старший).
+The address is 32-bit, 4 bytes little-endian
+(`b0` is the low byte, `b3` is the high byte).
 
 
 ---
@@ -243,47 +244,47 @@ Load A.
 
 Store A.
 
-Записать содержимое регистра A в память.
+Write the contents of register A to memory.
 
-Синтаксис:
+Syntax:
 
     STA address
 
-Пример:
+Example:
 
     STA 1000
 
-Машинный формат:
+Machine format:
 
     03 b0 b1 b2 b3
 
-Адрес — 32-битный, 4 байта little-endian.
+The address is 32-bit, 4 bytes little-endian.
 
 
 ---
 
 ## ADD
 
-Прибавить значение регистра к A.
+Add a register's value to A.
 
-Синтаксис:
+Syntax:
 
     ADD register
 
-Примеры:
+Examples:
 
     ADD B
     ADD C
 
-Эквивалент:
+Equivalent to:
 
     A = A + register
 
-Устанавливает флаг CARRY, если сумма превысила 255 (сбрасывает
-иначе) - см. `ADC` для сложения с переносом (многобайтовые числа).
-Флаг ZERO не трогает.
+Sets the CARRY flag if the sum exceeded 255 (clears it otherwise) -
+see `ADC` for addition with carry (multi-byte numbers). Does not
+touch the ZERO flag.
 
-Машинный формат:
+Machine format:
 
     04 register
 
@@ -292,26 +293,26 @@ Store A.
 
 ## SUB
 
-Вычесть значение регистра из A.
+Subtract a register's value from A.
 
-Синтаксис:
+Syntax:
 
     SUB register
 
-Примеры:
+Examples:
 
     SUB B
     SUB C
 
-Эквивалент:
+Equivalent to:
 
     A = A - register
 
-Устанавливает флаг CARRY, если потребовался заём (`A < register`),
-сбрасывает иначе - см. `SBC` для вычитания с заёмом (многобайтовые
-числа). Флаг ZERO не трогает.
+Sets the CARRY flag if a borrow was needed (`A < register`), clears
+it otherwise - see `SBC` for subtraction with borrow (multi-byte
+numbers). Does not touch the ZERO flag.
 
-Машинный формат:
+Machine format:
 
     05 register
 
@@ -320,34 +321,35 @@ Store A.
 
 ## ADC
 
-Прибавить значение регистра и флаг CARRY к A ("add with carry").
+Add a register's value and the CARRY flag to A ("add with carry").
 
-Синтаксис:
+Syntax:
 
     ADC register
 
-Эквивалент:
+Equivalent to:
 
     A = A + register + CARRY
 
-Обновляет CARRY так же, как `ADD`. Нужен для сложения чисел шире
-одного байта: сложить младшие байты через `ADD` (перенос попадёт в
-CARRY), затем старшие байты через `ADC` (учтёт этот перенос).
+Updates CARRY the same way as `ADD`. Needed for adding numbers wider
+than one byte: add the low bytes with `ADD` (the carry lands in
+CARRY), then add the high bytes with `ADC` (which accounts for that
+carry).
 
-Пример сложения двух 16-битных чисел (`A:C` = `A1:C1` + `A2:C2`,
-младший байт в `C`, старший в `A`):
+Example of adding two 16-bit numbers (`A:C` = `A1:C1` + `A2:C2`, low
+byte in `C`, high byte in `A`):
 
-    LDI A, 244   ; младший байт первого числа
-    LDI B, 50    ; младший байт второго числа
-    ADD B        ; A = сумма младших байт, CARRY = был ли перенос
+    LDI A, 244   ; low byte of the first number
+    LDI B, 50    ; low byte of the second number
+    ADD B        ; A = sum of low bytes, CARRY = whether it carried
     PUSH A
-    POP C        ; C = младший байт результата
+    POP C        ; C = low byte of the result
 
-    LDI A, 1     ; старший байт первого числа
-    LDI B, 0     ; старший байт второго числа
-    ADC B        ; A = сумма старших байт + перенос из ADD выше
+    LDI A, 1     ; high byte of the first number
+    LDI B, 0     ; high byte of the second number
+    ADC B        ; A = sum of high bytes + carry from the ADD above
 
-Машинный формат:
+Machine format:
 
     1F register
 
@@ -356,21 +358,22 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## SBC
 
-Вычесть значение регистра и флаг CARRY из A ("subtract with borrow").
+Subtract a register's value and the CARRY flag from A ("subtract with
+borrow").
 
-Синтаксис:
+Syntax:
 
     SBC register
 
-Эквивалент:
+Equivalent to:
 
     A = A - register - CARRY
 
-Обновляет CARRY так же, как `SUB`. Симметричен `ADC` - используется
-для вычитания многобайтовых чисел (сначала `SUB` на младших байтах,
-затем `SBC` на старших).
+Updates CARRY the same way as `SUB`. Symmetric to `ADC` - used for
+subtracting multi-byte numbers (`SUB` on the low bytes first, then
+`SBC` on the high bytes).
 
-Машинный формат:
+Machine format:
 
     20 register
 
@@ -379,27 +382,27 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## CMP
 
-Сравнить A с другим регистром.
+Compare A with another register.
 
-Синтаксис:
+Syntax:
 
     CMP register
 
-Пример:
+Example:
 
     CMP B
 
-Если:
+If:
 
     A == B
 
-устанавливается флаг ZERO (и сбрасывается иначе).
+the ZERO flag is set (and cleared otherwise).
 
-Дополнительно устанавливает флаг CARRY, если `A < B` (и сбрасывает
-иначе) - см. раздел "2. Регистры" (FLAGS) про полноценное
-беззнаковое сравнение через ZERO+CARRY.
+Also sets the CARRY flag if `A < B` (and clears it otherwise) - see
+section "2. Registers" (FLAGS) for the full unsigned comparison
+via ZERO+CARRY.
 
-Машинный формат:
+Machine format:
 
     06 register
 
@@ -408,28 +411,28 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## MUL
 
-Умножить A на значение регистра.
+Multiply A by a register's value.
 
-Синтаксис:
+Syntax:
 
     MUL register
 
-Примеры:
+Examples:
 
     MUL B
     MUL C
 
-Эквивалент:
+Equivalent to:
 
     A = A * register
 
-Результат обрезается до 8 бит (как и переполнение `ADD`/`SUB`) —
-`A` и `register` оба 8-битные, а их произведение может доходить
-до 65025, что не помещается в один байт. Для подсчёта очков или
-других величин, которым может понадобиться больше 8 бит, нужно
-самостоятельно хранить результат в нескольких байтах.
+The result is truncated to 8 bits (like `ADD`/`SUB` overflow) - `A`
+and `register` are both 8-bit, and their product can reach up to
+65025, which doesn't fit in one byte. For scores or other values that
+might need more than 8 bits, you need to keep the result across
+several bytes yourself.
 
-Машинный формат:
+Machine format:
 
     16 register
 
@@ -438,25 +441,25 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## DIV
 
-Разделить A на значение регистра (целочисленное деление).
+Divide A by a register's value (integer division).
 
-Синтаксис:
+Syntax:
 
     DIV register
 
-Примеры:
+Examples:
 
     DIV B
     DIV C
 
-Эквивалент:
+Equivalent to:
 
     A = A / register
 
-Деление на 0 — безопасный no-op: `A` остаётся без изменений
-(вместо неопределённого поведения или аварийного завершения).
+Division by zero is a safe no-op: `A` is left unchanged (instead of
+undefined behavior or a crash).
 
-Машинный формат:
+Machine format:
 
     17 register
 
@@ -465,51 +468,51 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## MOD
 
-Остаток от деления A на значение регистра.
+Remainder of A divided by a register's value.
 
-Синтаксис:
+Syntax:
 
     MOD register
 
-Примеры:
+Examples:
 
     MOD B
     MOD C
 
-Эквивалент:
+Equivalent to:
 
     A = A % register
 
-Деление на 0 — безопасный no-op: `A` остаётся без изменений.
+Division by zero is a safe no-op: `A` is left unchanged.
 
-Машинный формат:
+Machine format:
 
     18 register
 
-`DIV`/`MOD` вместе позволяют получить и частное, и остаток от
-одного и того же числа — например, для перевода числа в
-десятичный текст (см. подпрограмму `print_number` в `boot.asm`).
+`DIV`/`MOD` together let you get both the quotient and the remainder
+of the same number - for example, to convert a number into decimal
+text (see the `print_number` routine in `boot.asm`).
 
 
 ---
 
 ## AND
 
-Побитовое И между A и значением регистра.
+Bitwise AND between A and a register's value.
 
-Синтаксис:
+Syntax:
 
     AND register
 
-Пример:
+Example:
 
     AND B
 
-Эквивалент:
+Equivalent to:
 
     A = A & register
 
-Машинный формат:
+Machine format:
 
     19 register
 
@@ -518,21 +521,21 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## OR
 
-Побитовое ИЛИ между A и значением регистра.
+Bitwise OR between A and a register's value.
 
-Синтаксис:
+Syntax:
 
     OR register
 
-Пример:
+Example:
 
     OR B
 
-Эквивалент:
+Equivalent to:
 
     A = A | register
 
-Машинный формат:
+Machine format:
 
     1A register
 
@@ -541,21 +544,21 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## XOR
 
-Побитовое исключающее ИЛИ между A и значением регистра.
+Bitwise exclusive OR between A and a register's value.
 
-Синтаксис:
+Syntax:
 
     XOR register
 
-Пример:
+Example:
 
     XOR B
 
-Эквивалент:
+Equivalent to:
 
     A = A ^ register
 
-Машинный формат:
+Machine format:
 
     1B register
 
@@ -564,17 +567,17 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## NOT
 
-Побитовое отрицание A (все биты инвертируются).
+Bitwise negation of A (every bit is inverted).
 
-Синтаксис:
+Syntax:
 
     NOT
 
-Эквивалент:
+Equivalent to:
 
     A = ~A
 
-Машинный код:
+Machine code:
 
     1C
 
@@ -583,18 +586,18 @@ CARRY), затем старшие байты через `ADC` (учтёт это
 
 ## SHL
 
-Shift Left. Сдвигает A на 1 бит влево, старший бит теряется,
-младший заполняется нулём.
+Shift Left. Shifts A one bit to the left; the high bit is lost, the
+low bit is filled with zero.
 
-Синтаксис:
+Syntax:
 
     SHL
 
-Эквивалент:
+Equivalent to:
 
     A = A << 1
 
-Машинный код:
+Machine code:
 
     1D
 
@@ -603,49 +606,49 @@ Shift Left. Сдвигает A на 1 бит влево, старший бит �
 
 ## SHR
 
-Shift Right. Сдвигает A на 1 бит вправо (логический сдвиг),
-младший бит теряется, старший заполняется нулём.
+Shift Right. Shifts A one bit to the right (logical shift); the low
+bit is lost, the high bit is filled with zero.
 
-Синтаксис:
+Syntax:
 
     SHR
 
-Эквивалент:
+Equivalent to:
 
     A = A >> 1
 
-Машинный код:
+Machine code:
 
     1E
 
-`AND`/`OR`/`XOR`/`NOT`/`SHL`/`SHR`, как и остальные арифметические
-инструкции (`ADD`/`SUB`/`MUL`/`DIV`/`MOD`), не изменяют `FLAGS` —
-флаг `ZERO` по-прежнему выставляет только `CMP`.
+`AND`/`OR`/`XOR`/`NOT`/`SHL`/`SHR`, like the other arithmetic
+instructions (`ADD`/`SUB`/`MUL`/`DIV`/`MOD`), do not change `FLAGS` -
+the `ZERO` flag is still only set by `CMP`.
 
 
 ---
 
 ## JMP
 
-Безусловный переход.
+Unconditional jump.
 
-Синтаксис:
+Syntax:
 
     JMP address
 
-Пример:
+Example:
 
     JMP 100
 
-Можно использовать метку:
+A label can be used instead:
 
     JMP loop
 
-Машинный формат:
+Machine format:
 
     07 b0 b1 b2 b3
 
-Адрес — 32-битный, 4 байта little-endian.
+The address is 32-bit, 4 bytes little-endian.
 
 
 ---
@@ -654,13 +657,13 @@ Shift Right. Сдвигает A на 1 бит вправо (логический
 
 Jump if Zero.
 
-Переход, если установлен флаг ZERO.
+Jumps if the ZERO flag is set.
 
-Синтаксис:
+Syntax:
 
     JZ address
 
-Пример:
+Example:
 
     CMP B
     JZ equal
@@ -672,13 +675,13 @@ Jump if Zero.
 
 Jump if Not Zero.
 
-Переход, если флаг ZERO не установлен.
+Jumps if the ZERO flag is not set.
 
-Синтаксис:
+Syntax:
 
     JNZ address
 
-Пример:
+Example:
 
     CMP B
     JNZ not_equal
@@ -690,18 +693,18 @@ Jump if Not Zero.
 
 Jump if Carry.
 
-Переход, если установлен флаг CARRY.
+Jumps if the CARRY flag is set.
 
-Синтаксис:
+Syntax:
 
     JC address
 
-Пример (переход, если A < B):
+Example (jump if A < B):
 
     CMP B
     JC less_than
 
-Машинный формат:
+Machine format:
 
     21 b0 b1 b2 b3
 
@@ -712,18 +715,18 @@ Jump if Carry.
 
 Jump if Not Carry.
 
-Переход, если флаг CARRY не установлен.
+Jumps if the CARRY flag is not set.
 
-Синтаксис:
+Syntax:
 
     JNC address
 
-Пример (переход, если A >= B):
+Example (jump if A >= B):
 
     CMP B
     JNC greater_or_equal
 
-Машинный формат:
+Machine format:
 
     22 b0 b1 b2 b3
 
@@ -732,18 +735,18 @@ Jump if Not Carry.
 
 ## PUSH
 
-Положить значение регистра на стек.
+Push a register's value onto the stack.
 
-Синтаксис:
+Syntax:
 
     PUSH register
 
-Примеры:
+Examples:
 
     PUSH A
     PUSH B
 
-Машинный формат:
+Machine format:
 
     0A register
 
@@ -752,51 +755,50 @@ Jump if Not Carry.
 
 ## POP
 
-Снять значение со стека в регистр.
+Pop a value off the stack into a register.
 
-Синтаксис:
+Syntax:
 
     POP register
 
-Примеры:
+Examples:
 
     POP A
     POP B
 
-Машинный формат:
+Machine format:
 
     0B register
 
-Пример сохранения и восстановления A:
+Example of saving and restoring A:
 
     PUSH A
     LDI A, 0
-    POP A   ; A снова равен исходному значению
+    POP A   ; A is back to its original value
 
 
 ---
 
 ## CALL
 
-Вызвать подпрограмму.
+Call a subroutine.
 
-Кладёт на стек адрес возврата (адрес инструкции,
-следующей за CALL, 4 байта), затем переходит по указанному
-адресу.
+Pushes the return address (the address of the instruction right after
+CALL, 4 bytes) onto the stack, then jumps to the given address.
 
-Синтаксис:
+Syntax:
 
     CALL address
 
-Пример:
+Example:
 
     CALL subroutine
 
-Можно использовать метку:
+A label can be used instead:
 
     CALL setD
 
-Машинный формат:
+Machine format:
 
     0C b0 b1 b2 b3
 
@@ -805,20 +807,20 @@ Jump if Not Carry.
 
 ## RET
 
-Вернуться из подпрограммы.
+Return from a subroutine.
 
-Снимает со стека адрес возврата (4 байта), положенный туда
-инструкцией CALL, и переходит по нему.
+Pops the return address (4 bytes) off the stack, pushed there by the
+CALL instruction, and jumps to it.
 
-Синтаксис:
+Syntax:
 
     RET
 
-Машинный код:
+Machine code:
 
     0D
 
-Пример вызова и возврата подпрограммы:
+Example of calling and returning from a subroutine:
 
     CALL setD
 
@@ -836,18 +838,18 @@ setD:
 
 Enable Interrupts.
 
-Разрешить процессору принимать прерывания.
+Allow the processor to accept interrupts.
 
-Синтаксис:
+Syntax:
 
     EI
 
-Машинный код:
+Machine code:
 
     0E
 
-По умолчанию (после reset) прерывания запрещены —
-их нужно явно разрешить через EI.
+By default (after reset) interrupts are disabled - they must be
+explicitly enabled with EI.
 
 
 ---
@@ -856,13 +858,13 @@ Enable Interrupts.
 
 Disable Interrupts.
 
-Запретить процессору принимать прерывания.
+Prevent the processor from accepting interrupts.
 
-Синтаксис:
+Syntax:
 
     DI
 
-Машинный код:
+Machine code:
 
     0F
 
@@ -873,20 +875,20 @@ Disable Interrupts.
 
 Return from Interrupt.
 
-Вернуться из обработчика прерывания: снимает со стека
-FLAGS (1 байт) и адрес возврата (4 байта, в этом порядке),
-восстанавливает их и снова разрешает прерывания (аналог EI).
+Return from an interrupt handler: pops FLAGS (1 byte) and the return
+address (4 bytes, in that order) off the stack, restores them, and
+re-enables interrupts (same effect as EI).
 
-Синтаксис:
+Syntax:
 
     RETI
 
-Машинный код:
+Machine code:
 
     10
 
-См. раздел "10. Прерывания" — там же пример полного
-обработчика.
+See section "10. Interrupts" - it includes an example of a complete
+handler.
 
 
 ---
@@ -895,17 +897,17 @@ FLAGS (1 байт) и адрес возврата (4 байта, в этом п�
 
 Load HL.
 
-Загрузить 32-битное значение в регистр-указатель HL.
+Load a 32-bit value into the HL pointer register.
 
-Синтаксис:
+Syntax:
 
     LDHL value
 
-Пример:
+Example:
 
     LDHL 0xF0000007
 
-Машинный формат:
+Machine format:
 
     11 b0 b1 b2 b3
 
@@ -916,18 +918,17 @@ Load HL.
 
 Store Indexed.
 
-Записать содержимое регистра A в память по адресу,
-находящемуся в HL.
+Write the contents of register A to the memory address held in HL.
 
-Синтаксис:
+Syntax:
 
     STX
 
-Эквивалент:
+Equivalent to:
 
     memory[HL] = A
 
-Машинный код:
+Machine code:
 
     12
 
@@ -938,18 +939,17 @@ Store Indexed.
 
 Load Indexed.
 
-Загрузить в регистр A значение из памяти по адресу,
-находящемуся в HL.
+Load register A with the value from the memory address held in HL.
 
-Синтаксис:
+Syntax:
 
     LDX
 
-Эквивалент:
+Equivalent to:
 
     A = memory[HL]
 
-Машинный код:
+Machine code:
 
     13
 
@@ -960,18 +960,18 @@ Load Indexed.
 
 Increment HL.
 
-Увеличить HL на 1.
+Increase HL by 1.
 
-Синтаксис:
+Syntax:
 
     INCHL
 
-Машинный код:
+Machine code:
 
     14
 
-Пример: последовательная запись двух символов в Text VRAM
-без указания адреса каждой ячейки вручную:
+Example: writing two characters into Text VRAM in sequence without
+specifying each cell's address by hand:
 
     LDHL 0xF0000007
 
@@ -990,27 +990,26 @@ Increment HL.
 
 Add to HL (16-bit).
 
-Прибавить к HL 16-битное значение, собранное из пары
-регистров: `HL += (regHigh << 8) | regLow`. В отличие от
-`INCHL` (сдвиг на 1 за шаг), это сдвиг на произвольное
-runtime-смещение за ОДИН шаг — нужен, когда смещение
-заранее не известно и может быть большим (индекс массива,
-координата на экране `y*80+x` и т.п.), а гонять `INCHL` в
-цикле по нему слишком дорого.
+Adds a 16-bit value, assembled from a pair of registers, to HL:
+`HL += (regHigh << 8) | regLow`. Unlike `INCHL` (a shift of 1 per
+step), this shifts by an arbitrary run-time offset in ONE step -
+needed when the offset isn't known ahead of time and can be large
+(an array index, an on-screen coordinate `y*80+x`, etc.), where
+looping `INCHL` that many times would be too expensive.
 
-Синтаксис:
+Syntax:
 
     ADDHL regHigh, regLow
 
-Машинный код:
+Machine code:
 
     23 <regHigh> <regLow>
 
-где `<regHigh>`/`<regLow>` — код регистра (A=0, B=1, C=2,
-D=3), как в `LDI`.
+where `<regHigh>`/`<regLow>` is a register code (A=0, B=1, C=2, D=3),
+same as in `LDI`.
 
-Пример: сдвинуть HL на 300 (`0x012C` = старший байт 1,
-младший 44), используя пару регистров B/C:
+Example: shift HL by 300 (`0x012C` - high byte 1, low byte 44), using
+the register pair B/C:
 
     LDHL 0xF0000007
 
@@ -1018,24 +1017,24 @@ D=3), как в `LDI`.
     LDI C, 44
     ADDHL B, C      ; HL = 0xF0000007 + 300
 
-Именно на этой инструкции построены `__mc_hladd` и
-`__mc_screen_offset` в Мини-C — компилятор считает нужное
-смещение в паре регистров обычным `ADD`/`ADC` (см. "Пример:
-сложение многобайтовых чисел" выше) и одним `ADDHL`
-применяет его к `HL`, вместо цикла из сотен/тысяч `INCHL`.
+`__mc_hladd` and `__mc_screen_offset` in Mini-C are built on exactly
+this instruction - the compiler accumulates the needed offset into a
+register pair with plain `ADD`/`ADC` (see "Example: adding multi-byte
+numbers" above) and applies it to `HL` with a single `ADDHL`, instead
+of a loop of hundreds/thousands of `INCHL`s.
 
 
 ---
 
 ## HLT
 
-Остановить процессор.
+Halt the processor.
 
-Синтаксис:
+Syntax:
 
     HLT
 
-Машинный код:
+Machine code:
 
     FF
 
@@ -1046,56 +1045,55 @@ D=3), как в `LDI`.
 
 Define Byte.
 
-Резервирует один байт данных со значением `value`. Это
-псевдо-инструкция — не опкод процессора, а указание
-ассемблеру зарезервировать байт памяти прямо в потоке
-кода, обычно под меткой.
+Reserves one byte of data with the value `value`. This is a
+pseudo-instruction - not a CPU opcode, but an instruction to the
+assembler to reserve a byte of memory right in the code stream,
+usually under a label.
 
-Синтаксис:
+Syntax:
 
     label: DB value
 
-Пример:
+Example:
 
     quit: DB 0
 
-Адрес такой переменной вычисляется тем же счётчиком
-адреса, что и адреса инструкций, — значит `DB` физически
-не может наложиться на код. Это единственный способ в
-этом ассемблере резервировать данные, не подбирая адрес
-вручную (см. также раздел "4. Метки" ниже).
+Such a variable's address is computed by the same address counter as
+instruction addresses - which means `DB` can never physically overlap
+with code. This is the only way in this assembler to reserve data
+without picking an address by hand (see also section "4. Labels"
+below).
 
-**Важно**: `DB`, как и метки подпрограмм, нужно размещать
-там, где до него не доходит обычное выполнение (обычно —
-в конце файла, после последнего `HLT`/`RETI`), иначе
-процессор попытается исполнить этот байт как опкод.
+**Important**: `DB`, like subroutine labels, must be placed somewhere
+normal execution never reaches (usually at the end of the file, after
+the last `HLT`/`RETI`) - otherwise the processor will try to execute
+that byte as an opcode.
 
 
 ---
 
-# 4. Метки
+# 4. Labels
 
-Метки позволяют обращаться к адресам программы
-по имени.
+Labels let you refer to program addresses by name.
 
-Синтаксис:
+Syntax:
 
     label:
 
-Пример:
+Example:
 
     loop:
         JMP loop
 
 
-Метки можно использовать в инструкциях перехода:
+Labels can be used in jump instructions:
 
     JMP loop
     JZ success
     JNZ loop
 
 
-Пример:
+Example:
 
     LDI A, 10
 
@@ -1109,79 +1107,78 @@ loop:
     HLT
 
 
-Ассемблер автоматически заменяет имя метки
-на соответствующий адрес.
+The assembler automatically replaces the label name with the
+corresponding address.
 
 
-## Данные под меткой (DB)
+## Data under a label (DB)
 
-Метка перед `DB` даёт переменной имя вместо адреса:
+A label before `DB` gives a variable a name instead of an address:
 
     quit: DB 0
     ...
     STA quit
     LDA quit
 
-`LDA`/`STA` (как и `JMP`/`CALL`) принимают и метку, и
-голый адрес — использовать имя удобнее и безопаснее: адрес
-вычисляет ассемблер, вручную подбирать его не нужно.
+`LDA`/`STA` (like `JMP`/`CALL`) accept either a label or a bare
+address - using a name is more convenient and safer: the assembler
+computes the address, you don't have to pick it by hand.
 
-**Почему это важно.** У этого ассемблера нет разделения
-кода и данных (нет `ORG`, нет секций) — все байты, включая
-`DB`, ложатся в общий, последовательно растущий поток
-адресов. Если задать адрес переменной вручную (например,
-`STA 0x0102`) и программа потом вырастет настолько, что
-код дойдёт до этого адреса, запись в переменную начнёт
-затирать собственный исполняемый код программы — с трудно
-диагностируемыми последствиями (выполнение "уезжает" в
-случайное место). Использование `DB` полностью исключает
-этот класс ошибок: адрес переменной всегда считается тем же
-счётчиком, что и адреса инструкций, поэтому наложение
-структурно невозможно.
+**Why this matters.** This assembler has no separation between code
+and data (no `ORG`, no sections) - all bytes, including `DB`, land in
+one continuously growing stream of addresses. If you set a variable's
+address by hand (e.g. `STA 0x0102`) and the program later grows large
+enough that the code reaches that address, writing to the variable
+will start overwriting the program's own executable code - with
+consequences that are hard to diagnose (execution "drifts" off to a
+random place). Using `DB` rules this whole class of bug out entirely:
+a variable's address is always computed by the same counter as
+instruction addresses, so overlap is structurally impossible.
 
-Явно захардкоженный адрес переменной оправдан только тогда,
-когда к нему обращается код *вне* этой программы — например,
-`main.cpp` читает через `Bus` фиксированные адреса
-`0x00010000`/`0x00010001`/`0x00010002`/`0x00010003` для отрисовки и
-диагностики (см. `boot.asm`). Раз `main.cpp` не видит меток
-ассемблера, такие "интерфейсные" адреса приходится фиксировать
-вручную и держать достаточно далеко от возможного роста кода.
+An explicitly hardcoded variable address is only justified when it's
+accessed by code *outside* this program - for example, `main.cpp`
+reads the fixed addresses `0x00010000`/`0x00010001`/`0x00010002`/
+`0x00010003` through the `Bus` for rendering and diagnostics (see
+`boot.asm`). Since `main.cpp` can't see assembler labels, such
+"interface" addresses have to be fixed by hand and kept far enough
+away from any likely code growth.
 
-**Реальный случай**: изначально эти адреса были на `0x00001000`
-(4096). Когда `boot.asm` подрос до ~4.6 КБ (добавились команды
-`dir`/`type`/`cd`), код дорос до этой границы, и `boot.asm` начал
-сам себя затирать записью в "интерфейсные" адреса — терминал
-переставал рисовать баннер без единой ошибки ассемблера (нашли
-диагностикой размера `machineCode.size()`). Адреса перенесены на
-`0x00010000` (65536) с большим запасом.
+**A real-world case**: these addresses originally sat at `0x00001000`
+(4096). When `boot.asm` grew to about 4.6 KB (after adding the
+`dir`/`type`/`cd` commands), the code grew right up to that boundary,
+and `boot.asm` started overwriting itself by writing to those
+"interface" addresses - the terminal stopped drawing the banner
+without a single assembler error (found by checking
+`machineCode.size()`). The addresses were moved to `0x00010000`
+(65536), with plenty of headroom.
 
 
 ---
 
-# 5. Комментарии
+# 5. Comments
 
-Комментарии начинаются с символа:
+Comments start with the character:
 
     ;
 
-Пример:
+Example:
 
-    LDI A, 10 ; Загружаем 10 в A
+    LDI A, 10 ; Load 10 into A
 
-Всё после `;` до конца строки игнорируется.
+Everything after `;` to the end of the line is ignored.
 
 
 ---
 
-# 6. Числа
+# 6. Numbers
 
-Поддерживаются десятичные числа:
+Decimal numbers are supported:
 
     10
     42
     255
 
-И шестнадцатеричные:
+As are hexadecimal ones:
 
     0x10
     0x2A
@@ -1190,9 +1187,9 @@ loop:
 
 ---
 
-# 7. Пример программы
+# 7. Example program
 
-Пример простой программы:
+A simple example program:
 
     LDI A, 10
     LDI B, 20
@@ -1214,7 +1211,7 @@ success:
     HLT
 
 
-Результат:
+Result:
 
     A = 30
     B = 20
@@ -1224,12 +1221,12 @@ success:
 
 ---
 
-# 8. Таблица инструкций
+# 8. Instruction table
 
-Столбец "Байт" — полная длина инструкции в машинном коде
-(опкод + операнды).
+The "Bytes" column is the full length of the instruction in machine
+code (opcode + operands).
 
-| Opcode | Instruction | Arguments | Байт | Description |
+| Opcode | Instruction | Arguments | Bytes | Description |
 |--------|-------------|-----------|------|-------------|
 | 01 | LDI | register, value | 3 | Load immediate |
 | 02 | LDA | address | 5 | Load A from memory |
@@ -1268,56 +1265,55 @@ success:
 | 23 | ADDHL | regHigh, regLow | 3 | HL += (regHigh << 8) \| regLow |
 | FF | HLT | — | 1 | Halt CPU |
 
-Регистры `A`/`B`/`C`/`D` и значения в `LDI`/`ADD`/`SUB`/`CMP`/
-`PUSH`/`POP` остаются 8-битными — 32-битная адресация касается
-только адресов/указателей (`LDA`/`STA`/`JMP`/`JZ`/`JNZ`/`CALL`/
-`LDHL`), не данных.
+Registers `A`/`B`/`C`/`D` and the values in `LDI`/`ADD`/`SUB`/`CMP`/
+`PUSH`/`POP` stay 8-bit - 32-bit addressing only applies to
+addresses/pointers (`LDA`/`STA`/`JMP`/`JZ`/`JNZ`/`CALL`/`LDHL`), not
+to data.
 
 
 ---
 
-# 9. Устройства на шине (Memory-Mapped I/O)
+# 9. Devices on the bus (Memory-Mapped I/O)
 
-Помимо оперативной памяти, к процессору через шину (Bus)
-могут быть подключены другие устройства. Каждое устройство
-занимает свой диапазон адресов.
+Besides RAM, other devices can be attached to the processor through
+the bus (Bus). Each device occupies its own address range.
 
-Текущая карта адресного пространства:
+Current address space map:
 
-| Диапазон адресов | Устройство |
+| Address range | Device |
 |-------------------|------------|
-| 0x00000000 - 0x003FFFFF | Memory (RAM, 4 МБ) |
+| 0x00000000 - 0x003FFFFF | Memory (RAM, 4 MB) |
 | 0xF0000000 - 0xF0000004 | Timer |
 | 0xF0000005 - 0xF0000006 | Keyboard |
-| 0xF0000007 - 0xF00007D8 | Text VRAM (сетка + SCROLL + CLEAR) |
-| 0xF00007D9 - 0xF00007E5 | DebugPort (PC/SP/HL/FLAGS, только чтение) |
-| 0xF00007E6 - 0xF00007F8 | Disk C (папка "C" рядом с exe) |
-| 0xF00007F9 - 0xF000080B | Disk D (папка "D" рядом с exe) |
-| 0xF000080C - 0xF0000FDD | TextAttr (цвет символа/фона + SCROLL + CLEAR) |
-| 0xF0000FDE - 0xF0000FFB | VideoCard (растровый режим 320x240, 16 спрайтов, тайлы+скролл) |
-| 0xF0000FFC - 0xF0000FFD | Clock (часы реального времени, std::chrono) |
-| 0xF0000FFE - 0xF0001011 | PngLoader (декодирование PNG в спрайты/тайлы) |
-| 0xF0001012 - 0xF000101F | MapLoader (текстовая карта тайлов) |
-| 0xF0001020 - 0xF0001041 | ModLoader (разбор .mod-файлов) |
+| 0xF0000007 - 0xF00007D8 | Text VRAM (grid + SCROLL + CLEAR) |
+| 0xF00007D9 - 0xF00007E5 | DebugPort (PC/SP/HL/FLAGS, read-only) |
+| 0xF00007E6 - 0xF00007F8 | Disk C (folder "C" next to the exe) |
+| 0xF00007F9 - 0xF000080B | Disk D (folder "D" next to the exe) |
+| 0xF000080C - 0xF0000FDD | TextAttr (character/background color + SCROLL + CLEAR) |
+| 0xF0000FDE - 0xF0000FFB | VideoCard (320x240 bitmap mode, 16 sprites, tiles+scroll) |
+| 0xF0000FFC - 0xF0000FFD | Clock (real-time clock, std::chrono) |
+| 0xF0000FFE - 0xF0001011 | PngLoader (decodes PNG into sprites/tiles) |
+| 0xF0001012 - 0xF000101F | MapLoader (text tile map) |
+| 0xF0001020 - 0xF0001041 | ModLoader (parses `.mod` files) |
 | 0xF0001042 - 0xF0001044 | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME) |
-| 0xF0001045 - 0xF0001065 | Gpu3D (вершины/треугольники/PRESENT) |
+| 0xF0001045 - 0xF0001065 | Gpu3D (vertices/triangles/PRESENT) |
 
-MMIO вынесено далеко от RAM (на `0xF0000000`), а не сразу за
-её текущим концом — так RAM можно будет расширять в будущем, не
-трогая и не переезжая устройства. Диапазоны не пересекаются,
-поэтому порядок регистрации устройств на шине не важен.
+MMIO is placed far from RAM (starting at `0xF0000000`) rather than
+right after its current end - this way RAM can be expanded in the
+future without touching or relocating any device. The ranges don't
+overlap, so the order devices are registered on the bus doesn't
+matter.
 
 ## Timer
 
-Считает такты. Один такт происходит на каждое
-обращение процессора к шине (чтение опкода, операнда
-или доступ к памяти/устройству), а не на каждую
-инструкцию.
+Counts ticks. One tick happens on every bus access the processor
+makes (reading an opcode, an operand, or accessing memory/a device),
+not per instruction.
 
-Разные инструкции занимают разное число тактов, в
-зависимости от того, сколько байт они читают/пишут:
+Different instructions take a different number of ticks, depending on
+how many bytes they read/write:
 
-| Инструкция | Тактов |
+| Instruction | Ticks |
 |------------|--------|
 | LDI | 3 |
 | LDA | 6 |
@@ -1356,39 +1352,39 @@ MMIO вынесено далеко от RAM (на `0xF0000000`), а не сра�
 | JNC | 5 |
 | HLT | 1 |
 
-`LDA`/`STA`/`JMP`/`JZ`/`JNZ`/`CALL`/`LDHL` стали дороже, чем
-были на 16-битной адресации (было `LDA/STA`=4, `JMP/JZ/JNZ/LDHL`=3,
-`CALL`=5, `RET`=3, `RETI`=4) — адрес теперь 4 байта вместо 2.
+`LDA`/`STA`/`JMP`/`JZ`/`JNZ`/`CALL`/`LDHL` became more expensive than
+they were under 16-bit addressing (it used to be `LDA/STA`=4,
+`JMP/JZ/JNZ/LDHL`=3, `CALL`=5, `RET`=3, `RETI`=4) - the address is now
+4 bytes instead of 2.
 
-Вход в прерывание (см. раздел 10) не является
-инструкцией из ассемблера, но тоже стоит тактов:
-5 тактов (запись 4 байт PC и 1 байта FLAGS на стек).
+Entering an interrupt (see section 10) isn't an assembler instruction,
+but it also costs ticks: 5 ticks (writing 4 bytes of PC and 1 byte of
+FLAGS to the stack).
 
-| Адрес | Регистр | Чтение | Запись |
+| Address | Register | Read | Write |
 |-------|---------|--------|--------|
-| 0xF0000000 | COUNT_LOW | Младший байт счётчика | Сбрасывает счётчик в 0 |
-| 0xF0000001 | COUNT_HIGH | Старший байт счётчика | Сбрасывает счётчик в 0 |
-| 0xF0000002 | CMP_LOW | Младший байт порога сравнения | Устанавливает младший байт порога |
-| 0xF0000003 | CMP_HIGH | Старший байт порога сравнения | Устанавливает старший байт порога |
-| 0xF0000004 | CONTROL | Бит 0 = ENABLE, бит 1 = PENDING | Бит 0 записанного значения = ENABLE; любая запись сбрасывает PENDING |
+| 0xF0000000 | COUNT_LOW | Low byte of the counter | Resets the counter to 0 |
+| 0xF0000001 | COUNT_HIGH | High byte of the counter | Resets the counter to 0 |
+| 0xF0000002 | CMP_LOW | Low byte of the compare threshold | Sets the low byte of the threshold |
+| 0xF0000003 | CMP_HIGH | High byte of the compare threshold | Sets the high byte of the threshold |
+| 0xF0000004 | CONTROL | Bit 0 = ENABLE, bit 1 = PENDING | Bit 0 of the written value = ENABLE; any write clears PENDING |
 
-Счётчик 16-битный (сам по себе, независимо от того, что
-адресация теперь 32-битная). Когда таймер включён (`ENABLE=1`)
-и счётчик достигает значения порога сравнения (`CMP`), он
-сбрасывается в 0 и устанавливается флаг `PENDING` —
-запрос прерывания (см. раздел 10). Порог `CMP = 0`
-считается "выключено" (никогда не сработает), даже если
+The counter is 16-bit (on its own, regardless of addressing now being
+32-bit). When the timer is enabled (`ENABLE=1`) and the counter
+reaches the compare threshold (`CMP`), it resets to 0 and sets the
+`PENDING` flag - an interrupt request (see section 10). A threshold
+of `CMP = 0` is treated as "off" (will never fire), even if
 `ENABLE=1`.
 
-Пример чтения значения таймера в регистр A:
+Example of reading the timer's value into register A:
 
-    LDA 0xF0000000  ; младший байт таймера в A
+    LDA 0xF0000000  ; timer's low byte into A
 
-Пример сброса счётчика таймера:
+Example of resetting the timer's counter:
 
-    STA 0xF0000000  ; любое значение сбрасывает счётчик
+    STA 0xF0000000  ; any value resets the counter
 
-Пример настройки таймера на прерывание раз в 1000 тактов:
+Example of setting up the timer to interrupt once every 1000 ticks:
 
     LDI A, 0xE8
     STA 0xF0000002      ; CMP_LOW  = 0xE8
@@ -1400,32 +1396,31 @@ MMIO вынесено далеко от RAM (на `0xF0000000`), а не сра�
 
 ## Clock
 
-Настоящие часы реального времени (`std::chrono::steady_clock`) - в
-отличие от `Timer` выше (чей `counter` растёт на каждое обращение к
-шине, а значит зависит от того, сколько шинных операций уходит на
-кусок кода, а не от реального времени), `Clock` всегда отдаёт РЕАЛЬНО
-прошедшие миллисекунды с момента последнего сброса, независимо от
-скорости хоста и от того, как часто его опрашивают. Нужен там, где
-важна настоящая, а не "тактовая", синхронизация - например, пауза
-между кадрами анимации (см. `C/DEMOS/DEMO.ASM`).
+A real real-time clock (`std::chrono::steady_clock`) - unlike `Timer`
+above (whose `counter` increases on every bus access, and so depends
+on how many bus operations a piece of code takes rather than on real
+time), `Clock` always returns the ACTUAL milliseconds elapsed since
+the last reset, regardless of host speed or how often it's polled.
+Needed wherever real (not "tick") timing matters - for example, the
+pause between animation frames (see `C/DEMOS/DEMO.ASM`).
 
-| Адрес | Регистр | Чтение | Запись |
+| Address | Register | Read | Write |
 |-------|---------|--------|--------|
-| 0xF0000FFC | MILLIS_LOW | Младший байт прошедших мс | Сбрасывает часы (обнуляет прошедшее время) |
-| 0xF0000FFD | MILLIS_HIGH | Старший байт прошедших мс | Сбрасывает часы |
+| 0xF0000FFC | MILLIS_LOW | Low byte of elapsed ms | Resets the clock (zeroes elapsed time) |
+| 0xF0000FFD | MILLIS_HIGH | High byte of elapsed ms | Resets the clock |
 
-16-битное значение мс переполняется (оборачивается через 0) примерно
-раз в 65 секунд - для пауз между кадрами (десятки миллисекунд) этого
-с огромным запасом достаточно.
+The 16-bit ms value wraps around (through 0) roughly once every 65
+seconds - for frame pauses (tens of milliseconds), that's more than
+enough headroom.
 
-Пример - ждать ровно 60 кадров в секунду (~16.7 мс на кадр):
+Example - waiting for exactly 60 frames per second (~16.7 ms/frame):
 
     LDI A, 0
-    STA 0xF0000FFC      ; сброс часов
+    STA 0xF0000FFC      ; reset the clock
 
 wait_frame:
 
-    LDA 0xF0000FFD      ; MILLIS_HIGH - страховка на случай >255 мс
+    LDA 0xF0000FFD      ; MILLIS_HIGH - guard in case of >255 ms
     LDI B, 0
     CMP B
     JNZ frame_done
@@ -1440,40 +1435,41 @@ frame_done:
 
 ## Keyboard
 
-Читает реальные нажатия клавиш с консоли. Каждое
-нажатие попадает в очередь (16 байт), откуда процессор
-вычитывает их по одному через регистр DATA.
+Reads real keypresses from the console. Each keypress goes into a
+queue (16 bytes), from which the processor reads them one at a time
+through the DATA register.
 
-В очередь попадают нажатия НЕ только из окна консоли: пока открыто
-графическое окно `VideoCard` (`MODE_ON`), оно само ловит нажатия
-(`WM_CHAR`) и кладёт их в ту же очередь - иначе клавиатура "переставала
-бы работать", стоило пользователю кликнуть по графическому окну и
-забрать у консоли фокус ОС (`_kbhit()`/`_getch()`, которыми `Keyboard`
-опрашивает консольный ввод, получают нажатия только пока фокус на
-консоли). Для ассемблерной программы разницы нет - откуда бы ни пришло
-нажатие, оно просто лежит в общей очереди.
+Keypresses land in the queue not only from the console window: while
+the `VideoCard` graphics window is open (`MODE_ON`), it catches
+keypresses itself (`WM_CHAR`) and puts them into the same queue -
+otherwise the keyboard would "stop working" the moment the user
+clicked on the graphics window and took OS focus away from the
+console (`_kbhit()`/`_getch()`, which `Keyboard` uses to poll console
+input, only receive keypresses while the console has focus). For an
+assembly program it makes no difference - wherever a keypress came
+from, it just sits in the shared queue.
 
-| Адрес | Регистр | Чтение | Запись |
+| Address | Register | Read | Write |
 |-------|---------|--------|--------|
-| 0xF0000005 | DATA | Снять и вернуть следующий байт из очереди (0, если очередь пуста) | Игнорируется |
-| 0xF0000006 | CONTROL | Бит 0 = ENABLE, бит 1 = HAS_DATA (очередь не пуста) | Бит 0 записанного значения = ENABLE |
+| 0xF0000005 | DATA | Pop and return the next byte from the queue (0 if the queue is empty) | Ignored |
+| 0xF0000006 | CONTROL | Bit 0 = ENABLE, bit 1 = HAS_DATA (queue not empty) | Bit 0 of the written value = ENABLE |
 
-Если очередь переполнена (набрано более 16 непрочитанных
-клавиш), новые нажатия теряются.
+If the queue overflows (more than 16 unread keys accumulate), new
+keypresses are dropped.
 
-Прерывание клавиатуры — уровневое, а не защёлка: оно активно,
-пока `ENABLE=1` и очередь не пуста, и само снимается, когда
-обработчик вычитывает данные через `DATA` (в отличие от
-`Timer`, здесь нет отдельного подтверждения записью в
-`CONTROL`). Если во время обработки одного прерывания в
-очередь попало ещё несколько клавиш, процессор сразу получит
-следующее прерывание и обработает их один за другим.
+The keyboard interrupt is level-triggered, not edge-triggered: it's
+active as long as `ENABLE=1` and the queue isn't empty, and clears
+itself once the handler reads data through `DATA` (unlike `Timer`,
+there's no separate acknowledgment by writing to `CONTROL`). If
+several more keys land in the queue while one interrupt is being
+handled, the processor will immediately get the next interrupt and
+process them one after another.
 
-Пример чтения кода нажатой клавиши в регистр A:
+Example of reading the pressed key's code into register A:
 
     LDA 0xF0000005
 
-Пример включения прерываний от клавиатуры:
+Example of enabling keyboard interrupts:
 
     LDI A, 1
     STA 0xF0000006      ; ENABLE = 1
@@ -1481,37 +1477,35 @@ frame_done:
 
 ## Text VRAM
 
-Текстовый экран 80x25 символов (2000 байт) плюс регистр
-`SCROLL`. Каждый байт сетки — один символ на экране. Адрес
-ячейки:
+An 80x25-character text screen (2000 bytes) plus a `SCROLL` register.
+Each byte of the grid is one character on screen. Cell address:
 
     address = 0xF0000007 + y * 80 + x
 
-где `x` — столбец (0-79), `y` — строка (0-24).
+where `x` is the column (0-79) and `y` is the row (0-24).
 
-| Адрес | Регистр | Описание |
+| Address | Register | Description |
 |-------|---------|----------|
-| 0xF0000007 - 0xF00007D6 | сетка 80x25 | один байт на символ (ASCII) |
-| 0xF00007D7 | SCROLL | запись любого значения сдвигает весь экран на одну строку вверх, последняя строка очищается |
-| 0xF00007D8 | CLEAR | запись любого значения заполняет всю сетку пробелами |
+| 0xF0000007 - 0xF00007D6 | 80x25 grid | one byte per character (ASCII) |
+| 0xF00007D7 | SCROLL | writing any value shifts the whole screen up one row, the last row is cleared |
+| 0xF00007D8 | CLEAR | writing any value fills the whole grid with spaces |
 
-Хранит один байт на символ (как классический текстовый режим
-VGA) — поддерживаются только однобайтовые коды (ASCII), не
-UTF-8. У сетки нет прерываний и регистров управления, кроме
-`SCROLL` — обычный блок памяти, куда можно писать и откуда
-можно читать через `LDA`/`STA`.
+Stores one byte per character (like the classic VGA text mode) - only
+single-byte codes (ASCII) are supported, not UTF-8. The grid has no
+interrupts or control registers besides `SCROLL` - it's a plain block
+of memory you can write to and read from with `LDA`/`STA`.
 
-Пример вывода "Hi" в левый верхний угол экрана (фиксированные
-адреса, без HL):
+Example of printing "Hi" in the top-left corner of the screen (fixed
+addresses, no HL):
 
     LDI A, 72
     STA 0xF0000007      ; H
     LDI A, 105
     STA 0xF0000008      ; i
 
-Для последовательного вывода (без вычисления адреса каждой
-ячейки вручную) используется косвенная адресация через `HL`/
-`STX`/`INCHL` — см. раздел "3. Инструкции". Пример:
+For sequential output (without computing each cell's address by hand)
+indirect addressing via `HL`/`STX`/`INCHL` is used - see section "3.
+Instructions". Example:
 
     LDHL 0xF0000007
 
@@ -1523,76 +1517,76 @@ UTF-8. У сетки нет прерываний и регистров упра�
     STX             ; VRAM[0xF0000008] = 'i'
     INCHL
 
-`HL` при этом не проверяется на выход за пределы сетки (2000
-байт) — после 2000 записей курсор дойдёт до регистра `SCROLL`
-и запись сдвинет экран, а не запишет символ. Готовый пример
-переноса строки и прокрутки — подпрограмма `advance_row` в
-`boot.asm`.
+`HL` isn't checked against going out of bounds of the grid (2000
+bytes) - after 2000 writes the cursor will reach the `SCROLL` register,
+and the write will scroll the screen instead of writing a character.
+See the `advance_row` routine in `boot.asm` for a ready-made example
+of line wrapping and scrolling.
 
 
 ## DebugPort
 
-Устройство только для чтения. Даёт программе доступ к тем
-регистрам процессора, которые иначе прочитать в обычный регистр
-нельзя — `PC`/`SP`/`HL`/`FLAGS` не связаны ни с одной инструкцией
-чтения (в отличие от `A`/`B`/`C`/`D`, которые и так всегда доступны
-программе напрямую).
+A read-only device. Gives a program access to the processor registers
+that otherwise can't be read into a regular register - `PC`/`SP`/`HL`/
+`FLAGS` aren't tied to any read instruction (unlike `A`/`B`/`C`/`D`,
+which are always directly available to a program anyway).
 
-| Адрес | Регистр | Описание |
+| Address | Register | Description |
 |-------|---------|----------|
-| 0xF00007D9 - 0xF00007DC | PC | 4 байта little-endian |
-| 0xF00007DD - 0xF00007E0 | SP | 4 байта little-endian |
-| 0xF00007E1 - 0xF00007E4 | HL | 4 байта little-endian |
-| 0xF00007E5 | FLAGS | 1 байт |
+| 0xF00007D9 - 0xF00007DC | PC | 4 bytes little-endian |
+| 0xF00007DD - 0xF00007E0 | SP | 4 bytes little-endian |
+| 0xF00007E1 - 0xF00007E4 | HL | 4 bytes little-endian |
+| 0xF00007E5 | FLAGS | 1 byte |
 
-Запись игнорируется. Используется командой `regs` в терминале
-(`boot.asm`) для вывода состояния процессора.
+Writes are ignored. Used by the `regs` terminal command (`boot.asm`)
+to print the processor's state.
 
-Пример чтения младшего байта `PC`:
+Example of reading the low byte of `PC`:
 
     LDA 0xF00007D9
 
 
 ## Disk
 
-Устройство "диск" - физически папка на компьютере хоста (`C` или `D`
-рядом с `VirtualConsole.exe`, создаются автоматически при старте).
-Файлы разной длины не ложатся на модель "адрес=байт памяти", поэтому
-это командный порт (регистры + команда-триггер), как `Timer`/
-`Keyboard`, а не блок памяти вроде `Text VRAM`. Оба диска (`C`/`D`)
-имеют одинаковый набор регистров по 19 байт, каждый на своём
-диапазоне адресов.
+The "disk" device is physically a folder on the host machine (`C` or
+`D`, next to `VirtualConsole.exe`, created automatically at startup).
+Files of varying length don't fit the "address = memory byte" model,
+so this is a command port (registers + a command trigger), like
+`Timer`/`Keyboard`, rather than a block of memory like `Text VRAM`.
+Both disks (`C`/`D`) have the same 19-byte register set, each on its
+own address range.
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0-11 | NAME | Имя файла, ASCII, до 12 символов, дополняется нулём |
-| 12 | COMMAND (запись) | `1`=LIST_FIRST, `2`=LIST_NEXT, `3`=OPEN_READ, `4`=READ_BYTE, `5`=OPEN_WRITE, `6`=WRITE_BYTE, `7`=CLOSE, `8`=LOAD, `9`=DELETE, `10`=LOAD_SHELL, `11`=CHDIR, `12`=CHDIR_UP, `13`=LOAD_RAW, `14`=BUILD, `15`-`18`=LOAD_CHILD (уровни 2-5) |
-| 13 | STATUS (чтение) | `0`=OK, `1`=EOF/файлов больше нет, `2`=ошибка |
-| 14 | DATA | Чтение - байт после `READ_BYTE`; запись - байт для `WRITE_BYTE` |
-| 15-18 | SIZE (чтение) | Размер открытого файла, 4 байта little-endian (валиден после `OPEN_READ`) |
+| 0-11 | NAME | File name, ASCII, up to 12 characters, zero-padded |
+| 12 | COMMAND (write) | `1`=LIST_FIRST, `2`=LIST_NEXT, `3`=OPEN_READ, `4`=READ_BYTE, `5`=OPEN_WRITE, `6`=WRITE_BYTE, `7`=CLOSE, `8`=LOAD, `9`=DELETE, `10`=LOAD_SHELL, `11`=CHDIR, `12`=CHDIR_UP, `13`=LOAD_RAW, `14`=BUILD, `15`-`18`=LOAD_CHILD (levels 2-5) |
+| 13 | STATUS (read) | `0`=OK, `1`=EOF/no more files, `2`=error |
+| 14 | DATA | Read - the byte after `READ_BYTE`; write - the byte for `WRITE_BYTE` |
+| 15-18 | SIZE (read) | Size of the open file, 4 bytes little-endian (valid after `OPEN_READ`) |
 
-Диск C: адреса `0xF00007E6` (NAME0) - `0xF00007F8` (SIZE3).
-Диск D: адреса `0xF00007F9` (NAME0) - `0xF000080B` (SIZE3).
+Disk C: addresses `0xF00007E6` (NAME0) - `0xF00007F8` (SIZE3).
+Disk D: addresses `0xF00007F9` (NAME0) - `0xF000080B` (SIZE3).
 
-Поддерживается произвольная глубина вложенности: `CHDIR` (`11`)
-заходит в папку `NAME` (`STATUS=2`, если такой папки нет), `CHDIR_UP`
-(`12`) поднимается РОВНО НА ОДИН уровень выше (не сразу в корень - на
-корне тихо ничего не делает, как в DOS) - обе меняют "текущую папку"
-диска (`currentDir` - `std::filesystem::path`, сам компонует путь
-любой глубины), от которой дальше резолвятся ВСЕ файловые команды
-(`LIST_FIRST`/`OPEN_READ`/`LOAD`/... - именно поэтому `dir`/`type`/
-`exec` в терминале начинают показывать/находить файлы внутри папки
-сразу после `cd`). Ограничение по глубине есть только в промпте
-`SHELL.ASM` (`DIR_MAX_DEPTH = 8` - под стек имён папок для отображения
-`C:\A\B\...>`) - у самого `Disk` его нет. `LIST_FIRST`/`LIST_NEXT`
-перечисляют и файлы, и папки вперемешку - имя папки в `NAME`
-дополнено хвостовым `/`, чтобы отличить её от обычного файла.
+Arbitrary nesting depth is supported: `CHDIR` (`11`) enters the folder
+`NAME` (`STATUS=2` if there's no such folder), `CHDIR_UP` (`12`) goes
+up EXACTLY ONE level (not straight to the root - it's a quiet no-op at
+the root, like in DOS) - both change the disk's "current folder"
+(`currentDir` - a `std::filesystem::path`, which handles paths of any
+depth on its own), which all file commands
+(`LIST_FIRST`/`OPEN_READ`/`LOAD`/...) resolve against afterward -
+that's exactly why `dir`/`type`/`exec` in the terminal start
+showing/finding files inside a folder right after `cd`. The only depth
+limit lives in `SHELL.ASM`'s prompt (`DIR_MAX_DEPTH = 8` - for the
+stack of folder names used to display `C:\A\B\...>`) - `Disk` itself
+has none. `LIST_FIRST`/`LIST_NEXT` list files and folders mixed
+together - a folder's name in `NAME` has a trailing `/` appended to
+tell it apart from a regular file.
 
-`LIST_FIRST`/`LIST_NEXT` перебирают файлы в папке: кладут имя
-очередного файла в NAME и `STATUS=0`, либо `STATUS=1`, когда файлы
-кончились.
+`LIST_FIRST`/`LIST_NEXT` iterate over the files in a folder: they put
+the next file's name into NAME with `STATUS=0`, or `STATUS=1` once the
+files run out.
 
-Пример перечисления файлов на диске C:
+Example of listing the files on disk C:
 
     LDI A, 1
     STA 0xF00007F2      ; DiskC COMMAND = LIST_FIRST
@@ -1601,16 +1595,17 @@ UTF-8. У сетки нет прерываний и регистров упра�
         LDA 0xF00007F3      ; DiskC STATUS
         LDI B, 1
         CMP B
-        JZ list_done        ; файлов больше нет
+        JZ list_done        ; no more files
 
-        ; ...напечатать NAME0..NAME11 (0xF00007E6..0xF00007F1)...
+        ; ...print NAME0..NAME11 (0xF00007E6..0xF00007F1)...
 
         LDI A, 2
         STA 0xF00007F2      ; DiskC COMMAND = LIST_NEXT
         JMP list_loop
     list_done:
 
-Пример чтения файла целиком (имя уже записано в NAME0-11):
+Example of reading a whole file (the name is already written into
+NAME0-11):
 
     LDI A, 3
     STA 0xF00007F2      ; COMMAND = OPEN_READ
@@ -1622,250 +1617,256 @@ UTF-8. У сетки нет прерываний и регистров упра�
         LDI B, 1
         CMP B
         JZ read_done        ; EOF
-        LDA 0xF00007F4      ; DATA - очередной байт файла
-        ; ...что-то сделать с байтом...
+        LDA 0xF00007F4      ; DATA - the next byte of the file
+        ; ...do something with the byte...
         JMP read_loop
     read_done:
         LDI A, 7
         STA 0xF00007F2      ; COMMAND = CLOSE
 
-Запись файла аналогична: записать байт в DATA, затем `COMMAND` =
-`WRITE_BYTE` (`6`) - после `OPEN_WRITE` (`5`), который создаёт файл
-(или обрезает существующий до 0 байт).
+Writing a file is symmetric: write a byte to DATA, then `COMMAND` =
+`WRITE_BYTE` (`6`) - after `OPEN_WRITE` (`5`), which creates the file
+(or truncates an existing one to 0 bytes).
 
-Готовые примеры использования - команды `dir`/`type` в терминале
+Ready-made usage examples - the `dir`/`type` terminal commands
 (`boot.asm`).
 
-`LOAD` (`8`) - особая команда: читает `NAME` **как текстовый
-`.asm`-файл** (не как двоичные данные), собирает его тем же
-ассемблером, что и `main.cpp` использует для `boot.asm`, и
-записывает результат в RAM по фиксированному адресу `0x00002000` (та
-же "песочница", что уже использует `poke`/`run`). `STATUS=0` при
-успехе (`SIZE` - количество собранных байт), `STATUS=2` при ошибке
-(файл не найден или ошибка ассемблера - без детализации причины).
-Запускается затем обычным `CALL 0x00002000`, как код, записанный
-через `poke`. Ассемблировать на самом процессоре (в 8-битной
-программе) нереально - парсинг текста и генерация кода делает хост
-(`Disk` держит собственный `Assembler` и указатель на `Bus`). Готовый
-пример использования - команда `exec` в терминале (`boot.asm`).
+`LOAD` (`8`) is a special command: it reads `NAME` **as a text `.asm`
+file** (not as binary data), assembles it with the same assembler
+`main.cpp` uses for `boot.asm`, and writes the result into RAM at the
+fixed address `0x00002000` (the same "sandbox" already used by
+`poke`/`run`). `STATUS=0` on success (`SIZE` is the number of bytes
+assembled), `STATUS=2` on error (file not found or an assembler
+error - without further detail). It's then run with a plain
+`CALL 0x00002000`, same as code written through `poke`. Assembling on
+the processor itself (inside an 8-bit program) is out of the question -
+text parsing and code generation are done by the host (`Disk` keeps
+its own `Assembler` and a pointer to `Bus`). Ready-made usage
+example - the `exec` terminal command (`boot.asm`).
 
-Диск, с которого реально пришёл последний успешный `LOAD` в песочницу
-`0x00002000` (то есть последний `exec`, НЕ `LOAD_SHELL`), запоминается
-в `Disk::lastExecDisk` - статическом указателе, общем сразу для обоих
-экземпляров `Disk` (C и D). Этим пользуются `PngLoader`/`MapLoader`/
-`ModLoader` (см. соответствующие разделы ниже), чтобы резолвить СВОИ
-ресурсы (PNG/карты/`.mod`) относительно того же диска, с которого была
-запущена текущая программа, а не всегда с диска C - так одну и ту же
-программу с ресурсами можно запускать что с `C:`, что с `D:`.
+The disk that a successful `LOAD` into the `0x00002000` sandbox last
+came from (i.e. the last `exec`, NOT `LOAD_SHELL`) is remembered in
+`Disk::lastExecDisk` - a static pointer shared by both `Disk`
+instances (C and D). `PngLoader`/`MapLoader`/`ModLoader` (see the
+corresponding sections below) use this to resolve THEIR OWN resources
+(PNG/maps/`.mod`) relative to whichever disk the current program was
+launched from, rather than always from disk C - that way the same
+program with its resources can be run from either `C:` or `D:`.
 
-`LOAD_SHELL` (`10`) - то же самое, что `LOAD`, но кладёт результат по
-адресу `0x00020000` (резидентное место `SHELL.ASM`, отдельное от
-песочницы `poke`/`run`/`exec` - иначе они бы затирали код самого
-шелла) и НЕ трогает `lastExecDisk` (это загрузка самой "операционной
-системы" при старте VM, а не пользовательской программы).
+`LOAD_SHELL` (`10`) is the same as `LOAD`, but puts the result at
+address `0x00020000` (the resident home of `SHELL.ASM`, separate from
+the `poke`/`run`/`exec` sandbox - otherwise they'd overwrite the
+shell's own code) and does NOT touch `lastExecDisk` (this is loading
+the "operating system" itself at VM startup, not a user program).
 
-Зазор между песочницей (`0x00002000`) и резидентным `SHELL.ASM`
-(`0x00020000`) - это весь допустимый размер exec'нутой программы
-(~120 КиБ) - `LOAD_RAW`/`LOAD` не проверяют размер файла, при
-превышении хвост программы затрёт начало работающего `SHELL.ASM`
-прямо во время исполнения. На практике места с большим запасом
-хватает даже для больших программ на мини-C (см. ниже) - но это
-жёсткая граница, а не мягкое ограничение.
+The gap between the sandbox (`0x00002000`) and the resident
+`SHELL.ASM` (`0x00020000`) is the entire allowed size of an exec'd
+program (~120 KiB) - `LOAD_RAW`/`LOAD` don't check the file size; if
+it's exceeded, the tail of the program will overwrite the start of
+the running `SHELL.ASM` while it's executing. In practice there's
+plenty of room even for large Mini-C programs (see below) - but this
+is a hard boundary, not a soft limit.
 
-`DELETE` (`9`) - удаляет файл `NAME` (`std::filesystem::remove`).
-`STATUS=0` при успехе, `STATUS=2`, если файла не было или не удалось
-удалить. Готовый пример использования - команда `del` в терминале.
+`DELETE` (`9`) deletes the file `NAME` (`std::filesystem::remove`).
+`STATUS=0` on success, `STATUS=2` if the file didn't exist or
+couldn't be deleted. Ready-made usage example - the `del` terminal
+command.
 
-`BUILD` (`14`) - как `LOAD`, но результат ассемблирования пишется НЕ в
-RAM, а в новый файл на диске: то же имя, что `NAME`, но расширение
-заменено на `.RUN` (`ИМЯ.ASM` -> `ИМЯ.RUN`; если расширения не было -
-просто дописывается `.RUN`). `STATUS=0` при успехе (`SIZE` - сколько
-байт записано ВСЕГО, заголовок + код, см. ниже), `STATUS=2` при ошибке
-(исходник не найден, ошибка ассемблера, не удалось создать выходной
-файл). Готовый пример использования - команда `build` в терминале.
+`BUILD` (`14`) is like `LOAD`, but the assembled result is written NOT
+to RAM but to a new file on disk: the same name as `NAME`, but with
+the extension replaced by `.RUN` (`NAME.ASM` -> `NAME.RUN`; if there
+was no extension, `.RUN` is simply appended). `STATUS=0` on success
+(`SIZE` - how many bytes were written IN TOTAL, header + code, see
+below), `STATUS=2` on error (source not found, assembler error,
+couldn't create the output file). Ready-made usage example - the
+`build` terminal command.
 
-`ИМЯ.RUN` - не просто голый машинный код: файл начинается с заголовка -
-таблицы релокаций (см. `Assembler::assemble()`, третий необязательный
-параметр `relocations`, и `Disk::readRunFile()`): 4 байта - количество
-смещений (`uint32` LE), затем сами смещения по 4 байта (`uint32` LE)
-каждое, ОТНОСИТЕЛЬНО НАЧАЛА КОДА (то есть уже после заголовка). Каждое
-смещение указывает на 4-байтный адрес, который ассемблер получил из
-МЕТКИ (`JMP`/`CALL`/`LDA`/`STA`/`LDHL` на свою же метку/переменную
-программы), а не из числового литерала - такие вроде `STA 0xF00007D8`
-(абсолютные адреса устройств) в таблицу не попадают, они не зависят от
-того, где лежит сама программа, сдвигать их нельзя. Сразу за таблицей -
-собственно машинный код. Заголовок нужен, чтобы этот `.RUN` можно было
-безопасно запустить НЕ там, где он собран - см. `LOAD_CHILD` ниже; для
-обычного запуска (`LOAD_RAW`, тот же адрес, для которого собран)
-заголовок просто пропускается.
+`NAME.RUN` isn't just bare machine code: the file starts with a
+header - a relocation table (see `Assembler::assemble()`, its third
+optional parameter `relocations`, and `Disk::readRunFile()`): 4 bytes
+- the number of offsets (`uint32` LE), followed by the offsets
+themselves, 4 bytes (`uint32` LE) each, RELATIVE TO THE START OF THE
+CODE (i.e. right after the header). Each offset points at a 4-byte
+address that the assembler obtained from a LABEL (`JMP`/`CALL`/`LDA`/
+`STA`/`LDHL` targeting the program's own label/variable), not from a
+numeric literal - things like `STA 0xF00007D8` (absolute device
+addresses) never land in this table, since they don't depend on where
+the program itself sits in memory and must never be shifted. Right
+after the table comes the actual machine code. The header exists so
+this `.RUN` can be safely run somewhere OTHER than where it was
+assembled - see `LOAD_CHILD` below; for a normal run (`LOAD_RAW`, the
+same address it was assembled for), the header is simply skipped.
 
-`LOAD_RAW` (`13`) - читает `ИМЯ.RUN` (заголовок + код, см. `BUILD`
-выше), пропускает заголовок (релокация не нужна - грузит туда же, для
-чего собран, `0x00002000`, та же песочница, что и `LOAD`) и копирует
-ТОЛЬКО код в RAM по этому адресу. `STATUS` аналогично `LOAD`; `SIZE` -
-размер только кода (без заголовка), в отличие от `SIZE` у `BUILD`. Как
-и `LOAD`, обновляет `Disk::lastExecDisk` - программа, запущенная из
-`.RUN`, тоже резолвит свои PNG/карты/`.mod` относительно правильного
-диска. Готовый пример использования - автозапуск `ИМЯ.RUN` по одному
-имени в терминале (см. `cmd_autorun` в `SHELL.ASM`) - набранное на
-приглашении имя, не совпавшее ни с одной известной командой,
-пробуется как `ИМЯ.RUN` через `LOAD_RAW`, и при успехе запускается
-точно так же, как `exec` - без явной команды, как `.exe`/`.com` в DOS.
+`LOAD_RAW` (`13`) reads `NAME.RUN` (header + code, see `BUILD` above),
+skips the header (no relocation needed - it's loaded to the same
+place it was assembled for, `0x00002000`, the same sandbox as `LOAD`)
+and copies ONLY the code into RAM at that address. `STATUS` behaves
+like `LOAD`; `SIZE` is the size of the code alone (without the
+header), unlike `BUILD`'s `SIZE`. Like `LOAD`, it updates
+`Disk::lastExecDisk` - a program launched from a `.RUN` also resolves
+its PNG/maps/`.mod` relative to the right disk. Ready-made usage
+example - auto-running `NAME.RUN` by typing just its name at the
+terminal (see `cmd_autorun` in `SHELL.ASM`) - a typed line that
+doesn't match any known command is tried as `NAME.RUN` through
+`LOAD_RAW`, and on success is launched exactly like `exec` - without
+an explicit command, like a `.exe`/`.com` in DOS.
 
-`LOAD_CHILD` (`15`-`18`, по одной команде на каждый уровень
-вложенности - см. "Запуск дочерней программы: exec_child()" в разделе
-"Мини-C") - запускает уже готовый `ИМЯ.RUN` (собранный `BUILD` под
-`0x00002000`) ИЗНУТРИ уже выполняющейся программы (а не из шелла), по
-ОТДЕЛЬНОМУ адресу для каждого уровня (`Disk::EXEC_CHILD_DEPTH2..5_ADDRESS`
-- `0x00100000`/`0x00140000`/`0x00180000`/`0x001C0000`). Нужна, потому
-что сама выполняющаяся программа (например, файловый менеджер `FM.MC`)
-живёт по адресу `0x00002000` - если бы дочернюю программу грузили туда
-же, загрузка затёрла бы код, который в этот момент как раз исполняется,
-а если бы у ВСЕХ уровней вложенности был один и тот же адрес - второй
-уровень точно так же затёр бы первый.
+`LOAD_CHILD` (`15`-`18`, one command per nesting level - see "Running
+a child program: exec_child()" in the Mini-C section) launches an
+already-built `NAME.RUN` (assembled by `BUILD` for `0x00002000`) FROM
+INSIDE an already-running program (rather than from the shell), at a
+SEPARATE address for each level (`Disk::EXEC_CHILD_DEPTH2..5_ADDRESS`
+- `0x00100000`/`0x00140000`/`0x00180000`/`0x001C0000`). It's needed
+because the currently running program (say, the file manager `FM.MC`)
+itself lives at address `0x00002000` - if the child program were
+loaded there too, the load would overwrite the very code that's
+executing at that moment; and if every nesting level shared the same
+address, the second level would just as surely overwrite the first.
 
-В отличие от `LOAD_RAW`, простого пропуска заголовка тут недостаточно:
-`ИМЯ.RUN` собран из предположения, что будет выполняться по
-`0x00002000` - все его собственные `JMP`/`CALL`/`LDA`/`STA` на свои же
-метки/переменные это отражают как абсолютные адреса. `LOAD_CHILD`
-использует таблицу релокаций из заголовка (см. `BUILD` выше), для
-каждого записанного там смещения сдвигает соответствующий 4-байтный
-адрес на разницу между адресом уровня и `0x00002000`, и только потом
-пишет пропатченные байты в RAM. Если `ИМЯ.RUN` не найден - `STATUS=2`,
-отказ - угадывать тут не пытаемся.
+Unlike `LOAD_RAW`, simply skipping the header isn't enough here:
+`NAME.RUN` was assembled on the assumption that it would run at
+`0x00002000` - all its own `JMP`/`CALL`/`LDA`/`STA` targeting its own
+labels/variables reflect that as absolute addresses. `LOAD_CHILD` uses
+the relocation table from the header (see `BUILD` above), shifts each
+recorded offset's corresponding 4-byte address by the difference
+between the level's address and `0x00002000`, and only then writes
+the patched bytes into RAM. If `NAME.RUN` isn't found - `STATUS=2`,
+refusal - no guessing here.
 
-RAM - 4 МиБ (`0x00000000`-`0x003FFFFF`, см. `main.cpp`) - адреса
-уровней вложенности лежат в отдельной области намного выше
-`SHELL_LOAD_ADDRESS` (`0x00020000`), не тесня ни его, ни друг друга: по
-256 КиБ на уровень (с большим запасом - самая большая программа в
-проекте, `FM.MC`, весит около 20 КБ), 4 уровня занимают 1 МиБ, оставляя
-ещё 2+ МиБ RAM полностью свободными. Как и у основной песочницы, размер
-не проверяется в рантайме. Эти команды **не вызываются напрямую**
-программами - решение, какую из них послать и по какому адресу
-вызывать код, целиком на стороне `SHELL.ASM` (`shell_exec_child`, см.
-"Мини-C" ниже) - готовый пример использования: `FM.MC`, `Enter` на
-файле `*.RUN`.
+RAM is 4 MiB (`0x00000000`-`0x003FFFFF`, see `main.cpp`) - the nesting
+level addresses live in a separate region well above
+`SHELL_LOAD_ADDRESS` (`0x00020000`), crowding neither it nor each
+other: 256 KiB per level (with plenty of headroom - the largest
+program in the project, `FM.MC`, weighs in at around 20 KB), 4 levels
+take up 1 MiB, leaving 2+ MiB of RAM completely free. Like the main
+sandbox, size isn't checked at run time. These commands are **never
+called directly** by programs - the decision of which one to send and
+which address to call is entirely up to `SHELL.ASM`
+(`shell_exec_child`, see "Mini-C" below) - ready-made usage example:
+`FM.MC`, pressing `Enter` on a `*.RUN` file.
 
-Имя файла (`NAME`) может быть от 1 до 12 символов - полноценный
-формат 8.3 (`ИМЯ.РАСШИРЕНИЕ`, но без принудительной точки, просто до
-12 байт). Команды терминала (`type`/`exec`/`create`/`del`/`copy`)
-принимают его переменной длины благодаря флагу `CARRY` (см. раздел
-"2. Регистры") - раньше, до появления `CARRY`, было вынужденное
-ограничение "ровно 7 символов, дополненных пробелами".
+The file name (`NAME`) can be 1 to 12 characters - a full 8.3 format
+(`NAME.EXTENSION`, but without a forced dot, just up to 12 bytes).
+Terminal commands (`type`/`exec`/`create`/`del`/`copy`) accept it at
+variable length thanks to the `CARRY` flag (see section "2.
+Registers") - before `CARRY` existed, there used to be a forced
+"exactly 7 characters, space-padded" limit.
 
 
 ## TextAttr
 
-Плоскость цветовых атрибутов - отдельное устройство, не встроенное в
-`Text VRAM` (чтобы не трогать уже занятые адреса `Text VRAM`/
-`DebugPort`/дисков). Та же сетка 80x25, что и `Text VRAM`, но байт
-означает не символ, а цвет: младший нибл (биты 0-3) - цвет символа
-(0-15), старший нибл (биты 4-7) - цвет фона (0-15). Палитра -
-стандартная 16-цветная ANSI: `0`-`7` обычные цвета (чёрный, красный,
-зелёный, жёлтый, синий, пурпурный, голубой, белый), `8`-`15` - яркие
-версии тех же цветов.
+The color-attribute plane - a separate device, not built into
+`Text VRAM` (to avoid touching the addresses already occupied by
+`Text VRAM`/`DebugPort`/the disks). The same 80x25 grid as `Text VRAM`,
+but the byte means color rather than a character: the low nibble
+(bits 0-3) is the character color (0-15), the high nibble (bits 4-7)
+is the background color (0-15). The palette is the standard 16-color
+ANSI one: `0`-`7` are the regular colors (black, red, green, yellow,
+blue, magenta, cyan, white), `8`-`15` are the bright versions of the
+same colors.
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0-1999 | сетка 80x25 | один байт цвета на ту же ячейку, что в `Text VRAM` |
-| 2000 | SCROLL | сдвигает цвета на одну строку вверх, как у `Text VRAM` |
-| 2001 | CLEAR | сбрасывает всю сетку в цвет по умолчанию (`0x07`) |
+| 0-1999 | 80x25 grid | one color byte per the same cell as in `Text VRAM` |
+| 2000 | SCROLL | shifts colors up one row, like `Text VRAM` |
+| 2001 | CLEAR | resets the whole grid to the default color (`0x07`) |
 
-Адреса: `0xF000080C` (первая ячейка) - `0xF0000FDB` (последняя
-ячейка), `SCROLL` = `0xF0000FDC`, `CLEAR` = `0xF0000FDD`.
+Addresses: `0xF000080C` (first cell) - `0xF0000FDB` (last cell),
+`SCROLL` = `0xF0000FDC`, `CLEAR` = `0xF0000FDD`.
 
-Индексация identична `Text VRAM` (`index = y * 80 + x`) - ячейка
-`(x, y)` в обоих устройствах лежит по одному и тому же относительному
-смещению, только базовые адреса разные. **Важно**: при прокрутке или
-очистке `Text VRAM` нужно применить `SCROLL`/`CLEAR` и к `TextAttr`
-тоже - иначе цвет "отстаёт" от текста (так и сделано в `advance_row`/
-`cmd_cls`/`cmd_reset` в `boot.asm`).
+Indexing is identical to `Text VRAM` (`index = y * 80 + x`) - cell
+`(x, y)` sits at the same relative offset in both devices, just with
+different base addresses. **Important**: when scrolling or clearing
+`Text VRAM`, you need to apply `SCROLL`/`CLEAR` to `TextAttr` too -
+otherwise the color "lags behind" the text (this is exactly what
+`advance_row`/`cmd_cls`/`cmd_reset` in `boot.asm` do).
 
-Дефолтный цвет всей сетки при старте - `0x07` (светло-серый на
-чёрном, классика DOS).
+The whole grid's default color at startup is `0x07` (light gray on
+black, DOS classic).
 
-Пример: покрасить всю строку `row` в ярко-голубой на чёрном
-(`0x0E`) - подпрограмма `goto_attr_row_start` в `boot.asm`
-(аналог `goto_row_start`, но с базой `TextAttr`) считает нужный
-адрес, дальше просто `STX`/`INCHL` 80 раз (готовая подпрограмма
-`print_char_n`):
+Example: coloring the whole row `row` bright cyan on black (`0x0E`) -
+the `goto_attr_row_start` routine in `boot.asm` (like
+`goto_row_start`, but based on `TextAttr`) computes the needed
+address, then it's just `STX`/`INCHL` 80 times (the ready-made
+`print_char_n` routine):
 
     LDI A, <row>
     STA row
     CALL goto_attr_row_start   ; HL = 0xF000080C + row*80
     LDI A, 80
     STA tmp2
-    LDI A, 0x0E                ; цвет
+    LDI A, 0x0E                ; color
     CALL print_char_n
 
-Готовый пример использования - рамка вокруг баннера в `draw_banner`
-(`boot.asm`).
+Ready-made usage example - the border around the banner in
+`draw_banner` (`boot.asm`).
 
 
 ---
 
 ## VideoCard
 
-Растровый видеорежим 320x240, RGB (3 байта на пиксель). В отличие от
-`Text VRAM`/`TextAttr`, framebuffer НЕ адресуется побайтово через шину
-(320*240*3 = 230400 байт - писать их по одному через CPU было бы
-непрактично медленно). Вместо этого - компактный командный протокол
-(регистры + `COMMAND`-триггер), как у `Disk`: framebuffer целиком живёт
-внутри устройства на C++ стороне.
+A 320x240 bitmap video mode, RGB (3 bytes per pixel). Unlike
+`Text VRAM`/`TextAttr`, the framebuffer is NOT addressed byte-by-byte
+over the bus (320*240*3 = 230400 bytes - writing them one at a time
+from the CPU would be impractically slow). Instead there's a compact
+command protocol (registers + a `COMMAND` trigger), like `Disk`: the
+whole framebuffer lives inside the device on the C++ side.
 
-Рисует не в консоли, а в отдельном родном окне (Win32 + OpenGL/WGL) -
-консоль в это время продолжает работать как обычный текстовый
-терминал. Окно и его message pump/рендер-цикл живут в отдельном
-потоке, полностью независимом от цикла CPU - никакой рендеринг не
-делается внутри `tick()` устройства (`VideoCard` вообще не
-переопределяет `tick()`), поскольку `tick()` вызывается на КАЖДОЕ
-обращение к шине (см. `CPU::busRead`/`busWrite`) - тяжёлая работа там
-повторила бы старый баг с `Keyboard` (см. "Keyboard" выше), только
-гораздо серьёзнее.
+It draws not into the console but into a separate native window
+(Win32 + OpenGL/WGL) - the console keeps working as a normal text
+terminal the whole time. The window and its message pump/render loop
+live on a separate thread, completely independent of the CPU loop -
+no rendering happens inside the device's `tick()` (`VideoCard`
+doesn't even override `tick()`), since `tick()` is called on EVERY
+bus access (see `CPU::busRead`/`busWrite`) - doing heavy work there
+would repeat the old `Keyboard` bug (see "Keyboard" above), only much
+worse.
 
-Координаты 0-319/0-239 не влезают в один байт (максимум 255) -
-передаются как LOW+HIGH байт (16 бит), как `Disk` делает для
+Coordinates 0-319/0-239 don't fit in one byte (max 255) - they're
+passed as LOW+HIGH bytes (16-bit), the same way `Disk` does for
 `fileSize`.
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0 | X_LOW | X, младший байт |
-| 1 | X_HIGH | X, старший байт |
-| 2 | Y_LOW | Y, младший байт |
-| 3 | Y_HIGH | Y, старший байт |
-| 4 | W_LOW | ширина (для FILL_RECT), младший байт |
-| 5 | W_HIGH | ширина, старший байт |
-| 6 | H_LOW | высота (для FILL_RECT), младший байт |
-| 7 | H_HIGH | высота, старший байт |
-| 8 | R | компонент цвета, 0-255 |
-| 9 | G | компонент цвета, 0-255 |
-| 10 | B | компонент цвета, 0-255 |
-| 11 | COMMAND (запись = триггер) | 1=MODE_ON, 2=MODE_OFF, 3=CLEAR, 4=SET_PIXEL, 5=FILL_RECT |
-| 12 | STATUS (только чтение) | 0=ok, 1=координата/размер вне экрана (0-319/0-239) |
+| 0 | X_LOW | X, low byte |
+| 1 | X_HIGH | X, high byte |
+| 2 | Y_LOW | Y, low byte |
+| 3 | Y_HIGH | Y, high byte |
+| 4 | W_LOW | width (for FILL_RECT), low byte |
+| 5 | W_HIGH | width, high byte |
+| 6 | H_LOW | height (for FILL_RECT), low byte |
+| 7 | H_HIGH | height, high byte |
+| 8 | R | color component, 0-255 |
+| 9 | G | color component, 0-255 |
+| 10 | B | color component, 0-255 |
+| 11 | COMMAND (write = trigger) | 1=MODE_ON, 2=MODE_OFF, 3=CLEAR, 4=SET_PIXEL, 5=FILL_RECT |
+| 12 | STATUS (read-only) | 0=ok, 1=coordinate/size out of screen bounds (0-319/0-239) |
 
-Адреса: `0xF0000FDE` (X_LOW) - `0xF0000FEA` (STATUS) - регистры фона;
-следом сразу продолжается блок регистров спрайтов (см. "Аппаратные
-спрайты" ниже).
+Addresses: `0xF0000FDE` (X_LOW) - `0xF0000FEA` (STATUS) - background
+registers; the sprite register block (see "Hardware sprites" below)
+follows immediately after.
 
-Команды (`COMMAND`):
+Commands (`COMMAND`):
 
-- **1 (MODE_ON)** - открывает окно (640x480, масштаб x2 от буфера
-  320x240) и запускает рендер-поток, если ещё не запущен. Не
-  блокирует вызывающую программу.
-- **2 (MODE_OFF)** - останавливает рендер-поток и закрывает окно.
-  Framebuffer в памяти не сбрасывается. Закрытие окна пользователем
-  (крестик) тоже переводит устройство в это состояние само по себе -
-  явный `MODE_OFF` перед выходом программы всё равно рекомендуется,
-  чтобы не оставить поток висеть, если окно ещё открыто.
-- **3 (CLEAR)** - заливает весь framebuffer цветом `R,G,B` (игнорирует
-  X/Y/W/H).
-- **4 (SET_PIXEL)** - красит один пиксель `(X, Y)` в цвет `R,G,B`.
-- **5 (FILL_RECT)** - заливает прямоугольник `X,Y,W,H` цветом `R,G,B`
-  одним вызовом (без цикла на стороне ассемблера) - этим стоит
-  пользоваться вместо `SET_PIXEL` в цикле для больших областей
-  (быстрее и на порядок меньше кода).
+- **1 (MODE_ON)** - opens the window (640x480, 2x scale from the
+  320x240 buffer) and starts the render thread if it isn't running
+  yet. Doesn't block the calling program.
+- **2 (MODE_OFF)** - stops the render thread and closes the window.
+  The in-memory framebuffer isn't cleared. The user closing the
+  window (the X button) also puts the device into this state on its
+  own - an explicit `MODE_OFF` before the program exits is still
+  recommended, so the thread isn't left hanging if the window is
+  still open.
+- **3 (CLEAR)** - fills the whole framebuffer with color `R,G,B`
+  (ignores X/Y/W/H).
+- **4 (SET_PIXEL)** - colors a single pixel `(X, Y)` with `R,G,B`.
+- **5 (FILL_RECT)** - fills the rectangle `X,Y,W,H` with color `R,G,B`
+  in one call (no loop needed on the assembly side) - use this
+  instead of looping `SET_PIXEL` for large areas (faster and an order
+  of magnitude less code).
 
-Пример - залить весь экран синим:
+Example - fill the whole screen blue:
 
     LDI A, 0
     STA 0xF0000FE6      ; R = 0
@@ -1875,62 +1876,62 @@ RAM - 4 МиБ (`0x00000000`-`0x003FFFFF`, см. `main.cpp`) - адреса
     LDI A, 3
     STA 0xF0000FE9      ; COMMAND = CLEAR
 
-Полный рабочий пример с движением, отражением от краёв и сменой
-цвета - `C/DEMOS/DEMO.ASM` (запускается из шелла: `cd demos`, затем
-`exec demo.asm` - см. "Disk" про `cd` и ModLoader/PngLoader/MapLoader
-про то, почему ресурсы демок резолвятся из ТЕКУЩЕЙ папки).
-Там же показан приём перевода 8-битной "юнитной" координаты в
-настоящий 16-битный пиксель через `ADD A, A` (`A = A*2`, `CARRY` =
-старший бит результата) - см. `ADD`/`ADC` выше про этот приём.
+A full working example with motion, edge bouncing, and color changes -
+`C/DEMOS/DEMO.ASM` (run it from the shell: `cd demos`, then
+`exec demo.asm` - see "Disk" about `cd` and ModLoader/PngLoader/
+MapLoader about why demo resources resolve from the CURRENT folder).
+It also demonstrates the trick of turning an 8-bit "unit" coordinate
+into a real 16-bit pixel via `ADD A, A` (`A = A*2`, `CARRY` = the
+result's high bit) - see `ADD`/`ADC` above for this trick.
 
-### Аппаратные спрайты
+### Hardware sprites
 
-16 независимых битмапов 32x32 (RGB), каждый со своей позицией и
-видимостью - видеокарта сама накладывает их поверх фона при рендере
-(в рендер-потоке, см. выше), без перерисовки фона под ними и без
-ручного стирания старой позиции из ассемблера, в отличие от
-`SET_PIXEL`/`FILL_RECT`.
+16 independent 32x32 bitmaps (RGB), each with its own position and
+visibility - the video card overlays them onto the background itself
+during rendering (on the render thread, see above), without redrawing
+the background underneath them and without manually erasing the old
+position from assembly, unlike `SET_PIXEL`/`FILL_RECT`.
 
-Прозрачность - через цвет-ключ (chroma key): пиксель спрайта цвета
-`(255, 0, 255)` (маджентовый) считается прозрачным и не рисуется при
-композиции. Из этого следует единственное ограничение - нарисовать
-внутри спрайта непрозрачный пиксель именно такого цвета нельзя.
+Transparency works via a chroma key: a sprite pixel with color
+`(255, 0, 255)` (magenta) is treated as transparent and isn't drawn
+during compositing. The only consequence is that you can't draw an
+opaque pixel of exactly that color inside a sprite.
 
-Регистры продолжают адресный блок `VideoCard` (смещения 13-25, сразу
-после `STATUS`):
+The registers continue the `VideoCard` address block (offsets 13-25,
+right after `STATUS`):
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 13 | SPRITE_INDEX | какой спрайт (0-15) выбран для регистров ниже |
-| 14 | SPRITE_PIXEL_LOW | индекс пикселя внутри спрайта (0-1023), младший байт |
-| 15 | SPRITE_PIXEL_HIGH | индекс пикселя, старший байт |
-| 16 | SPRITE_X_LOW | X спрайта на экране, младший байт |
-| 17 | SPRITE_X_HIGH | X, старший байт |
-| 18 | SPRITE_Y_LOW | Y спрайта на экране, младший байт |
-| 19 | SPRITE_Y_HIGH | Y, старший байт |
-| 20 | SPRITE_VISIBLE | 0/1 - показывать ли спрайт |
-| 21 | SPRITE_R | компонент цвета для записи пикселя спрайта |
-| 22 | SPRITE_G | компонент цвета |
-| 23 | SPRITE_B | компонент цвета |
-| 24 | SPRITE_COMMAND (запись = триггер) | 1=WRITE_PIXEL, 2=CLEAR |
-| 25 | SPRITE_STATUS (только чтение) | 0=ok, 1=индекс спрайта/пикселя вне диапазона |
+| 13 | SPRITE_INDEX | which sprite (0-15) the registers below refer to |
+| 14 | SPRITE_PIXEL_LOW | pixel index within the sprite (0-1023), low byte |
+| 15 | SPRITE_PIXEL_HIGH | pixel index, high byte |
+| 16 | SPRITE_X_LOW | sprite's screen X, low byte |
+| 17 | SPRITE_X_HIGH | X, high byte |
+| 18 | SPRITE_Y_LOW | sprite's screen Y, low byte |
+| 19 | SPRITE_Y_HIGH | Y, high byte |
+| 20 | SPRITE_VISIBLE | 0/1 - whether to show the sprite |
+| 21 | SPRITE_R | color component for writing a sprite pixel |
+| 22 | SPRITE_G | color component |
+| 23 | SPRITE_B | color component |
+| 24 | SPRITE_COMMAND (write = trigger) | 1=WRITE_PIXEL, 2=CLEAR |
+| 25 | SPRITE_STATUS (read-only) | 0=ok, 1=sprite/pixel index out of range |
 
-`SPRITE_X_LOW/HIGH`, `SPRITE_Y_LOW/HIGH` и `SPRITE_VISIBLE` действуют
-сразу по записи, без команды - двигать спрайт каждый кадр должно быть
-дёшево (несколько `STA`, без лишнего байта-команды).
+`SPRITE_X_LOW/HIGH`, `SPRITE_Y_LOW/HIGH`, and `SPRITE_VISIBLE` take
+effect immediately on write, with no command - moving a sprite every
+frame should be cheap (a few `STA`s, no extra command byte).
 
-Команды (`SPRITE_COMMAND`):
+Commands (`SPRITE_COMMAND`):
 
-- **1 (WRITE_PIXEL)** - пишет `SPRITE_R/G/B` в пиксель
-  `SPRITE_PIXEL` битмапа спрайта `SPRITE_INDEX`, затем
-  автоинкрементирует `SPRITE_PIXEL` по модулю 1024 - позволяет
-  залить весь битмап подряд простым циклом (`STA R; STA G; STA B;
-  STA COMMAND`, 1024 раза), без ручного пересчёта индекса.
-- **2 (CLEAR)** - заливает весь битмап выбранного спрайта цветом-ключом
-  (255,0,255), т.е. делает его полностью прозрачным/пустым.
+- **1 (WRITE_PIXEL)** - writes `SPRITE_R/G/B` into pixel
+  `SPRITE_PIXEL` of sprite `SPRITE_INDEX`'s bitmap, then
+  auto-increments `SPRITE_PIXEL` modulo 1024 - lets you fill the
+  entire bitmap in sequence with a simple loop (`STA R; STA G; STA B;
+  STA COMMAND`, 1024 times), without recomputing the index by hand.
+- **2 (CLEAR)** - fills the selected sprite's whole bitmap with the
+  chroma key color (255,0,255), i.e. makes it fully transparent/empty.
 
-Пример - определить спрайт 0 как сплошной красный квадрат 32x32 и
-показать его в точке (50, 50):
+Example - define sprite 0 as a solid red 32x32 square and show it at
+point (50, 50):
 
     LDI A, 0
     STA 0xF0000FEB      ; SPRITE_INDEX = 0
@@ -1940,12 +1941,12 @@ RAM - 4 МиБ (`0x00000000`-`0x003FFFFF`, см. `main.cpp`) - адреса
     LDI A, 0
     STA 0xF0000FF4      ; SPRITE_G = 0
     STA 0xF0000FF5      ; SPRITE_B = 0
-                          ; (заполнить все 1024 пикселя - см. ниже)
+                          ; (fill all 1024 pixels - see below)
 
 sprite_fill_loop:
     LDI A, 1
-    STA 0xF0000FF6      ; SPRITE_COMMAND = WRITE_PIXEL (авто-инкремент)
-    ; ... повторить 1024 раза (цикл с проверкой SPRITE_PIXEL_LOW/HIGH) ...
+    STA 0xF0000FF6      ; SPRITE_COMMAND = WRITE_PIXEL (auto-increments)
+    ; ... repeat 1024 times (loop checking SPRITE_PIXEL_LOW/HIGH) ...
 
     LDI A, 50
     STA 0xF0000FEE      ; SPRITE_X_LOW = 50
@@ -1958,111 +1959,114 @@ sprite_fill_loop:
     LDI A, 1
     STA 0xF0000FF2      ; SPRITE_VISIBLE = 1
 
-Адреса: `0xF0000FDE` (X_LOW) - `0xF0000FF7` (SPRITE_STATUS) - фон и
-спрайты; следом сразу продолжается блок скролла тайловой карты (см.
-"Аппаратные тайлы и скролл" ниже).
+Addresses: `0xF0000FDE` (X_LOW) - `0xF0000FF7` (SPRITE_STATUS) -
+background and sprites; the tile-map scroll register block (see
+"Hardware tiles and scrolling" below) follows immediately after.
 
-### Аппаратные тайлы и скролл
+### Hardware tiles and scrolling
 
-Второй слой поверх фона (но ПОД 3D-слоем и спрайтами) - тайловая
-карта: набор повторяющихся плиток 32x32 (тайлсет, до 128 разных
-тайлов) и большая карта индексов тайлов (может быть шире/выше экрана
-320x240), которая скроллится под неподвижным на экране спрайтом
-персонажа. Полный порядок отрисовки слоёв в рендер-потоке: фон
-(`framebuffer`) -> тайлы (если карта загружена) -> 3D-слой (если
-активен, см. `Gpu3D` ниже) -> спрайты - тайлы полностью перекрывают
-фон в видимой области, 3D-слой перекрывает тайлы там, где реально
-что-то нарисовал, спрайты рисуются поверх абсолютно всего (это и есть
-слой UI - HUD/иконки поверх 3D-сцены).
+A second layer over the background (but UNDER the 3D layer and the
+sprites) - a tile map: a set of repeating 32x32 tiles (a tileset, up
+to 128 different tiles) and a large map of tile indices (which can be
+wider/taller than the 320x240 screen) that scrolls underneath a
+character sprite that stays fixed on screen. Full layer draw order on
+the render thread: background (`framebuffer`) -> tiles (if a map is
+loaded) -> the 3D layer (if active, see `Gpu3D` below) -> sprites -
+tiles fully cover the background in the visible area, the 3D layer
+covers tiles wherever it actually drew something, sprites are drawn
+on top of absolutely everything (this is the UI layer - a HUD/icons
+over the 3D scene).
 
-Сам тайлсет заполняется через `PngLoader` (`EXTRACT_TILE`, см. ниже),
-сама карта - через `MapLoader` (текстовый файл, см. ниже). У
-`VideoCard` из тайловой части - только два 16-битных регистра
-скролла, продолжающие адресный блок сразу после спрайтов:
+The tileset itself is filled in through `PngLoader` (`EXTRACT_TILE`,
+see below), the map itself through `MapLoader` (a text file, see
+below). `VideoCard`'s only tile-related part is two 16-bit scroll
+registers, continuing the address block right after the sprites:
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 26 | SCROLL_X_LOW | скролл карты по X, младший байт |
-| 27 | SCROLL_X_HIGH | старший байт |
-| 28 | SCROLL_Y_LOW | скролл по Y, младший байт |
-| 29 | SCROLL_Y_HIGH | старший байт |
+| 26 | SCROLL_X_LOW | map scroll along X, low byte |
+| 27 | SCROLL_X_HIGH | high byte |
+| 28 | SCROLL_Y_LOW | scroll along Y, low byte |
+| 29 | SCROLL_Y_HIGH | high byte |
 
-Действуют сразу по записи (без команды, как позиция спрайта) и
-автоматически ограничиваются границами карты (`0` - `mapWidth*32-320`
-по X, аналогично по Y) - "убежать" скроллом за край карты нельзя, само
-устройство подрежет значение. Пока карта не загружена (`MapLoader` ещё
-ни разу не отработал), тайловый слой не рисуется вообще - старые
-демки без тайлов (`DEMO.ASM`, `SPRITES.ASM`) не видят разницы.
+Takes effect immediately on write (no command, like sprite position)
+and is automatically clamped to the map's bounds (`0` -
+`mapWidth*32-320` for X, likewise for Y) - you can't scroll past the
+edge of the map, the device clamps the value itself. Until a map is
+loaded (`MapLoader` hasn't run yet), the tile layer isn't drawn at
+all - old demos without tiles (`DEMO.ASM`, `SPRITES.ASM`) see no
+difference.
 
-Адрес: `0xF0000FF8` (SCROLL_X_LOW) - `0xF0000FFB` (SCROLL_Y_HIGH).
+Address: `0xF0000FF8` (SCROLL_X_LOW) - `0xF0000FFB` (SCROLL_Y_HIGH).
 
-Полный рабочий пример - `C/DEMOS/TILEDEMO.ASM` (`cd demos`, затем
-`exec tiledemo.asm`): персонаж неподвижен в центре экрана, карта под
-ним скроллит со сменой направления по таймеру.
+A full working example - `C/DEMOS/TILEDEMO.ASM` (`cd demos`, then
+`exec tiledemo.asm`): the character stays fixed at the center of the
+screen, the map underneath it scrolls, changing direction on a timer.
 
 
 ---
 
 ## PngLoader
 
-Грузит PNG-файл из ТЕКУЩЕЙ папки ТОГО диска (C или D), с которого
-командой `exec` была реально запущена выполняющаяся сейчас программа
-(`Disk::lastExecDisk` - см. "Disk" ниже про этот статический
-указатель, общий для обоих экземпляров `Disk`; до первого `exec` за
-всё время работы VM по умолчанию используется диск C). Та же папка,
-что меняет команда `cd`, и которую уже использует `exec`/`type`/`dir`
-- поэтому запущенная из `C:\DEMOS` (или скопированная на `D:\DEMOS`)
-программа (см. `C/DEMOS/*.ASM`) находит свои же ресурсы рядом с собой,
-на том же диске, откуда её запустили, без специального механизма
-"программа знает свой путь". И вырезает из него квадраты 32x32 прямо в
-видеопамять `VideoCard` - в спрайт ИЛИ в тайл тайлсета. PNG - сжатый
-формат (zlib/deflate) - декодировать его в ассемблере этого CPU
-нереально, поэтому весь разбор формата (через `stb_image.h`) целиком
-спрятан на стороне C++: ассемблеру видны только команды "загрузи
-файл", "вырежи регион в спрайт N" и "вырежи регион в тайл N".
+Loads a PNG file from the CURRENT folder of WHICHEVER disk (C or D)
+the currently running program was actually launched from via `exec`
+(`Disk::lastExecDisk` - see "Disk" below for this static pointer,
+shared by both `Disk` instances; before the first `exec` in the VM's
+lifetime, disk C is used by default). The same folder that the `cd`
+command changes, and that `exec`/`type`/`dir` already use - so a
+program run from `C:\DEMOS` (or copied to `D:\DEMOS`) (see
+`C/DEMOS/*.ASM`) finds its own resources right next to itself, on the
+same disk it was launched from, with no special "the program knows
+its own path" mechanism. It cuts 32x32 squares out of the image
+straight into `VideoCard`'s video memory - into a sprite OR into a
+tileset tile. PNG is a compressed format (zlib/deflate) - decoding it
+in this CPU's assembly is out of the question, so all of the format
+parsing (via `stb_image.h`) is hidden entirely on the C++ side: the
+assembly side only sees commands like "load a file", "cut a region
+into sprite N", and "cut a region into tile N".
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0-11 | NAME0-11 | имя PNG-файла (как у `Disk`) |
-| 12 | SRC_X_LOW | X верхнего левого угла вырезаемого региона, младший байт |
-| 13 | SRC_X_HIGH | старший байт |
-| 14 | SRC_Y_LOW | Y региона, младший байт |
-| 15 | SRC_Y_HIGH | старший байт |
-| 16 | SPRITE_INDEX | номер спрайта-приёмника у `VideoCard` (0-15, для EXTRACT) |
-| 17 | COMMAND (запись = триггер) | 1=LOAD, 2=EXTRACT, 3=EXTRACT_TILE |
-| 18 | STATUS (только чтение) | 0=ok, 1=файл не найден/не декодировался, 2=регион вне картинки, 3=неверный SPRITE_INDEX/TILE_INDEX |
-| 19 | TILE_INDEX | номер тайла-приёмника у `VideoCard` (0-127, для EXTRACT_TILE) |
+| 0-11 | NAME0-11 | the PNG file's name (same as `Disk`) |
+| 12 | SRC_X_LOW | X of the top-left corner of the region to cut, low byte |
+| 13 | SRC_X_HIGH | high byte |
+| 14 | SRC_Y_LOW | Y of the region, low byte |
+| 15 | SRC_Y_HIGH | high byte |
+| 16 | SPRITE_INDEX | destination sprite number on `VideoCard` (0-15, for EXTRACT) |
+| 17 | COMMAND (write = trigger) | 1=LOAD, 2=EXTRACT, 3=EXTRACT_TILE |
+| 18 | STATUS (read-only) | 0=ok, 1=file not found/couldn't decode, 2=region outside the image, 3=invalid SPRITE_INDEX/TILE_INDEX |
+| 19 | TILE_INDEX | destination tile number on `VideoCard` (0-127, for EXTRACT_TILE) |
 
-Адреса: `0xF0000FFE` (NAME0) - `0xF0001011` (TILE_INDEX).
+Addresses: `0xF0000FFE` (NAME0) - `0xF0001011` (TILE_INDEX).
 
-Команды:
+Commands:
 
-- **1 (LOAD)** - декодирует файл `NAME` в RGBA и кэширует результат
-  внутри устройства (ширина/высота/пиксели) до следующего `LOAD` -
-  один `LOAD` спрайтшита/тайлсета обслуживает много последующих
-  `EXTRACT`/`EXTRACT_TILE` без повторного декодирования.
-- **2 (EXTRACT)** - вырезает квадрат 32x32 из закэшированной картинки
-  начиная с `(SRC_X, SRC_Y)`, конвертирует прозрачность (альфа < 128 -
-  пиксель становится цветом-ключом `(255,0,255)` у `VideoCard`, иначе
-  копируется RGB как есть - модель спрайтов и тайлов не хранит альфу,
-  только chroma-key, см. "Аппаратные спрайты" выше) и пишет результат
-  в спрайт `SPRITE_INDEX`.
-- **3 (EXTRACT_TILE)** - то же самое, но пишет в тайл `TILE_INDEX`
-  тайлсета `VideoCard` (см. "Аппаратные тайлы и скролл" выше) вместо
-  спрайта.
+- **1 (LOAD)** - decodes the file `NAME` into RGBA and caches the
+  result inside the device (width/height/pixels) until the next
+  `LOAD` - one `LOAD` of a spritesheet/tileset serves many subsequent
+  `EXTRACT`/`EXTRACT_TILE` calls without re-decoding.
+- **2 (EXTRACT)** - cuts a 32x32 square out of the cached image
+  starting at `(SRC_X, SRC_Y)`, converts transparency (alpha < 128 -
+  the pixel becomes `VideoCard`'s chroma-key color `(255,0,255)`,
+  otherwise RGB is copied as-is - the sprite/tile model doesn't store
+  alpha, only a chroma key, see "Hardware sprites" above), and writes
+  the result into sprite `SPRITE_INDEX`.
+- **3 (EXTRACT_TILE)** - the same thing, but writes into tile
+  `TILE_INDEX` of `VideoCard`'s tileset (see "Hardware tiles and
+  scrolling" above) instead of a sprite.
 
-Пример - загрузить спрайтшит и положить ячейку `(64, 0)` в спрайт 2:
+Example - load a spritesheet and put cell `(64, 0)` into sprite 2:
 
     LDI A, 83   ; 'S'
     STA 0xF0000FFE
     LDI A, 80   ; 'P'
     STA 0xF0000FFF
-    ; ... остальные буквы имени файла в NAME2-11, лишние - в 0 ...
+    ; ... the rest of the file name's letters in NAME2-11, unused ones = 0 ...
 
     LDI A, 1
     STA 0xF000100F      ; COMMAND = LOAD
 
-    LDA 0xF0001010       ; STATUS - проверить перед EXTRACT
+    LDA 0xF0001010       ; STATUS - check before EXTRACT
     LDI B, 0
     CMP B
     JNZ png_error
@@ -2078,48 +2082,49 @@ sprite_fill_loop:
     LDI A, 2
     STA 0xF000100F      ; COMMAND = EXTRACT
 
-Полный рабочий пример - `C/DEMOS/SPRITES.ASM` (`cd demos`, затем
-`exec sprites.asm`): грузит спрайтшит, расставляет несколько
-персонажей неподвижным фоном и один двигает по экрану как в
-`C/DEMOS/DEMO.ASM`, только через `SPRITE_X/Y`, а не `FILL_RECT`.
+A full working example - `C/DEMOS/SPRITES.ASM` (`cd demos`, then
+`exec sprites.asm`): loads a spritesheet, arranges several characters
+as a static background, and moves one of them across the screen like
+`C/DEMOS/DEMO.ASM`, only through `SPRITE_X/Y` rather than `FILL_RECT`.
 
 
 ---
 
 ## MapLoader
 
-Грузит текстовый файл тайловой карты из ТЕКУЩЕЙ папки того диска, с
-которого был запущен `exec`нутый файл (см. `PngLoader` выше про
-`Disk::lastExecDisk`), и кладёт его прямо в `VideoCard` (см. "Аппаратные тайлы и скролл" выше) - какой
-тайл стоит в какой клетке карты. Разбор текста - на стороне C++, тем же
-рассуждением, что и разбор PNG у `PngLoader`: городить парсер текста в
-ассемблере этого CPU ради, по сути, разового действия при старте
-программы не имеет смысла.
+Loads a text tile-map file from the CURRENT folder of whichever disk
+the `exec`'d file was launched from (see `PngLoader` above for
+`Disk::lastExecDisk`), and puts it straight into `VideoCard` (see
+"Hardware tiles and scrolling" above) - which tile sits in which map
+cell. Parsing happens on the C++ side, for the same reasoning as
+`PngLoader`'s PNG parsing: building a text parser in this CPU's
+assembly for what's essentially a one-off action at program startup
+wouldn't make sense.
 
-Формат файла - обычный текст: каждая строка файла - одна строка
-карты, десятичные индексы тайлов (0-127) через пробел, все строки
-одинаковой длины (карта - прямоугольник). Пустые строки в конце файла
-игнорируются. Пример фрагмента карты 8x3:
+File format - plain text: each line of the file is one row of the
+map, decimal tile indices (0-127) separated by spaces, all lines the
+same length (the map is a rectangle). Trailing empty lines are
+ignored. Example of an 8x3 map fragment:
 
     0 0 0 1 1 1 0 0
     0 2 2 2 2 2 0 0
     0 2 3 3 3 2 0 0
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0-11 | NAME0-11 | имя текстового файла карты (как у `Disk`) |
-| 12 | COMMAND (запись = триггер) | 1 = LOAD |
-| 13 | STATUS (только чтение) | 0=ok, 1=файл не найден, 2=ошибка разбора (не прямоугольная карта, пустой файл, индекс тайла вне 0-127) |
+| 0-11 | NAME0-11 | name of the map's text file (same as `Disk`) |
+| 12 | COMMAND (write = trigger) | 1 = LOAD |
+| 13 | STATUS (read-only) | 0=ok, 1=file not found, 2=parse error (not a rectangular map, empty file, tile index outside 0-127) |
 
-Адреса: `0xF0001012` (NAME0) - `0xF000101F` (STATUS).
+Addresses: `0xF0001012` (NAME0) - `0xF000101F` (STATUS).
 
-Команда **1 (LOAD)** читает файл `NAME`, разбирает его по формату
-выше и одним вызовом заменяет текущую карту `VideoCard` целиком (новая
-карта заменяет старую вместе с размерами; скролл при этом сбрасывается
-в `(0, 0)`, чтобы не остаться за пределами новой, возможно меньшей,
-карты).
+Command **1 (LOAD)** reads the file `NAME`, parses it per the format
+above, and replaces `VideoCard`'s current map entirely in one call
+(the new map replaces the old one along with its dimensions; scroll
+is reset to `(0, 0)` so it can't end up outside the new, possibly
+smaller, map).
 
-Пример - загрузить `MAP.TXT`:
+Example - load `MAP.TXT`:
 
     LDI A, 77   ; 'M'
     STA 0xF0001012
@@ -2136,7 +2141,7 @@ sprite_fill_loop:
     LDI A, 84   ; 'T'
     STA 0xF0001018
     LDI A, 0
-    STA 0xF0001019      ; и так далее NAME7-11 = 0
+    STA 0xF0001019      ; and so on, NAME7-11 = 0
 
     LDI A, 1
     STA 0xF000101E      ; COMMAND = LOAD
@@ -2146,80 +2151,80 @@ sprite_fill_loop:
     CMP B
     JNZ map_error
 
-Полный рабочий пример - `C/DEMOS/TILEDEMO.ASM` (`cd demos`, затем
-`exec tiledemo.asm`), карта - `C/DEMOS/MAP.TXT`.
+A full working example - `C/DEMOS/TILEDEMO.ASM` (`cd demos`, then
+`exec tiledemo.asm`), map - `C/DEMOS/MAP.TXT`.
 
 
 ---
 
 ## SoundCard
 
-Проигрывает уже разобранную трекерную песню (см. `ModLoader` ниже -
-разбор формата .mod целиком там, `SoundCard` только воспроизводит
-готовую структуру: сэмплы + паттерны + order-таблица). Секвенсор,
-микшер и вывод звука (`winmm`/`waveOut*`) целиком живут в отдельном
-`std::thread`, независимом от цикла CPU - та же причина, что и у
-`VideoCard`: `tick()` устройства вызывается на КАЖДОЕ обращение к шине
-(см. `CPU::busRead`/`busWrite`) - тяжёлая работа там повторила бы
-старый баг с `Keyboard`, только гораздо серьёзнее. `SoundCard` вообще
-не переопределяет `tick()`.
+Plays a tracker song that's already been parsed (see `ModLoader`
+below - all `.mod` format parsing lives there, `SoundCard` only plays
+the ready-made structure: samples + patterns + an order table). The
+sequencer, mixer, and audio output (`winmm`/`waveOut*`) all live on a
+separate `std::thread`, independent of the CPU loop - same reason as
+`VideoCard`: the device's `tick()` is called on EVERY bus access (see
+`CPU::busRead`/`busWrite`) - heavy work there would repeat the old
+`Keyboard` bug, only much worse. `SoundCard` doesn't override `tick()`
+at all.
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0 | COMMAND (запись = триггер) | 1=PLAY, 2=STOP, 3=PAUSE, 4=RESUME |
-| 1 | STATUS (только чтение) | 0=стоп/готово, 1=играет, 2=на паузе, 3=песня не загружена |
-| 2 | VOLUME | общая громкость 0-255 (по умолчанию 255), действует сразу по записи |
+| 0 | COMMAND (write = trigger) | 1=PLAY, 2=STOP, 3=PAUSE, 4=RESUME |
+| 1 | STATUS (read-only) | 0=stopped/ready, 1=playing, 2=paused, 3=no song loaded |
+| 2 | VOLUME | overall volume 0-255 (default 255), takes effect immediately on write |
 
-Адреса: `0xF0001042` (COMMAND) - `0xF0001044` (VOLUME).
+Addresses: `0xF0001042` (COMMAND) - `0xF0001044` (VOLUME).
 
-Команды:
+Commands:
 
-- **1 (PLAY)** - запускает воспроизведение с начала песни (если уже
-  играет - не перезапускает; если на паузе - снимает паузу). Ничего
-  не делает и оставляет `STATUS=3`, если песня ещё не загружена через
-  `ModLoader`.
-- **2 (STOP)** - останавливает воспроизведение и закрывает
-  аудио-поток. Следующий `PLAY` начнёт песню заново с начала (не с
-  места остановки - для этого есть `PAUSE`/`RESUME`).
-- **3 (PAUSE)** / **4 (RESUME)** - приостановить/возобновить без
-  сброса позиции в песне (тишина вместо аудио, секвенсор не крутится,
-  пока на паузе).
+- **1 (PLAY)** - starts playback from the beginning of the song (if
+  already playing - doesn't restart it; if paused - unpauses it).
+  Does nothing and leaves `STATUS=3` if no song has been loaded via
+  `ModLoader` yet.
+- **2 (STOP)** - stops playback and closes the audio thread. The next
+  `PLAY` will start the song over from the beginning (not from where
+  it stopped - that's what `PAUSE`/`RESUME` are for).
+- **3 (PAUSE)** / **4 (RESUME)** - pause/resume without resetting the
+  position in the song (silence instead of audio, the sequencer
+  doesn't advance while paused).
 
-Если на компьютере нет звукового устройства (или недоступно) -
-`waveOutOpen` внутри `PLAY` тихо завершается неудачей: воспроизведения
-не будет, но процесс не падает и не бросает исключений.
+If the computer has no sound device (or it's unavailable), the
+`waveOutOpen` call inside `PLAY` quietly fails: there's no playback,
+but the process doesn't crash or throw an exception.
 
-### Секвенсор и эффекты
+### Sequencer and effects
 
-Тик-ориентированный секвенсор, как в оригинальном ProTracker:
-`speed` (тиков на строку, по умолчанию 6) и `tempo` (BPM, по
-умолчанию 125) определяют длительность тика (`2500 / tempo` мс),
-строка длится `speed` тиков. На новой строке - триггер новой ноты
-(сэмпл + частота из period, `freq = 8363 * 428 / period`, без учёта
-finetune - согласованное упрощение) и громкости; на каждом тике -
-эффекты, которые "едут":
+A tick-based sequencer, like the original ProTracker: `speed` (ticks
+per row, default 6) and `tempo` (BPM, default 125) determine how long
+a tick lasts (`2500 / tempo` ms), a row lasts `speed` ticks. On a new
+row - a new note is triggered (a sample + a frequency from the
+period, `freq = 8363 * 428 / period`, ignoring finetune - an agreed
+simplification) along with volume; on every tick - effects "ride
+along":
 
-| Эффект | Название | Реализовано |
+| Effect | Name | Implemented |
 |---|---|---|
-| `0xy` | Арпеджио | да - циклит высоту между базовой нотой и +x/+y полутонами каждый тик |
-| `1xx` | Portamento up | да - period уменьшается на `xx*4` за тик (с запоминанием последнего ненулевого `xx`) |
-| `2xx` | Portamento down | да - симметрично `1xx` |
-| `3xx` | Tone portamento | да - едет к period последней указанной ноты, не перезапускает сэмпл |
-| `Axy` | Volume slide | да - `x`>0 повышает громкость на `x`/тик, иначе понижает на `y`/тик |
-| `Cxx` | Set volume | да |
-| `Bxx` | Position jump | да |
-| `Dxx` | Pattern break | да (`xx` - BCD-строка перехода в следующем паттерне) |
-| `Fxx` | Set speed/tempo | да (`xx<32` - speed, `xx>=32` - tempo) |
-| `4xy`,`7xy`,`9xx`,`Exy` и т.д. | Вибрато, тремоло, sample offset, retrigger и другие | нет - нота триггерится как обычно, сам эффект молча игнорируется |
+| `0xy` | Arpeggio | yes - cycles pitch between the base note and +x/+y semitones every tick |
+| `1xx` | Portamento up | yes - period decreases by `xx*4` per tick (remembering the last non-zero `xx`) |
+| `2xx` | Portamento down | yes - symmetric to `1xx` |
+| `3xx` | Tone portamento | yes - slides toward the period of the last specified note, doesn't retrigger the sample |
+| `Axy` | Volume slide | yes - `x`>0 raises volume by `x`/tick, otherwise lowers it by `y`/tick |
+| `Cxx` | Set volume | yes |
+| `Bxx` | Position jump | yes |
+| `Dxx` | Pattern break | yes (`xx` - BCD row to jump to in the next pattern) |
+| `Fxx` | Set speed/tempo | yes (`xx<32` - speed, `xx>=32` - tempo) |
+| `4xy`,`7xy`,`9xx`,`Exy` etc. | Vibrato, tremolo, sample offset, retrigger, and others | no - the note is triggered as usual, the effect itself is silently ignored |
 
-Панорама - классическая амижная раскладка: каналы 0 и 3 - налево,
-1 и 2 - направо. Зацикливание - по достижении конца order-таблицы
-(длина - байт 950 файла) секвенсор переходит на `restart position`
-(байт 951) - песня играет бесконечно, как и положено трекерной музыке,
-пока не придёт `STOP`.
+Panning is the classic Amiga layout: channels 0 and 3 - left, 1 and
+2 - right. Looping: on reaching the end of the order table (its
+length is byte 950 of the file), the sequencer jumps to the
+`restart position` (byte 951) - the song plays forever, as tracker
+music should, until a `STOP` arrives.
 
-Пример - запустить уже загруженную песню и остановить по Ctrl+Q (полный
-рабочий пример - `C/DEMOS/MUSIC.ASM`, `cd demos` + `exec music.asm`):
+Example - start an already-loaded song and stop it on Ctrl+Q (full
+working example - `C/DEMOS/MUSIC.ASM`, `cd demos` + `exec music.asm`):
 
     LDI A, 1
     STA 0xF0001042      ; SoundCard COMMAND = PLAY
@@ -2232,50 +2237,50 @@ finetune - согласованное упрощение) и громкости;
 
 ## ModLoader
 
-Читает и разбирает трекерный `.mod`-файл из ТЕКУЩЕЙ папки того диска,
-с которого был запущен `exec`нутый файл (см. `PngLoader` выше про
-`Disk::lastExecDisk`), на стороне C++ и кладёт готовую песню в
-`SoundCard` одним вызовом. MOD - бинарный
-формат с собственным секвенсором
-(сэмплы, паттерны, order-таблица, эффекты) - разобрать его в
-ассемблере этого CPU так же нереально, как декодировать PNG (см.
-`PngLoader`) - ассемблеру видна только команда "загрузи файл".
+Reads and parses a tracker `.mod` file from the CURRENT folder of
+whichever disk the `exec`'d file was launched from (see `PngLoader`
+above for `Disk::lastExecDisk`) on the C++ side, and puts the ready-
+made song into `SoundCard` in one call. MOD is a binary format with
+its own sequencer (samples, patterns, an order table, effects) -
+parsing it in this CPU's assembly is just as unrealistic as decoding
+PNG (see `PngLoader`) - the assembly side only sees a "load file"
+command.
 
-Поддерживается стандартный ProTracker MOD - 31 сэмпл, 4 канала,
-сигнатура `M.K.`/`M!K!`/`FLT4`/`4CHN` (все четыре означают одно и то
-же: 4-канальный 31-сэмпловый формат). Другие сигнатуры (больше/меньше
-каналов, старые 15-сэмпловые Soundtracker-модули и т.д.) дают
-`STATUS=2`, не крашат.
+Standard ProTracker MOD is supported - 31 samples, 4 channels,
+signature `M.K.`/`M!K!`/`FLT4`/`4CHN` (all four mean the same thing:
+the 4-channel, 31-sample format). Other signatures (more/fewer
+channels, old 15-sample Soundtracker modules, etc.) give `STATUS=2`,
+they don't crash.
 
-Имя файла - **32 байта**, не 12, как у `Disk`/`PngLoader`/`MapLoader`:
-имена `.mod`-файлов (например `space_debris.mod`, 16 символов) не
-укладываются в 8.3-конвенцию, которой следуют остальные загрузчики.
-`ModLoader` не идёт через `Disk` (читает файл сам), так что
-ограничение 12 байт - это только их собственный выбор, а не общее
-правило шины.
+The file name is **32 bytes**, not 12 like `Disk`/`PngLoader`/
+`MapLoader`: `.mod` file names (e.g. `space_debris.mod`, 16
+characters) don't fit the 8.3 convention the other loaders follow.
+`ModLoader` doesn't go through `Disk` (it reads the file itself), so
+the 12-byte limit elsewhere is just those devices' own choice, not a
+general rule of the bus.
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0-31 | NAME0-31 | имя .mod-файла на диске "C" |
-| 32 | COMMAND (запись = триггер) | 1 = LOAD |
-| 33 | STATUS (только чтение) | 0=ok, 1=файл не найден, 2=неподдерживаемый формат (не M.K./4 канала/31 сэмпл), 3=повреждённый/слишком короткий файл |
+| 0-31 | NAME0-31 | name of the `.mod` file on disk "C" |
+| 32 | COMMAND (write = trigger) | 1 = LOAD |
+| 33 | STATUS (read-only) | 0=ok, 1=file not found, 2=unsupported format (not M.K./4 channels/31 samples), 3=corrupted/too-short file |
 
-Адреса: `0xF0001020` (NAME0) - `0xF0001041` (STATUS).
+Addresses: `0xF0001020` (NAME0) - `0xF0001041` (STATUS).
 
-Команда **1 (LOAD)** читает файл `NAME`, разбирает его (заголовок, 31
-дескриптор сэмпла, order-таблицу, паттерны, PCM-данные сэмплов) и
-одним вызовом кладёт результат в `SoundCard` (полностью заменяет
-текущую песню, сбрасывает секвенсор в начало - на воспроизведение
-нужно после этого явно послать `SoundCard.PLAY`, `LOAD` его не
-запускает).
+Command **1 (LOAD)** reads the file `NAME`, parses it (header, 31
+sample descriptors, order table, patterns, sample PCM data) and, in
+one call, puts the result into `SoundCard` (fully replaces the
+current song, resets the sequencer to the start - you need to
+explicitly send `SoundCard.PLAY` afterward to hear it, `LOAD` doesn't
+start playback itself).
 
-Пример - загрузить `space_debris.mod` и запустить:
+Example - load `space_debris.mod` and play it:
 
     LDI A, 115  ; 's'
     STA 0xF0001020
     LDI A, 112  ; 'p'
     STA 0xF0001021
-    ; ... остальные буквы имени файла в NAME2-15, лишние - в 0 ...
+    ; ... the rest of the file name's letters in NAME2-15, unused ones = 0 ...
 
     LDI A, 1
     STA 0xF0001040      ; COMMAND = LOAD
@@ -2288,100 +2293,103 @@ finetune - согласованное упрощение) и громкости;
     LDI A, 1
     STA 0xF0001042      ; SoundCard COMMAND = PLAY
 
-Полный рабочий пример - `C/DEMOS/MUSIC.ASM` (`cd demos`, затем
-`exec music.asm`), песня - `C/DEMOS/space_debris.mod`.
+A full working example - `C/DEMOS/MUSIC.ASM` (`cd demos`, then
+`exec music.asm`), song - `C/DEMOS/space_debris.mod`.
 
 
 ---
 
 ## Gpu3D
 
-3D-ускоритель: вся математика (матрицы модели/камеры, перспективная
-проекция, растеризация с z-буфером) - на стороне C++. Процессору это
-не под силу (нет даже нормального умножения без переполнения байта, не
-то что тригонометрии) - тем же рассуждением, что и у `PngLoader`/
-`ModLoader`. Ассемблеру видны только команды уровня "вот вершина",
-"нарисуй треугольник", "покажи кадр" - вся 3D-сцена копится во
-ВНУТРЕННЕМ буфере `Gpu3D` (свой цветовой буфер 320x240 + свой z-буфер
-+ маска "затронутых" пикселей) и передаётся в `VideoCard` целиком
-одним вызовом по команде `PRESENT` (см. "Аппаратные тайлы и скролл"
-выше про полный порядок слоёв - 3D рисуется НАД тайлами, но ПОД
-спрайтами).
+A 3D accelerator: all the math (model/camera matrices, perspective
+projection, z-buffered rasterization) lives on the C++ side. The
+processor is nowhere near capable of it (it doesn't even have proper
+multiplication without byte overflow, let alone trigonometry) - same
+reasoning as `PngLoader`/`ModLoader`. The assembly side only sees
+commands at the level of "here's a vertex", "draw a triangle", "show
+the frame" - the whole 3D scene accumulates in `Gpu3D`'s OWN internal
+buffer (its own 320x240 color buffer + its own z-buffer + a mask of
+"touched" pixels) and is handed to `VideoCard` all at once with a
+`PRESENT` command (see "Hardware tiles and scrolling" above for the
+full layer order - 3D is drawn OVER the tiles, but UNDER the
+sprites).
 
-Без текстур - цвет закреплён за каждой вершиной (Gouraud shading,
-как в PS1/N64), растеризатор линейно интерполирует цвет и глубину
-между тремя вершинами треугольника.
+No textures - color is fixed per vertex (Gouraud shading, like on the
+PS1/N64); the rasterizer linearly interpolates color and depth across
+a triangle's three vertices.
 
-| Смещение | Регистр | Описание |
+| Offset | Register | Description |
 |----------|---------|----------|
-| 0-1 | VX_LOW/HIGH | X вершины, знаковое 16 бит, единицы модели |
-| 2-3 | VY_LOW/HIGH | Y вершины |
-| 4-5 | VZ_LOW/HIGH | Z вершины |
-| 6 | VR | цвет вершины, R (0-255) |
-| 7 | VG | цвет вершины, G |
-| 8 | VB | цвет вершины, B |
-| 9 | COMMAND (запись = триггер) | 1=SUBMIT_VERTEX, 2=DRAW_TRIANGLE, 3=CLEAR, 4=PRESENT |
-| 10 | STATUS (только чтение) | 0=ok, 1=DRAW_TRIANGLE вызван без 3 накопленных вершин |
-| 11-16 | OBJ_X/Y/Z_LOW/HIGH | позиция объекта в мире, знаковое 16 бит |
-| 17-22 | OBJ_YAW/PITCH/ROLL_LOW/HIGH | поворот объекта, градусы (знаковое 16 бит) |
-| 23-28 | CAM_X/Y/Z_LOW/HIGH | позиция камеры в мире |
-| 29-32 | CAM_YAW/PITCH_LOW/HIGH | поворот камеры (без крена) |
+| 0-1 | VX_LOW/HIGH | vertex X, signed 16-bit, model units |
+| 2-3 | VY_LOW/HIGH | vertex Y |
+| 4-5 | VZ_LOW/HIGH | vertex Z |
+| 6 | VR | vertex color, R (0-255) |
+| 7 | VG | vertex color, G |
+| 8 | VB | vertex color, B |
+| 9 | COMMAND (write = trigger) | 1=SUBMIT_VERTEX, 2=DRAW_TRIANGLE, 3=CLEAR, 4=PRESENT |
+| 10 | STATUS (read-only) | 0=ok, 1=DRAW_TRIANGLE called without 3 accumulated vertices |
+| 11-16 | OBJ_X/Y/Z_LOW/HIGH | object position in the world, signed 16-bit |
+| 17-22 | OBJ_YAW/PITCH/ROLL_LOW/HIGH | object rotation, degrees (signed 16-bit) |
+| 23-28 | CAM_X/Y/Z_LOW/HIGH | camera position in the world |
+| 29-32 | CAM_YAW/PITCH_LOW/HIGH | camera rotation (no roll) |
 
-`OBJ_*`/`CAM_*` действуют сразу по записи, без команды (как позиция
-спрайта/скролл карты) - вращать объект или двигать камеру каждый кадр
-должно быть дёшево (несколько `STA`, без лишнего байта-команды).
+`OBJ_*`/`CAM_*` take effect immediately on write, with no command
+(like sprite position/map scroll) - rotating an object or moving the
+camera every frame should be cheap (a few `STA`s, no extra command
+byte).
 
-Адреса: `0xF0001045` (VX_LOW) - `0xF0001065` (CAM_PITCH_HIGH).
+Addresses: `0xF0001045` (VX_LOW) - `0xF0001065` (CAM_PITCH_HIGH).
 
-Команды:
+Commands:
 
-- **1 (SUBMIT_VERTEX)** - добавляет текущие `VX/VY/VZ/VR/VG/VB` во
-  внутренний накопитель вершин треугольника. Рассчитан на ровно 3
-  вершины - вызывающий код обязан слать `SUBMIT_VERTEX` три раза перед
-  каждым `DRAW_TRIANGLE` (как `WRITE_PIXEL` у спрайтов/тайлов
-  `VideoCard`, только без авто-инкремента индекса - тут всегда именно
-  3 вершины на треугольник).
-- **2 (DRAW_TRIANGLE)** - применяет модельную матрицу (`OBJ_*` -
-  перенос и повороты объекта) и матрицу камеры (`CAM_*`) к 3
-  накопленным вершинам, проецирует в экранные координаты (320x240,
-  фиксированный вертикальный FOV ~70°) и растеризует треугольник во
-  ВНУТРЕННИЙ буфер `Gpu3D` - барицентрическая растеризация,
-  Gouraud-интерполяция цвета, тест по z-буферу на пиксель (только
-  более близкий пиксель перезаписывает более дальний). Треугольник, у
-  которого хоть одна вершина оказалась "за камерой" (или ближе
-  минимальной дистанции), целиком отбрасывается - честного клиппинга
-  по плоскостям в v1 нет (упрощение: для выпуклых объектов вроде куба
-  на типичной дистанции демо не критично). Не трогает `VideoCard`
-  напрямую - только свой внутренний буфер.
-- **3 (CLEAR)** - сбрасывает внутренний z-буфер (в "бесконечность") и
-  маску "затронутых" пикселей - подготовка к новому кадру. Сам
-  цветовой буфер трогать не нужно - непойманные в новом кадре пиксели
-  просто не попадут в маску и не перекроют то, что уже нарисовано на
-  `VideoCard` (фон/тайлы) при следующем `PRESENT`.
-- **4 (PRESENT)** - одним вызовом (`VideoCard::setThreeDLayer`)
-  передаёт видеокарте копию цветового буфера и маску "затронутых"
-  пикселей за этот кадр. Первый `PRESENT` включает 3D-слой в
-  композиции кадра видеокарты - до этого он просто пропускается,
-  старые демо без 3D (`DEMO.ASM`, `SPRITES.ASM`, `TILEDEMO.ASM`) не
-  видят разницы.
+- **1 (SUBMIT_VERTEX)** - adds the current `VX/VY/VZ/VR/VG/VB` to an
+  internal triangle-vertex accumulator. Designed for exactly 3
+  vertices - the calling code must send `SUBMIT_VERTEX` three times
+  before every `DRAW_TRIANGLE` (like `WRITE_PIXEL` for `VideoCard`'s
+  sprites/tiles, just without auto-incrementing an index - here it's
+  always exactly 3 vertices per triangle).
+- **2 (DRAW_TRIANGLE)** - applies the model matrix (`OBJ_*` - the
+  object's translation and rotation) and the camera matrix (`CAM_*`)
+  to the 3 accumulated vertices, projects them into screen
+  coordinates (320x240, a fixed vertical FOV of ~70°), and
+  rasterizes the triangle into `Gpu3D`'s OWN internal buffer -
+  barycentric rasterization, Gouraud color interpolation, a per-pixel
+  z-buffer test (only a nearer pixel overwrites a farther one). A
+  triangle with even one vertex behind the camera (or closer than the
+  minimum distance) is discarded entirely - there's no proper
+  plane clipping in v1 (a simplification: not an issue for convex
+  objects like a cube at typical demo distances). Doesn't touch
+  `VideoCard` directly - only its own internal buffer.
+- **3 (CLEAR)** - resets the internal z-buffer (to "infinity") and the
+  "touched pixels" mask - preparation for a new frame. There's no
+  need to touch the color buffer itself - pixels not hit in the new
+  frame simply won't be in the mask and won't cover up whatever's
+  already drawn on `VideoCard` (background/tiles) on the next
+  `PRESENT`.
+- **4 (PRESENT)** - in one call (`VideoCard::setThreeDLayer`) hands
+  the video card a copy of the color buffer and the "touched pixels"
+  mask for this frame. The first `PRESENT` turns on the 3D layer in
+  the video card's frame composition - before that it's simply
+  skipped, old demos without 3D (`DEMO.ASM`, `SPRITES.ASM`,
+  `TILEDEMO.ASM`) see no difference.
 
-Пример - нарисовать один треугольник (камера в `(0,0,-150)`, куб/
-объект в начале координат без поворота - оба по умолчанию):
+Example - draw a single triangle (camera at `(0,0,-150)`, the
+cube/object at the origin with no rotation - both are the defaults):
 
     LDI A, 106
-    STA 0xF0001060      ; CAM_Z_LOW  (-150 в 16-битном доп. коде)
+    STA 0xF0001060      ; CAM_Z_LOW  (-150 in 16-bit two's complement)
     LDI A, 255
     STA 0xF0001061      ; CAM_Z_HIGH
 
     LDI A, 3
     STA 0xF000104E      ; COMMAND = CLEAR
 
-    ; вершина 0: (-30,-30,0), красная
+    ; vertex 0: (-30,-30,0), red
     LDI A, 226
     STA 0xF0001045      ; VX_LOW
     LDI A, 255
     STA 0xF0001046      ; VX_HIGH
-    ; ... аналогично VY_LOW/HIGH = -30, VZ_LOW/HIGH = 0 ...
+    ; ... similarly VY_LOW/HIGH = -30, VZ_LOW/HIGH = 0 ...
     LDI A, 255
     STA 0xF000104B      ; VR = 255
     LDI A, 0
@@ -2390,7 +2398,7 @@ finetune - согласованное упрощение) и громкости;
     LDI A, 1
     STA 0xF000104E      ; COMMAND = SUBMIT_VERTEX
 
-    ; ... вершины 1 и 2 аналогично ...
+    ; ... vertices 1 and 2 the same way ...
 
     LDI A, 2
     STA 0xF000104E      ; COMMAND = DRAW_TRIANGLE
@@ -2398,68 +2406,67 @@ finetune - согласованное упрощение) и громкости;
     LDI A, 4
     STA 0xF000104E      ; COMMAND = PRESENT
 
-Полный рабочий пример - `C/DEMOS/CUBE3D.ASM` (`cd demos`, затем
-`exec cube3d.asm`):
-вращающийся цветной куб (12 треугольников, по 2 на грань) с
-UI-иконкой поверх (спрайт из `SPRITES.PNG`).
+A full working example - `C/DEMOS/CUBE3D.ASM` (`cd demos`, then
+`exec cube3d.asm`): a spinning colored cube (12 triangles, 2 per
+face) with a UI icon on top (a sprite from `SPRITES.PNG`).
 
 
 ---
 
-# 10. Прерывания
+# 10. Interrupts
 
-Процессор поддерживает одну линию запроса прерывания
-(IRQ), общую для всех устройств на шине. У прерывания нет
-приоритета и вектора — обработчик всегда один, и если
-источников несколько, он сам должен определить, какое
-устройство его вызвало (опросив его регистры).
+The processor supports a single interrupt request (IRQ) line, shared
+by all devices on the bus. There's no priority or vector - there's
+always one handler, and if there are several sources, it has to
+figure out for itself which device triggered it (by polling its
+registers).
 
-## Разрешение прерываний
+## Enabling interrupts
 
-Прерывания запрещены по умолчанию (после reset). Их нужно
-явно разрешить инструкцией `EI` и можно запретить `DI`.
+Interrupts are disabled by default (after reset). They must be
+explicitly enabled with the `EI` instruction, and can be disabled
+with `DI`.
 
-## Обработчик прерывания
+## The interrupt handler
 
-Обработчик обязан начинаться по фиксированному адресу
-`0x00000005`. Поскольку выполнение всегда начинается с адреса
-`0x00000000`, прикладная программа, использующая прерывания,
-должна начинаться с таблицы переходов:
+The handler must start at the fixed address `0x00000005`. Since
+execution always starts at address `0x00000000`, an application
+program that uses interrupts must start with a jump table:
 
     JMP main
     JMP irq_handler
 
     main:
-        ; основная программа
+        ; the main program
 
     irq_handler:
-        ; обработчик прерывания
+        ; the interrupt handler
         RETI
 
-Первые 5 байт (`JMP main` — опкод + 4-байтный адрес) уводят
-выполнение от вектора прерывания к реальному началу программы.
-Вторые 5 байт (по адресу `0x00000005`) — это `JMP irq_handler`,
-на который процессор перейдёт при прерывании.
+The first 5 bytes (`JMP main` - opcode + a 4-byte address) steer
+execution away from the interrupt vector to the program's real start.
+The second 5 bytes (at address `0x00000005`) are `JMP irq_handler`,
+which is where the processor will jump on an interrupt.
 
-## Что происходит при прерывании
+## What happens on an interrupt
 
-Между выполнением инструкций процессор проверяет, разрешены
-ли прерывания и запрашивает ли что-нибудь на шине прерывание.
-Если да:
+Between executing instructions, the processor checks whether
+interrupts are enabled and whether anything on the bus is requesting
+one. If so:
 
-1. На стек кладутся: `PC` (адрес прерванной инструкции, 4 байта),
-   затем `FLAGS` (1 байт).
-2. Прерывания автоматически запрещаются (как `DI`).
-3. `PC` устанавливается в `0x00000005`.
+1. `PC` (the address of the interrupted instruction, 4 bytes) is
+   pushed onto the stack, then `FLAGS` (1 byte).
+2. Interrupts are automatically disabled (as with `DI`).
+3. `PC` is set to `0x00000005`.
 
-`RETI` в конце обработчика снимает `FLAGS` и `PC` со стека
-в обратном порядке и заново разрешает прерывания.
+`RETI` at the end of the handler pops `FLAGS` and `PC` off the stack
+in reverse order and re-enables interrupts.
 
-Регистры `A`, `B`, `C`, `D` процессор не сохраняет —
-обработчик обязан сохранить через `PUSH`/`POP` те регистры,
-которые он использует, и восстановить их перед `RETI`.
+The processor does not save registers `A`, `B`, `C`, `D` - the
+handler must save, via `PUSH`/`POP`, whichever registers it uses, and
+restore them before `RETI`.
 
-## Пример: обработчик прерывания от таймера
+## Example: a timer interrupt handler
 
     JMP main
     JMP irq_handler
@@ -2469,9 +2476,9 @@ UI-иконкой поверх (спрайт из `SPRITES.PNG`).
         LDI A, 0xE8
         STA 0xF0000002      ; CMP_LOW  = 0xE8
         LDI A, 0x03
-        STA 0xF0000003      ; CMP_HIGH = 0x03  (порог = 1000)
+        STA 0xF0000003      ; CMP_HIGH = 0x03  (threshold = 1000)
         LDI A, 1
-        STA 0xF0000004      ; включить таймер
+        STA 0xF0000004      ; enable the timer
 
         EI
 
@@ -2483,7 +2490,7 @@ UI-иконкой поверх (спрайт из `SPRITES.PNG`).
         PUSH A
 
         LDI A, 1
-        STA 0xF0000004      ; подтвердить прерывание, таймер остаётся включён
+        STA 0xF0000004      ; acknowledge the interrupt, the timer stays enabled
 
         POP A
 
@@ -2492,104 +2499,110 @@ UI-иконкой поверх (спрайт из `SPRITES.PNG`).
 
 ---
 
-# 11. Зарезервированные возможности
+# 11. Reserved capabilities
 
-Видео и звук реализованы - не как инструкции процессора, а как
-MMIO-устройства: `VideoCard` (растровый режим 320x240, спрайты, тайлы
-со скроллом, 3D-слой) + `PngLoader`/`MapLoader` для видео и
-`Gpu3D` для 3D; `SoundCard` (MOD-проигрыватель) + `ModLoader` для
-звука. См. раздел 9.
+Video and sound are implemented - not as processor instructions, but
+as MMIO devices: `VideoCard` (320x240 bitmap mode, sprites, tiles
+with scrolling, a 3D layer) + `PngLoader`/`MapLoader` for video and
+`Gpu3D` for 3D; `SoundCard` (a MOD player) + `ModLoader` for sound.
+See section 9.
 
 
 ---
 
-# 12. Мини-C
+# 12. Mini-C
 
-Писать сложную логику прямо на ассемблере (раздел 3) больно - нет
-переменных с именами вместо адресов, нет структурного `if`/`while`,
-каждое ветвление - ручные `JMP`/`JZ`/`CMP`. Мини-C - урезанный
-Си-подобный язык поверх этого же ассемблера: компилятор (`Compiler.h`/
-`.cpp`) переводит текст на мини-C в обычный ASM-текст (тот же
-синтаксис, что и выше в этом файле) и отдаёт его тому же `Assembler`,
-что собирает `.asm` - дальше всё как с обычной программой: `build
-ИМЯ.MC` кладёт `ИМЯ.RUN` рядом (см. `BUILD`/`LOAD_RAW` в разделе
-"Disk"), и его можно запустить именем файла без расширения, как любой
+Writing complex logic directly in assembly (section 3) is painful -
+there are no named variables instead of addresses, no structured
+`if`/`while`, every branch is a manual `JMP`/`JZ`/`CMP`. Mini-C is a
+stripped-down C-like language on top of this same assembler: the
+compiler (`Compiler.h`/`.cpp`) translates Mini-C text into plain ASM
+text (the same syntax used earlier in this document) and hands it to
+the same `Assembler` that assembles `.asm` files - after that
+everything works like a regular program: `build NAME.MC` puts
+`NAME.RUN` next to it (see `BUILD`/`LOAD_RAW` in the "Disk" section),
+and it can be run by its file name without the extension, like any
 `.RUN`.
 
-Язык сознательно урезан под реальные возможности этого CPU (8-битный
-АЛУ, нет адресации "стек+смещение" для локальных переменных, нет
-инструкции "регистр в регистр" кроме `LDHL`) - это не стилистический
-выбор, а прямое следствие набора инструкций из раздела 3.
+The language is deliberately stripped down to match what this CPU can
+actually do (an 8-bit ALU, no "stack+offset" addressing for local
+variables, no "register to register" instruction besides `LDHL`) -
+that's not a stylistic choice, it's a direct consequence of the
+instruction set in section 3.
 
-## Типы и переменные
+## Types and variables
 
-Единственный тип - `int`, беззнаковый 8-бит (как регистры CPU).
-Переполнение молча заворачивается, как и везде в этом ассемблере.
+The only type is `int`, unsigned 8-bit (like the CPU registers).
+Overflow silently wraps around, as it does everywhere in this
+assembler.
 
-Переменных **только глобальные** - настоящих локальных переменных со
-стек-кадром не бывает (у CPU нет адресации "SP+смещение"). `int x;`
-и внутри `main()`/любой функции, и на верхнем уровне файла - в обоих
-случаях это одна и та же именованная ячейка памяти (`x: DB 0` в
-сгенерированном ASM), просто с той разницей, что внутри функции можно
-сразу присвоить начальное значение: `int x = 5;`.
+Variables are **global only** - there's no such thing as a real local
+variable with a stack frame (the CPU has no "SP+offset" addressing).
+`int x;` written inside `main()`/any function or at the top level of
+the file is, in both cases, the same named memory cell (`x: DB 0` in
+the generated ASM) - the only difference is that inside a function you
+can assign it an initial value right away: `int x = 5;`.
 
-Массивы фиксированного размера - только на верхнем уровне:
+Fixed-size arrays - top level only:
 
     int arr[16];
 
-Индекс - 8 бит (0-255), `arr[i]` работает и на чтение, и на запись.
-Реализовано на тех же приёмах, что `cmdbuf`/`NAME` в `SHELL.ASM`:
-`LDHL` на базовый адрес массива + `INCHL` в цикле нужное число раз
-(отдельная подпрограмма `__mc_hladd`, которую компилятор сам
-дописывает в конец программы, если массивы вообще использовались).
+The index is 8-bit (0-255), `arr[i]` works for both reads and writes.
+Implemented with the same tricks as `cmdbuf`/`NAME` in `SHELL.ASM`:
+`LDHL` to the array's base address + `INCHL` in a loop the needed
+number of times (a separate routine, `__mc_hladd`, which the compiler
+appends to the end of the program by itself if arrays were used at
+all).
 
-### Маппированные массивы
+### Mapped arrays
 
     int row3[32] = 0xF0000007 + 80*4;
 
-Тот же синтаксис `int имя[размер]`, плюс необязательное `= адрес`
-(адрес - тоже константа времени компиляции, как у `poke`/`const`).
-Без инициализатора массив, как обычно, получает собственную память
-(`DB` в конце программы). С инициализатором - никакой собственной
-памяти не резервируется: `arr[i]` вместо `LDHL <внутренняя метка>`
-делает `LDHL <адрес>` - то есть массив становится "окном" в уже
-существующую память (обычно - в MMIO-регистр какого-то устройства).
+The same `int name[size]` syntax, plus an optional `= address` (the
+address is also a compile-time constant, like with `poke`/`const`).
+Without an initializer, the array gets its own memory as usual (`DB`
+at the end of the program). With an initializer, no memory of its own
+is reserved: `arr[i]` does `LDHL <address>` instead of
+`LDHL <internal label>` - in other words, the array becomes a
+"window" into memory that already exists (usually some device's MMIO
+register).
 
-Пригодится там, где `poke`/`peek` не годятся, потому что адрес
-известен только в рантайме: `poke`/`peek` жёстко требуют адрес-
-константу (раздел "poke/peek" выше) - это можно обойти, ЕСЛИ базовый
-адрес известен заранее, а меняется только смещение, - именно так
-устроен любой массив. Пример - запись в произвольную ячейку строки
-экрана Text VRAM (адрес `0xF0000007 + y*80 + x`, раздел 9): базовый
-адрес строки - константа, а `x` внутри строки - обычный рантайм-
-индекс. Из-за 8-битного индекса (`arr[i]` не бывает больше 256
-элементов) под каждую строку экрана нужен отдельный маппированный
-массив - готовый пример на несколько строк подряд и выбор нужной по
-`if`-каскаду - `C/DEMOS/SNAKE.MC` (см. ниже).
+Useful wherever `poke`/`peek` don't work because the address is only
+known at run time: `poke`/`peek` rigidly require an address constant
+(see "poke/peek" above) - this can be worked around IF the base
+address is known ahead of time and only the offset changes, which is
+exactly how every array works. Example - writing to an arbitrary cell
+of a Text VRAM screen row (address `0xF0000007 + y*80 + x`, section
+9): the row's base address is a constant, and `x` within the row is a
+regular run-time index. Because of the 8-bit index (`arr[i]` can
+never be more than 256 elements), each screen row needs its own
+mapped array - a ready-made example with several rows in a row and
+picking the right one with an `if` cascade is `C/DEMOS/SNAKE.MC` (see
+below).
 
-## Функции
+## Functions
 
     int add(int a, int b) {
         return a + b;
     }
 
-Параметры - на самом деле скрытые глобальные переменные с
-"мангленным" именем (`add__a`, `add__b`), которые вызывающий код
-заполняет прямо перед `CALL add`. **Рекурсия не поддерживается** -
-рекурсивный вызов затёр бы параметры внешнего вызова, поскольку это
-одна и та же глобальная ячейка, а не новый кадр стека.
+Parameters are actually hidden global variables with a "mangled" name
+(`add__a`, `add__b`), which the calling code fills in right before
+`CALL add`. **Recursion is not supported** - a recursive call would
+overwrite the outer call's parameters, since it's the same global
+cell, not a fresh stack frame.
 
-Программа обязана содержать `int main() { ... }` - именно с неё
-начинается выполнение (`JMP main` - первая инструкция сгенерированной
-программы, независимо от порядка функций в файле). `return выражение;`
-кладёт значение в `A` и делает `RET` - если `main`/функция доходит до
-конца тела без явного `return`, компилятор сам вставляет `LDI A, 0` +
-`RET`.
+A program must contain `int main() { ... }` - execution starts there
+(`JMP main` is the first instruction of the generated program,
+regardless of the order functions appear in the file).
+`return expression;` puts the value into `A` and does `RET` - if
+`main`/a function reaches the end of its body without an explicit
+`return`, the compiler inserts `LDI A, 0` + `RET` itself.
 
-## Управляющие конструкции
+## Control structures
 
-`if`/`else`, `while`, `for` (сахар над `while` - `for (init; cond;
-post) тело`, все три части обязательны):
+`if`/`else`, `while`, `for` (sugar over `while` - `for (init; cond;
+post) body`, all three parts are required):
 
     if (x > 3) {
         x = 100;
@@ -2606,255 +2619,259 @@ post) тело`, все три части обязательны):
         sum = sum + i;
     }
 
-## Операторы
+## Operators
 
     +  -  *  /  %  &  |  ^  ~  <<  >>
     == != < > <= >=
     && ||
     =
 
-Почти все ложатся 1-в-1 на уже существующие опкоды (`ADD`/`SUB`/
-`MUL`/`DIV`/`MOD`/`AND`/`OR`/`XOR`/`NOT` - раздел 3). Сдвиги (`<<`/
-`>>`) реализованы циклом из `SHL`/`SHR` (сами по себе они сдвигают
-только на 1 бит - раздел 3), поэтому сдвиг на переменную величину
-работает, но стоит дороже, чем на константу.
+Almost all of them map 1-to-1 onto opcodes that already exist
+(`ADD`/`SUB`/`MUL`/`DIV`/`MOD`/`AND`/`OR`/`XOR`/`NOT` - section 3).
+Shifts (`<<`/`>>`) are implemented as a loop of `SHL`/`SHR` (which
+only shift by 1 bit on their own - section 3), so shifting by a
+variable amount works, but costs more than shifting by a constant.
 
-Сравнения (`==`/`!=`/`</`>`/`<=`/`>=`) материализуют результат как
-`0`/`1` в `A` через `CMP` и пару условных переходов - то же самое
-"полноценное беззнаковое сравнение через ZERO+CARRY", что описано в
-разделе 2 про `FLAGS`. `&&`/`||` - с коротким замыканием (правый
-операнд не вычисляется, если левый уже решил результат).
+Comparisons (`==`/`!=`/`</`>`/`<=`/`>=`) materialize the result as
+`0`/`1` in `A` via `CMP` and a pair of conditional jumps - the same
+"full unsigned comparison via ZERO+CARRY" described in section 2 on
+`FLAGS`. `&&`/`||` short-circuit (the right-hand operand isn't
+evaluated if the left one already decided the result).
 
-## poke/peek - прямой доступ к памяти и MMIO
+## poke/peek - direct access to memory and MMIO
 
-    poke(адрес, значение)   ; memory[адрес] = значение
-    peek(адрес)             ; вернуть memory[адрес]
+    poke(address, value)   ; memory[address] = value
+    peek(address)          ; return memory[address]
 
-Позволяет работать с любым регистром любого устройства (раздел 9) -
-видеокартой, звуком, диском, 3D - без специальных обёрток в языке.
+Lets you work with any register of any device (section 9) - the video
+card, sound, disk, 3D - without dedicated wrappers in the language.
 
-**`адрес` обязан быть константой времени компиляции** (число,
-`0x`-литерал, или `const`, см. ниже, в том числе простая арифметика
-над ними, вычисляемая компилятором заранее) - это ограничение ISA,
-не языка: у CPU нет инструкции "загрузить HL/адрес из регистра",
-`LDA`/`STA` принимают только литерал или метку, резолвящуюся во время
-сборки (раздел 3, `LDA`/`STA`). Произвольный адрес, вычисленный в
-runtime, положить в `LDA`/`STA` физически нельзя.
+**`address` must be a compile-time constant** (a number, a `0x`
+literal, or a `const`, see below, including simple arithmetic over
+them computed by the compiler ahead of time) - this is a limitation
+of the ISA, not the language: the CPU has no "load HL/address from a
+register" instruction, `LDA`/`STA` only accept a literal or a label
+resolved at assembly time (section 3, `LDA`/`STA`). There is no
+physical way to put a run-time-computed address into `LDA`/`STA`.
 
 ## const
 
     const VRAM = 0xF0000007;
 
-Именованная константа времени компиляции - удобно для адресов
-регистров устройств вместо голого хекса в каждой программе. Не
-занимает памяти - везде, где встречается имя, компилятор подставляет
-число.
+A named compile-time constant - convenient for device register
+addresses instead of bare hex in every program. Takes up no memory -
+wherever the name appears, the compiler substitutes the number.
 
-## Комментарии
+## Comments
 
-Однострочные, `//` до конца строки - как и везде.
+Single-line, `//` to the end of the line - like everywhere else.
 
-## Экранные встроенные функции
+## Screen builtin functions
 
-Прямая работа с Text VRAM/TextAttr через `poke()` требует адрес-
-константу (см. "poke/peek" выше) - для КОНКРЕТНОЙ, известной заранее
-ячейки экрана этого достаточно, но для "нарисовать что-то в точке
-(x, y), где x/y - переменные" уже нет: адрес `0xF0000007 + y*80 + x`
-тогда вычисляется в рантайме, а `poke`/`peek` рантайм-адреса
-принципиально не умеют. Поэтому экран - **единственное** исключение,
-встроенное в язык напрямую (как когда-то `poke`/`peek`), а не
-собираемое пользователем вручную из массивов:
+Working with Text VRAM/TextAttr directly through `poke()` requires an
+address constant (see "poke/peek" above) - that's enough for a
+SPECIFIC, known-ahead-of-time screen cell, but not for "draw something
+at point (x, y), where x/y are variables": the address
+`0xF0000007 + y*80 + x` is then computed at run time, and
+`poke`/`peek` fundamentally can't handle run-time addresses. So the
+screen is the **one** exception built directly into the language
+(the way `poke`/`peek` once were), rather than something the user
+assembles by hand from arrays:
 
-    clear_screen();               // очищает и текст, и цвет (Text VRAM + TextAttr CLEAR)
-    print_char(x, y, ch);         // печатает символ ch (0-255, CP866 - раздел 9) в ячейку (x, y)
-    print_str(x, y, "текст");     // печатает строковый литерал начиная с (x, y), без переноса строк
-    set_color(x, y, fg, bg);      // цвет ячейки (x, y): fg/bg - 0-15 (см. "TextAttr", раздел 9)
+    clear_screen();               // clears both text and color (Text VRAM + TextAttr CLEAR)
+    print_char(x, y, ch);         // prints character ch (0-255, CP866 - section 9) into cell (x, y)
+    print_str(x, y, "text");      // prints a string literal starting at (x, y), no line wrapping
+    set_color(x, y, fg, bg);      // color of cell (x, y): fg/bg - 0-15 (see "TextAttr", section 9)
 
-`x` (0-79), `y` (0-24), `ch`/`fg`/`bg` - обычные `int`-выражения,
-могут быть переменными, а не только константами - именно это
-отличает их от прямого `poke()`. `y*80` считается не одним `MUL`
-(переполнился бы уже при `y >= 4`), а циклом дешёвых `ADD`/`ADC` по 80
-за итерацию, плюс один `ADDHL` в конце, чтобы применить получившееся
-смещение к `HL` за один шаг (см. раздел 3, `ADDHL`) - компилятор сам
-добавляет этот код (`__mc_screen_offset`) в сгенерированную программу,
-если хоть раз встретил одну из этих функций.
+`x` (0-79), `y` (0-24), `ch`/`fg`/`bg` are ordinary `int` expressions
+- they can be variables, not just constants, which is exactly what
+sets them apart from plain `poke()`. `y*80` isn't computed with a
+single `MUL` (it would already overflow at `y >= 4`), but with a loop
+of cheap `ADD`/`ADC` by 80 per iteration, plus one `ADDHL` at the end
+to apply the resulting offset to `HL` in a single step (see section 3,
+`ADDHL`) - the compiler adds this code (`__mc_screen_offset`) to the
+generated program by itself if it ever encountered one of these
+functions.
 
-`print_str` - единственное место в языке, где допустим строковый
-литератор `"..."` (без экранирования спецсимволов в v1 - только
-печатаемые ASCII-байты) - его содержимое компилятор кладёт как `DB`-
-данные и проходит их в рантайм-цикле, вызывая для каждого символа тот
-же путь, что и `print_char`, увеличивая `x` на единицу за символ - не
-переносит строку сам, для новой строки текста нужен отдельный вызов с
-другим `y`.
+`print_str` is the only place in the language where a string literal
+`"..."` is allowed (no escaping of special characters in v1 - only
+printable ASCII bytes) - the compiler stores its contents as `DB`
+data and walks it in a run-time loop, calling the same path as
+`print_char` for each character and incrementing `x` by one per
+character - it doesn't wrap the line itself, a new line of text needs
+a separate call with a different `y`.
 
-## Запуск дочерней программы: exec_child()
+## Running a child program: exec_child()
 
-    poke(0x0000000F, diskId);   // EXEC_CHILD_DISK - какой диск (0=C,1=D) держит NAME
+    poke(0x0000000F, diskId);   // EXEC_CHILD_DISK - which disk (0=C,1=D) holds NAME
     exec_child();
 
-Запускает `*.RUN`-программу ИЗНУТРИ уже выполняющейся программы - как
-системный вызов резидентного `SHELL.ASM`, а не голый прыжок в
-песочницу. Компилятор эмитит `CALL 0x0000000A` - фиксированный низкий
-адрес, который `SHELL.ASM` патчит на свою процедуру
-`shell_exec_child` при старте (тем же способом, что и вектор
-прерывания `0x00000005` - см. `SHELL.ASM::main`). Сама программа не
-решает, по какому адресу и какой командой диска (`15`-`18`,
-`LOAD_CHILD`, см. раздел "Disk") грузить дочерний `*.RUN` - только
-кладёт `NAME` на нужный диск и говорит `shell_exec_child`, какой это
-диск, через `EXEC_CHILD_DISK` (`0x0000000F`, `0`=C, `1`=D). Управление
-вернётся сюда же, когда дочерняя программа дойдёт до своего `RET`
-(гарантированно происходит в конце любой функции Мини-C, включая
-`main()` - компилятор никогда не генерирует `HLT`).
+Launches a `*.RUN` program FROM INSIDE an already-running program - as
+a system call into the resident `SHELL.ASM`, rather than a bare jump
+into a sandbox. The compiler emits `CALL 0x0000000A` - a fixed low
+address that `SHELL.ASM` patches to point at its own routine,
+`shell_exec_child`, at startup (the same way it patches the interrupt
+vector `0x00000005` - see `SHELL.ASM::main`). The program itself
+doesn't decide which address or which disk command (`15`-`18`,
+`LOAD_CHILD`, see the "Disk" section) to use to load the child
+`*.RUN` - it only puts `NAME` on the right disk and tells
+`shell_exec_child` which disk that is, via `EXEC_CHILD_DISK`
+(`0x0000000F`, `0`=C, `1`=D). Control returns here once the child
+program reaches its own `RET` (guaranteed to happen at the end of any
+Mini-C function, including `main()` - the compiler never generates
+`HLT`).
 
-`shell_exec_child` ведёт учёт текущей глубины вложенности
-(`execDepth`, резидентная переменная `SHELL.ASM`, начинается с `1` -
-обычная программа "shell → X", ещё не звавшая `exec_child()`) и по
-ней выбирает адрес и команду диска для СЛЕДУЮЩЕГО уровня - до 4
-дополнительных уровней (`execDepth` `2`-`5`, см. раздел "Disk",
-`LOAD_CHILD`). Перед входом во вложенный уровень явно делает `DI`
-(гарантия известного состояния прерываний на границе вызова) -
-дочерняя программа сама решает, звать ли `EI`, и обязана сделать `DI`
-перед своим `RET` (см. `CUBE3D.ASM`/`TILEDEMO.ASM`/`MUSIC.ASM`). Перед
-`CALL` также обнуляет `lastKey` (`0x00010001`) - это ОБЯЗАТЕЛЬНО:
-дочерняя программа обычно сама сравнивает `lastKey` с кодом клавиши в
-своём цикле опроса (например `== 17` для Ctrl+Q, как в
-`MUSIC.ASM`/`music_loop`), и без сброса увидела бы СТАРОЕ значение,
-оставшееся от предыдущего запуска (своего или чужого), и вышла бы
-мгновенно, ни разу не дождавшись настоящего нажатия - а несъеденная
-клавиша, которую пользователь нажимает уже после этого, "проваливается"
-в того, кто вызвал `exec_child()` (например, `FM.MC` тоже увидит тот же
-Ctrl+Q через `peek()` и выйдет сам). Та же логика и по той же причине
-- в `cmd_run`/`cmd_exec_run` (обычный `exec`/`run` из шелла, не через
-`exec_child()`).
-Нужен ли `LOAD_CHILD` вообще (а не прямой `CALL` в песочницу самой
-вызывающей программы) - из-за того, что вызывающая программа
-(например, файловый менеджер `FM.MC`) сама выполняется по `0x00002000`
-- если бы дочернюю программу грузили туда же, загрузка затёрла бы код,
-который в этот момент как раз исполняется; а раз у каждого уровня
-вложенности - свой отдельный адрес (не один общий "детский"), настоящая
-многоуровневая вложенность (программа → дочерняя → внучатая → ...)
-работает сама собой, без переделок компилятора.
+`shell_exec_child` tracks the current nesting depth (`execDepth`, a
+resident `SHELL.ASM` variable, starting at `1` - an ordinary
+"shell → X" program that hasn't called `exec_child()` yet) and uses it
+to pick the address and disk command for the NEXT level - up to 4
+additional levels (`execDepth` `2`-`5`, see the "Disk" section,
+`LOAD_CHILD`). Before entering a nested level it explicitly does `DI`
+(a guarantee of known interrupt state at the call boundary) - the
+child program decides for itself whether to call `EI`, and must do
+`DI` before its own `RET` (see `CUBE3D.ASM`/`TILEDEMO.ASM`/
+`MUSIC.ASM`). It also zeroes `lastKey` (`0x00010001`) before the
+`CALL` - this is MANDATORY: a child program usually compares `lastKey`
+against a key code in its own polling loop (e.g. `== 17` for Ctrl+Q,
+as in `MUSIC.ASM`/`music_loop`), and without the reset it would see a
+STALE value left over from a previous run (its own or someone else's)
+and exit instantly, without ever waiting for a real keypress - and a
+keystroke the user presses right after that, uneaten, "falls through"
+to whoever called `exec_child()` (for example, `FM.MC` would also see
+that same Ctrl+Q via `peek()` and exit on its own). The same logic,
+for the same reason, applies in `cmd_run`/`cmd_exec_run` (a regular
+`exec`/`run` from the shell, not via `exec_child()`).
+Why is `LOAD_CHILD` needed at all (rather than a direct `CALL` into
+the calling program's own sandbox) - because the calling program
+(say, the file manager `FM.MC`) itself runs at `0x00002000` - if the
+child program were loaded there too, the load would overwrite the
+code that's executing at that very moment; and since every nesting
+level has its own separate address (not one shared "child" address),
+real multi-level nesting (program → child → grandchild → ...) just
+works on its own, with no changes needed to the compiler.
 
-Готовый пример - `C/TOOLS/FM.MC`: `Enter` на файле `*.RUN` в списке
-копирует его имя в `NAME`, кладёт диск в `EXEC_CHILD_DISK`, затем
-вызывает `exec_child()`; после возврата - `clear_screen()` и полная
-перерисовка обеих панелей (дочерняя программа наверняка использовала
-экран под себя).
+Ready-made example - `C/TOOLS/FM.MC`: pressing `Enter` on a `*.RUN`
+file in the list copies its name into `NAME`, puts the disk into
+`EXEC_CHILD_DISK`, then calls `exec_child()`; after it returns -
+`clear_screen()` and a full redraw of both panels (the child program
+almost certainly used the screen for itself).
 
-## Чего сознательно нет в v1
+## What's deliberately missing in v1
 
-- Строк как полноценного типа (нельзя хранить строку в переменной,
-  сравнивать, конкатенировать) - только литерал прямо в `print_str`.
-- Указателей, `struct`, 16/32-битных типов, `switch`.
-- Рекурсии (см. "Функции" выше).
-- Составных операторов присваивания (`+=` и т.п.) и `++`/`--` -
-  писать `i = i + 1;`.
+- Strings as a full type (you can't store a string in a variable,
+  compare it, concatenate it) - only a literal directly inside
+  `print_str`.
+- Pointers, `struct`, 16/32-bit types, `switch`.
+- Recursion (see "Functions" above).
+- Compound assignment operators (`+=` etc.) and `++`/`--` - write
+  `i = i + 1;` instead.
 
-## Пример: COUNTER.MC
+## Example: COUNTER.MC
 
-Готовый пример - `C/DEMOS/COUNTER.MC`: функция `sum(n)` суммирует
-`1..n` в цикле, `main()` печатает результат тремя цифрами через
-`poke()` в Text VRAM, используя промежуточный массив `digits[3]` и
-`DIV`/`MOD` (тот же приём перевода числа в десятичный текст, что и
-`print_number` в `boot.asm`). Собрать и запустить:
+Ready-made example - `C/DEMOS/COUNTER.MC`: the function `sum(n)` sums
+`1..n` in a loop, `main()` prints the result as three digits through
+`poke()` into Text VRAM, using an intermediate array `digits[3]` and
+`DIV`/`MOD` (the same trick for converting a number into decimal text
+as `print_number` in `boot.asm`). Build and run:
 
     build counter.mc
     counter
 
-## Пример: SNAKE.MC
+## Example: SNAKE.MC
 
-`C/DEMOS/SNAKE.MC` - консольная змейка, покрывает почти весь язык
-сразу: маппированные массивы (игровое поле, по одному массиву на
-строку экрана - см. "Маппированные массивы" выше), обычные массивы
-(`snakeX`/`snakeY` - тело змейки, классическое движение сдвигом
-массива), функции, `while`/`for`/`if`, прямое чтение клавиатуры через
-`peek(0xF0000005)` (регистр `DATA` устройства `Keyboard`, раздел 9) -
-БЕЗ прерываний (`EI`/`DI` в мини-C нет и не будет - это опкоды CPU, а
-не MMIO-регистр, `poke()` до них не дотягивается; впрочем, `exec`/
-`run` и так выполняются с выключенными прерываниями - см. `cmd_exec_run`
-в `SHELL.ASM`, - так что прямой опрос `DATA` тут не обходной путь, а
-единственно рабочий), и `Clock` для паузы между тиками игры. Управление
-- `W`/`A`/`S`/`D`, выход - `Ctrl+Q`. Собрать и запустить:
+`C/DEMOS/SNAKE.MC` is a console Snake game that covers almost the
+whole language at once: mapped arrays (the game board, one array per
+screen row - see "Mapped arrays" above), regular arrays
+(`snakeX`/`snakeY` - the snake's body, classic movement by shifting
+the array), functions, `while`/`for`/`if`, reading the keyboard
+directly via `peek(0xF0000005)` (the `Keyboard` device's `DATA`
+register, section 9) - WITHOUT interrupts (Mini-C has no `EI`/`DI`
+and never will - those are CPU opcodes, not an MMIO register, `poke()`
+can't reach them; besides, `exec`/`run` already run with interrupts
+disabled anyway - see `cmd_exec_run` in `SHELL.ASM` - so polling
+`DATA` directly here isn't a workaround, it's the only thing that
+works), and `Clock` for the pause between game ticks. Controls -
+`W`/`A`/`S`/`D`, quit - `Ctrl+Q`. Build and run:
 
     build snake.mc
     snake
 
-## Шпаргалка
+## Cheat sheet
 
-Компактная сводка синтаксиса - без объяснений (они выше, по ссылкам в
-последнем столбце).
+A compact syntax summary - without explanations (those are above, via
+the links in the last column).
 
-**Типы и переменные**
+**Types and variables**
 
-| Синтаксис | Смысл | Подробности |
+| Syntax | Meaning | Details |
 |---|---|---|
-| `int x;` | глобальная переменная (даже если написана внутри функции) | "Типы и переменные" |
-| `int x = 5;` | переменная с начальным значением (только внутри функции) | "Типы и переменные" |
-| `int arr[16];` | массив фиксированного размера, индекс 0-255 | "Типы и переменные" |
-| `int arr[16] = 0xF0000007;` | маппированный массив - окно в существующую память по адресу | "Маппированные массивы" |
+| `int x;` | a global variable (even if written inside a function) | "Types and variables" |
+| `int x = 5;` | a variable with an initial value (inside a function only) | "Types and variables" |
+| `int arr[16];` | a fixed-size array, index 0-255 | "Types and variables" |
+| `int arr[16] = 0xF0000007;` | a mapped array - a window into existing memory at an address | "Mapped arrays" |
 
-**Функции**
+**Functions**
 
-| Синтаксис | Смысл |
+| Syntax | Meaning |
 |---|---|
-| `int имя(int a, int b) { ... }` | функция (без рекурсии - параметры это глобальные переменные) |
-| `return выражение;` | возврат значения (кладёт в `A`, делает `RET`) |
-| `int main() { ... }` | обязательная точка входа |
+| `int name(int a, int b) { ... }` | a function (no recursion - parameters are global variables) |
+| `return expression;` | return a value (puts it in `A`, does `RET`) |
+| `int main() { ... }` | the mandatory entry point |
 
-**Управляющие конструкции**
+**Control structures**
 
-    if (условие) { ... } else { ... }
-    while (условие) { ... }
-    for (init; условие; post) { ... }
+    if (condition) { ... } else { ... }
+    while (condition) { ... }
+    for (init; condition; post) { ... }
 
-**Операторы**
+**Operators**
 
-| Категория | Операторы |
+| Category | Operators |
 |---|---|
-| Арифметика | `+` `-` `*` `/` `%` |
-| Биты | `&` `\|` `^` `~` `<<` `>>` |
-| Сравнения | `==` `!=` `<` `>` `<=` `>=` |
-| Логика | `&&` `\|\|` (с коротким замыканием) |
-| Присваивание | `=` |
+| Arithmetic | `+` `-` `*` `/` `%` |
+| Bits | `&` `\|` `^` `~` `<<` `>>` |
+| Comparisons | `==` `!=` `<` `>` `<=` `>=` |
+| Logic | `&&` `\|\|` (short-circuiting) |
+| Assignment | `=` |
 
-**Память и MMIO**
+**Memory and MMIO**
 
-| Синтаксис | Смысл | Подробности |
+| Syntax | Meaning | Details |
 |---|---|---|
-| `poke(адрес, значение)` | записать байт по адресу (адрес - константа времени компиляции) | "poke/peek" |
-| `peek(адрес)` | прочитать байт по адресу | "poke/peek" |
-| `const ИМЯ = значение;` | именованная константа компиляции, памяти не занимает | "const" |
+| `poke(address, value)` | write a byte at an address (address is a compile-time constant) | "poke/peek" |
+| `peek(address)` | read a byte at an address | "poke/peek" |
+| `const NAME = value;` | a named compile-time constant, takes up no memory | "const" |
 
-**Экран (Text VRAM/TextAttr)**
+**Screen (Text VRAM/TextAttr)**
 
-| Вызов | Что делает |
+| Call | What it does |
 |---|---|
-| `clear_screen()` | очищает текст и цвет |
-| `print_char(x, y, ch)` | символ `ch` (0-255, CP866) в ячейку `(x, y)` |
-| `print_str(x, y, "текст")` | строковый литерал начиная с `(x, y)`, без переноса |
-| `set_color(x, y, fg, bg)` | цвет ячейки, `fg`/`bg` - 0-15 |
+| `clear_screen()` | clears both text and color |
+| `print_char(x, y, ch)` | character `ch` (0-255, CP866) into cell `(x, y)` |
+| `print_str(x, y, "text")` | a string literal starting at `(x, y)`, no wrapping |
+| `set_color(x, y, fg, bg)` | the cell's color, `fg`/`bg` - 0-15 |
 
-**Дочерние программы**
+**Child programs**
 
     poke(0x0000000F, diskId);   // EXEC_CHILD_DISK - 0=C, 1=D
-    exec_child();               // запустить *.RUN из NAME диска diskId, вернётся после его RET
+    exec_child();               // run *.RUN from NAME on disk diskId, returns after its RET
 
-См. "Запуск дочерней программы: exec_child()" выше - до 5 уровней
-вложенности, обнуляет `lastKey` перед запуском, диск и имя файла в
-`NAME` подготавливает вызывающий код заранее.
+See "Running a child program: exec_child()" above - up to 5 nesting
+levels, zeroes `lastKey` before launching, the disk and file name in
+`NAME` are prepared by the calling code beforehand.
 
-**Комментарии**
+**Comments**
 
-    // однострочный комментарий до конца строки
+    // a single-line comment to the end of the line
 
-**Чего нет в v1**
+**What's missing in v1**
 
-- Строк как типа (только литерал в `print_str`).
-- Указателей, `struct`, 16/32-битных типов, `switch`.
-- Рекурсии.
-- `+=`/`-=`/... и `++`/`--` - писать `i = i + 1;`.
+- Strings as a type (only a literal inside `print_str`).
+- Pointers, `struct`, 16/32-bit types, `switch`.
+- Recursion.
+- `+=`/`-=`/... and `++`/`--` - write `i = i + 1;` instead.
 
-**Где искать примеры**: `C/DEMOS/COUNTER.MC` (функция, `DIV`/`MOD`,
-вывод числа), `C/DEMOS/SNAKE.MC` (массивы, маппированные массивы,
-клавиатура, `Clock`), `C/TOOLS/FM.MC` (файловый менеджер, `exec_child()`,
-работа с диском напрямую через `poke`/`peek`).
+**Where to find examples**: `C/DEMOS/COUNTER.MC` (a function,
+`DIV`/`MOD`, printing a number), `C/DEMOS/SNAKE.MC` (arrays, mapped
+arrays, keyboard, `Clock`), `C/TOOLS/FM.MC` (a file manager,
+`exec_child()`, working with the disk directly through `poke`/`peek`).
