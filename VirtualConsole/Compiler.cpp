@@ -21,21 +21,90 @@
 
 // ---------------- Лексер ----------------
 
+// Прелюдия устройств - готовые const/мапированные массивы для регистров
+// Keyboard/Clock/VideoCard/PngLoader/MapLoader (см. ASSEMBLY.md), чтобы
+// пользовательским .mc-программам не нужно было объявлять их руками -
+// подмешивается перед пользовательским кодом в Compiler::lex() ниже.
+// Адреса выверены по ASSEMBLY.md (разделы Keyboard/VideoCard/PngLoader/
+// MapLoader) и по C/DEMOS/TILEDEMO.ASM. Компилятор не проверяет повторное
+// объявление const/массива (см. collectDeclarations) - если пользователь
+// объявит то же имя сам, его объявление просто перезапишет прелюдию, без
+// ошибки.
+static const std::string kDevicePrelude =
+    "const KEYBOARD_DATA = 0xF0000005;\n"
+    "const KEYBOARD_CONTROL = 0xF0000006;\n"
+    "const CLOCK_LOW = 0xF0000FFC;\n"
+    "const CLOCK_HIGH = 0xF0000FFD;\n"
+    "const VIDEOCARD_X_LOW = 0xF0000FDE;\n"
+    "const VIDEOCARD_X_HIGH = 0xF0000FDF;\n"
+    "const VIDEOCARD_Y_LOW = 0xF0000FE0;\n"
+    "const VIDEOCARD_Y_HIGH = 0xF0000FE1;\n"
+    "const VIDEOCARD_W_LOW = 0xF0000FE2;\n"
+    "const VIDEOCARD_W_HIGH = 0xF0000FE3;\n"
+    "const VIDEOCARD_H_LOW = 0xF0000FE4;\n"
+    "const VIDEOCARD_H_HIGH = 0xF0000FE5;\n"
+    "const VIDEOCARD_R = 0xF0000FE6;\n"
+    "const VIDEOCARD_G = 0xF0000FE7;\n"
+    "const VIDEOCARD_B = 0xF0000FE8;\n"
+    "const VIDEOCARD_COMMAND = 0xF0000FE9;\n"
+    "const VIDEOCARD_STATUS = 0xF0000FEA;\n"
+    "const VIDEOCARD_SPRITE_INDEX = 0xF0000FEB;\n"
+    "const VIDEOCARD_SPRITE_PIXEL_LOW = 0xF0000FEC;\n"
+    "const VIDEOCARD_SPRITE_PIXEL_HIGH = 0xF0000FED;\n"
+    "const VIDEOCARD_SPRITE_X_LOW = 0xF0000FEE;\n"
+    "const VIDEOCARD_SPRITE_X_HIGH = 0xF0000FEF;\n"
+    "const VIDEOCARD_SPRITE_Y_LOW = 0xF0000FF0;\n"
+    "const VIDEOCARD_SPRITE_Y_HIGH = 0xF0000FF1;\n"
+    "const VIDEOCARD_SPRITE_VISIBLE = 0xF0000FF2;\n"
+    "const VIDEOCARD_SPRITE_R = 0xF0000FF3;\n"
+    "const VIDEOCARD_SPRITE_G = 0xF0000FF4;\n"
+    "const VIDEOCARD_SPRITE_B = 0xF0000FF5;\n"
+    "const VIDEOCARD_SPRITE_COMMAND = 0xF0000FF6;\n"
+    "const VIDEOCARD_SPRITE_STATUS = 0xF0000FF7;\n"
+    "const VIDEOCARD_SCROLL_X_LOW = 0xF0000FF8;\n"
+    "const VIDEOCARD_SCROLL_X_HIGH = 0xF0000FF9;\n"
+    "const VIDEOCARD_SCROLL_Y_LOW = 0xF0000FFA;\n"
+    "const VIDEOCARD_SCROLL_Y_HIGH = 0xF0000FFB;\n"
+    "const PNGLOADER_NAME0 = 0xF0000FFE;\n"
+    "const PNGLOADER_SRC_X_LOW = 0xF000100A;\n"
+    "const PNGLOADER_SRC_X_HIGH = 0xF000100B;\n"
+    "const PNGLOADER_SRC_Y_LOW = 0xF000100C;\n"
+    "const PNGLOADER_SRC_Y_HIGH = 0xF000100D;\n"
+    "const PNGLOADER_SPRITE_INDEX = 0xF000100E;\n"
+    "const PNGLOADER_COMMAND = 0xF000100F;\n"
+    "const PNGLOADER_STATUS = 0xF0001010;\n"
+    "const PNGLOADER_TILE_INDEX = 0xF0001011;\n"
+    "int pngLoaderName[12] = 0xF0000FFE;\n"
+    "const MAPLOADER_NAME0 = 0xF0001012;\n"
+    "const MAPLOADER_COMMAND = 0xF000101E;\n"
+    "const MAPLOADER_STATUS = 0xF000101F;\n"
+    "int mapLoaderName[12] = 0xF0001012;\n";
+
+static const char* kKeywords[] = {
+    "int", "if", "else", "while", "for", "return", "const",
+    "poke", "peek",
+    "print_char", "print_str", "set_color", "clear_screen",
+    "exec_child",
+    "mod_load", "sound_play", "sound_stop", "sound_pause",
+    "sound_resume", "sound_set_volume",
+    "str_copy"
+};
+
 void Compiler::lex(const std::string& source)
 {
     tokens.clear();
-    int line = 1;
+    lexChunk(kDevicePrelude, 1);
+    lexChunk(source, 1);
+    tokens.push_back({ TokType::END, "", 0, 1 });
+}
+
+void Compiler::lexChunk(const std::string& source, int startLine)
+{
+    int line = startLine;
     size_t i = 0;
     size_t n = source.size();
 
-    static const char* keywords[] = {
-        "int", "if", "else", "while", "for", "return", "const",
-        "poke", "peek",
-        "print_char", "print_str", "set_color", "clear_screen",
-        "exec_child",
-        "mod_load", "sound_play", "sound_stop", "sound_pause",
-        "sound_resume", "sound_set_volume"
-    };
+    const auto& keywords = kKeywords;
 
     while (i < n)
     {
@@ -143,8 +212,6 @@ void Compiler::lex(const std::string& source)
             "Мини-C: строка " + std::to_string(line) +
             ": неожиданный символ '" + std::string(1, c) + "'");
     }
-
-    tokens.push_back({ TokType::END, "", 0, line });
 }
 
 const Compiler::Token& Compiler::peek() const
@@ -683,6 +750,25 @@ Compiler::NodePtr Compiler::parsePrimary()
         return n;
     }
 
+    if (check("str_copy") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::StrCopy);
+        expect("(");
+        const Token& identTok = expectIdent();   // имя мапированного массива - резолвится в кодогене, а не как рантайм-выражение
+        auto arrNode = node(NodeKind::Ident);
+        arrNode->text = identTok.text;
+        n->children.push_back(arrNode);
+        expect(",");
+        if (peek().type != TokType::STRING)
+        {
+            error("str_copy ожидает строковый литерал вторым аргументом");
+        }
+        n->text = advance().text;             // сама строка
+        expect(")");
+        return n;
+    }
+
     if (check("sound_play") && peek().type == TokType::KEYWORD)
     {
         advance();
@@ -1128,6 +1214,60 @@ void Compiler::genModLoad(const NodePtr& expr)
     *codeOut << "    LDA 0xF0001041\n";   // ModLoader STATUS - остаётся в A
 }
 
+void Compiler::genStrCopy(const NodePtr& expr)
+{
+    // Тот же приём, что genModLoad выше, но обобщённый на произвольный
+    // мапированный массив: адрес и предел длины берутся из arrayBaseAddr/
+    // arraySizes (заполняются в collectDeclarations из "int arr[N] =
+    // адрес;") вместо жёстко зашитых constant/32. В отличие от mod_load,
+    // str_copy НЕ триггерит команду устройства - это отдельный шаг
+    // (poke(..._COMMAND, 1)), который пользователь делает сам, поэтому
+    // итоговое значение выражения - просто 0.
+
+    const std::string& arrName = expr->children[0]->text;
+    const std::string& text = expr->text;
+
+    auto sizeIt = arraySizes.find(arrName);
+    if (sizeIt == arraySizes.end())
+    {
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(expr->line) +
+            ": str_copy - '" + arrName + "' не является массивом");
+    }
+    auto baseIt = arrayBaseAddr.find(arrName);
+    if (baseIt == arrayBaseAddr.end())
+    {
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(expr->line) +
+            ": str_copy - '" + arrName + "' не мапирован на адрес устройства (нужен 'int " +
+            arrName + "[N] = 0xADDR;')");
+    }
+
+    int size = sizeIt->second;
+    long long base = baseIt->second;
+
+    if (static_cast<int>(text.size()) > size)
+    {
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(expr->line) +
+            ": str_copy - строка \"" + text + "\" (" + std::to_string(text.size()) +
+            " симв.) длиннее массива '" + arrName + "' (" + std::to_string(size) + ")");
+    }
+
+    for (size_t i = 0; i < text.size(); i++)
+    {
+        *codeOut << "    LDI A, " << static_cast<int>(static_cast<unsigned char>(text[i])) << "\n";
+        *codeOut << "    STA " << (base + i) << "\n";
+    }
+    for (int i = static_cast<int>(text.size()); i < size; i++)
+    {
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << "    STA " << (base + i) << "\n";
+    }
+
+    *codeOut << "    LDI A, 0\n";
+}
+
 void Compiler::genExprToA(const NodePtr& expr)
 {
     switch (expr->kind)
@@ -1263,6 +1403,10 @@ void Compiler::genExprToA(const NodePtr& expr)
 
     case NodeKind::ModLoad:
         genModLoad(expr);
+        return;
+
+    case NodeKind::StrCopy:
+        genStrCopy(expr);
         return;
 
     case NodeKind::SoundPlay:

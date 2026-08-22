@@ -47,6 +47,7 @@ private:
     size_t pos;
 
     void lex(const std::string& source);
+    void lexChunk(const std::string& source, int startLine);
 
     const Token& peek() const;
     const Token& advance();
@@ -65,7 +66,8 @@ private:
         Assign, IndexAssign, LogicalOr, LogicalAnd, BinOp, UnaryOp,
         Call, Index, Ident, Number, Poke, Peek,
         PrintChar, PrintStr, SetColor, ClearScreen, ExecChild,
-        ModLoad, SoundPlay, SoundStop, SoundPause, SoundResume, SoundSetVolume
+        ModLoad, SoundPlay, SoundStop, SoundPause, SoundResume, SoundSetVolume,
+        StrCopy
     };
 
     struct Node
@@ -149,6 +151,7 @@ private:
     void genPrintChar(const NodePtr& expr);
     void genPrintStr(const NodePtr& expr);
     void genModLoad(const NodePtr& expr);
+    void genStrCopy(const NodePtr& expr);
     void genSetColor(const NodePtr& expr);
     void genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr);   // HL = base + y*80 + x
 };
