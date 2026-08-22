@@ -90,10 +90,14 @@ static const char* kKeywords[] = {
     "str_copy"
 };
 
-void Compiler::lex(const std::string& source)
+void Compiler::lex(const std::string& source, const std::vector<std::string>& libSources)
 {
     tokens.clear();
     lexChunk(kDevicePrelude, 1);
+    for (const auto& lib : libSources)
+    {
+        lexChunk(lib, 1);
+    }
     lexChunk(source, 1);
     tokens.push_back({ TokType::END, "", 0, 1 });
 }
@@ -1703,7 +1707,7 @@ void Compiler::genFunction(const NodePtr& fn)
     currentFunction.clear();
 }
 
-std::string Compiler::compile(const std::string& source)
+std::string Compiler::compile(const std::string& source, const std::vector<std::string>& libSources)
 {
     pos = 0;
     labelCounter = 0;
@@ -1715,7 +1719,7 @@ std::string Compiler::compile(const std::string& source)
     globalVars.clear();
     usesScreenHelper = false;
 
-    lex(source);
+    lex(source, libSources);
     NodePtr program = parseProgram();
     collectDeclarations(program);
 

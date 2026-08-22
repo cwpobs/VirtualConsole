@@ -24,7 +24,7 @@ class Compiler
 {
 public:
 
-    std::string compile(const std::string& source);
+    std::string compile(const std::string& source, const std::vector<std::string>& libSources = {});
 
 private:
 
@@ -46,7 +46,7 @@ private:
     std::vector<Token> tokens;
     size_t pos;
 
-    void lex(const std::string& source);
+    void lex(const std::string& source, const std::vector<std::string>& libSources);
     void lexChunk(const std::string& source, int startLine);
 
     const Token& peek() const;

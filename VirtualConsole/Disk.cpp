@@ -7,6 +7,17 @@
 
 Disk* Disk::lastExecDisk = nullptr;
 
+namespace
+{
+    std::string trimForInclude(const std::string& s)
+    {
+        size_t start = s.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) return "";
+        size_t end = s.find_last_not_of(" \t\r\n");
+        return s.substr(start, end - start + 1);
+    }
+}
+
 Disk::Disk(const std::string& folder, Bus* bus)
 {
     basePath = folder;
@@ -511,10 +522,66 @@ void Disk::build()
 
         if (nameUpper.size() >= 3 && nameUpper.substr(nameUpper.size() - 3) == ".MC")
         {
+            // #include "ИМЯ.MC" - подключаемые библиотеки. Ищутся ВСЕГДА на
+            // диске C, в DEV/LIB (буквальный путь "C/DEV/LIB/...", не через
+            // basePath/currentDir этого Disk - библиотеки не зависят от
+            // того, с какого диска реально собирается программа). Строка
+            // с #include заменяется на пустую (не удаляется), чтобы номера
+            // строк ОСТАЛЬНОГО кода файла не сдвинулись - см. ASSEMBLY.md,
+            // "Мини-C". Имя библиотеки резолвится как обычный host-путь
+            // через ifstream, до всякого реального лексера Mini-C - оно НЕ
+            // проходит через 12-байтный NAME-регистр протокол Disk, поэтому
+            // не ограничено форматом 8.3, в отличие от имён .MC/.RUN.
+            std::vector<std::string> libSources;
+            std::istringstream in(sourceText);
+            std::ostringstream stripped;
+            std::string line;
+            bool includeError = false;
+
+            while (std::getline(in, line))
+            {
+                std::string trimmed = trimForInclude(line);
+                if (trimmed.rfind("#include", 0) == 0)
+                {
+                    size_t q1 = trimmed.find('"');
+                    size_t q2 = (q1 == std::string::npos) ? std::string::npos
+                                                            : trimmed.find('"', q1 + 1);
+                    if (q1 == std::string::npos || q2 == std::string::npos)
+                    {
+                        includeError = true;
+                        break;
+                    }
+                    std::string libName = trimmed.substr(q1 + 1, q2 - q1 - 1);
+                    std::ifstream libFile(std::filesystem::path("C") / "DEV" / "LIB" / libName);
+                    if (!libFile)
+                    {
+                        includeError = true;
+                        break;
+                    }
+                    std::stringstream libBuf;
+                    libBuf << libFile.rdbuf();
+                    libSources.push_back(libBuf.str());
+                    stripped << "\n";
+                }
+                else
+                {
+                    stripped << line << "\n";
+                }
+            }
+
+            if (includeError)
+            {
+                status = 2;
+                fileSize = 0;
+                return;
+            }
+
+            sourceText = stripped.str();
+
             try
             {
                 Compiler compiler;
-                sourceText = compiler.compile(sourceText);
+                sourceText = compiler.compile(sourceText, libSources);
             }
             catch (const std::exception&)
             {
