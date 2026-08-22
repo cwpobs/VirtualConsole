@@ -46,6 +46,12 @@ uint8_t SoundCard::read(uint32_t address)
     {
     case REG_STATUS: return status;
     case REG_VOLUME: return volume;
+    case REG_CHANNEL0_VOLUME: return channelVolumeAtomic[0];
+    case REG_CHANNEL1_VOLUME: return channelVolumeAtomic[1];
+    case REG_CHANNEL2_VOLUME: return channelVolumeAtomic[2];
+    case REG_CHANNEL3_VOLUME: return channelVolumeAtomic[3];
+    case REG_ROW: return rowAtomic;
+    case REG_ORDER_POS: return orderPosAtomic;
     default: return 0;
     }
 }
@@ -102,6 +108,24 @@ void SoundCard::resetSequencer()
     positionJumpTo = 0;
     patternBreakPending = false;
     patternBreakRow = 0;
+
+    updateVisualizationRegisters();
+}
+
+void SoundCard::updateVisualizationRegisters()
+{
+    // Зеркалит внутреннее состояние секвенсора (только что обновлённое
+    // вызывающей стороной - advanceTick() после advanceRow()/
+    // applyContinuousEffects(), или resetSequencer() при загрузке новой
+    // песни) в атомики, читаемые CPU-потоком через REG_CHANNEL*_VOLUME/
+    // REG_ROW/REG_ORDER_POS (см. SoundCard.h).
+    for (int c = 0; c < 4; c++)
+    {
+        channelVolumeAtomic[c] = channels[c].volume;
+    }
+
+    rowAtomic = static_cast<uint8_t>(row);
+    orderPosAtomic = static_cast<uint8_t>(orderPos);
 }
 
 void SoundCard::play()
@@ -429,6 +453,8 @@ void SoundCard::advanceTick()
     {
         samplesRemainingInTick = 1;
     }
+
+    updateVisualizationRegisters();
 }
 
 void SoundCard::renderSamples(int16_t* out, int frameCount)

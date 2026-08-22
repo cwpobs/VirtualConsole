@@ -64,7 +64,7 @@
     ; ---- SoundCard: PLAY ----
 
     LDI A, 1
-    STA 0xF0001042      ; SoundCard COMMAND = PLAY
+    STA 0xF0001066      ; SoundCard COMMAND = PLAY
 
 
 music_loop:
@@ -75,7 +75,7 @@ music_loop:
     JNZ music_loop
 
     LDI A, 2
-    STA 0xF0001042      ; SoundCard COMMAND = STOP
+    STA 0xF0001066      ; SoundCard COMMAND = STOP
 
 
 music_error:

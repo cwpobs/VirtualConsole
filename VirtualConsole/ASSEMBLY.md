@@ -49,8 +49,8 @@ Devices attached to the bus (details on each one are in section 9):
 | PngLoader | `0xF0000FFE-0xF0001011` | 20 B | PNG loading (sprites/tiles) |
 | MapLoader | `0xF0001012-0xF000101F` | 14 B | text tile-map loading |
 | ModLoader | `0xF0001020-0xF0001041` | 34 B | `.mod` music loading (ProTracker) |
-| SoundCard | `0xF0001042-0xF0001044` | 3 B | playback (PLAY/STOP/VOLUME) |
 | Gpu3D | `0xF0001045-0xF0001065` | 33 B | 3D accelerator (vertices/triangles/PRESENT) |
+| SoundCard | `0xF0001066-0xF000106E` | 9 B | playback (PLAY/STOP/VOLUME) + visualization (per-channel volume/ROW/ORDER_POS) |
 
 The CPU has no clock frequency as such — it's a software interpreter
 (`CPU::step()`), not real electronic circuitry, so "speed" depends
@@ -1295,8 +1295,9 @@ Current address space map:
 | 0xF0000FFE - 0xF0001011 | PngLoader (decodes PNG into sprites/tiles) |
 | 0xF0001012 - 0xF000101F | MapLoader (text tile map) |
 | 0xF0001020 - 0xF0001041 | ModLoader (parses `.mod` files) |
-| 0xF0001042 - 0xF0001044 | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME) |
+| 0xF0001042 - 0xF0001044 | unused gap (old SoundCard location - see below) |
 | 0xF0001045 - 0xF0001065 | Gpu3D (vertices/triangles/PRESENT) |
+| 0xF0001066 - 0xF000106E | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME, visualization) |
 
 MMIO is placed far from RAM (starting at `0xF0000000`) rather than
 right after its current end - this way RAM can be expanded in the
@@ -2174,8 +2175,37 @@ at all.
 | 0 | COMMAND (write = trigger) | 1=PLAY, 2=STOP, 3=PAUSE, 4=RESUME |
 | 1 | STATUS (read-only) | 0=stopped/ready, 1=playing, 2=paused, 3=no song loaded |
 | 2 | VOLUME | overall volume 0-255 (default 255), takes effect immediately on write |
+| 3-6 | CHANNEL0-3_VOLUME (read-only) | current per-channel volume, 0-64 (native ProTracker units, same scale as `Cxx`) |
+| 7 | ROW (read-only) | current pattern row, 0-63 |
+| 8 | ORDER_POS (read-only) | current position in the order table, 0-127 |
 
-Addresses: `0xF0001042` (COMMAND) - `0xF0001044` (VOLUME).
+Addresses: `0xF0001066` (COMMAND) - `0xF000106E` (ORDER_POS). Note the
+gap at the old location, `0xF0001042`-`0xF0001044`: this block used to
+sit right there, directly before `Gpu3D`, but got too small once the
+visualization registers below were added, and growing it in place
+would have meant shifting `Gpu3D` and rewriting every hardcoded
+address in `CUBE3D.ASM`. Moving the whole block into fresh, unused
+space right after `Gpu3D` avoided that entirely - addresses on this
+bus were never required to be contiguous.
+
+### Visualization registers (CHANNEL\*\_VOLUME/ROW/ORDER_POS)
+
+These three read-only registers mirror sequencer state that already
+existed internally (each channel's current volume, the current row,
+the position in the order table) but wasn't visible on the bus before
+- added specifically so a program can draw a live visualizer (see
+`C/DEMOS/MUSIC2.MC`) without needing any new logic in the sequencer
+itself. Like `VOLUME`, they're backed by `std::atomic<uint8_t>` fields
+updated once per tick from the audio thread - the CPU thread reads
+them without any lock, same reasoning as `VOLUME` above. All three
+read as `0` before a song is loaded or while stopped.
+
+`CHANNEL0-3_VOLUME` is the easiest of the two to read from Mini-C: it's
+4 consecutive bytes, so a mapped array (`int channelVol[4] = 0xF0001069;`)
+gives runtime-indexed access to all four channels in one variable, the
+same trick `SNAKE.MC` uses for its game board. `ROW`/`ORDER_POS` are
+single bytes at fixed addresses, so a plain `peek()` is enough for
+those.
 
 Commands:
 
@@ -2227,10 +2257,10 @@ Example - start an already-loaded song and stop it on Ctrl+Q (full
 working example - `C/DEMOS/MUSIC.ASM`, `cd demos` + `exec music.asm`):
 
     LDI A, 1
-    STA 0xF0001042      ; SoundCard COMMAND = PLAY
+    STA 0xF0001066      ; SoundCard COMMAND = PLAY
     ...
     LDI A, 2
-    STA 0xF0001042      ; SoundCard COMMAND = STOP
+    STA 0xF0001066      ; SoundCard COMMAND = STOP
 
 
 ---
@@ -2291,7 +2321,7 @@ Example - load `space_debris.mod` and play it:
     JNZ mod_error
 
     LDI A, 1
-    STA 0xF0001042      ; SoundCard COMMAND = PLAY
+    STA 0xF0001066      ; SoundCard COMMAND = PLAY
 
 A full working example - `C/DEMOS/MUSIC.ASM` (`cd demos`, then
 `exec music.asm`), song - `C/DEMOS/space_debris.mod`.
@@ -2756,6 +2786,49 @@ file in the list copies its name into `NAME`, puts the disk into
 `clear_screen()` and a full redraw of both panels (the child program
 almost certainly used the screen for itself).
 
+## Sound and music: mod_load()/sound_*()
+
+    if (mod_load("space_debris.mod") != 0) { return 1; }   // STATUS: 0=ok,1=not found,2=bad format,3=corrupted
+    sound_play();
+    sound_stop();
+    sound_pause();
+    sound_resume();
+    sound_set_volume(255);   // 0-255, overall volume
+
+Ergonomic wrappers around `ModLoader`/`SoundCard` (see those sections
+above) - before these existed, reaching them required raw `poke()`/
+`peek()` with the literal MMIO addresses spelled out by hand.
+
+`mod_load(string)` is the interesting one to compare against
+`print_str`: `print_str` needs an actual RUNTIME loop, because its
+destination coordinates (`x`, `y` in Text VRAM) can be runtime
+variables. `mod_load`'s destination, by contrast, is always
+`ModLoader`'s fixed `NAME0-31` range - a compile-time-constant base
+address, full stop. So the compiler doesn't emit a loop at all: it
+unrolls the string literal into a flat sequence of `LDI A,<byte>;
+STA <address>` pairs, one pair per character, at COMPILE time,
+zero-pads the rest up to 32 bytes, then emits `LDI A,1; STA
+0xF0001040` (COMMAND=LOAD) and `LDA 0xF0001041` (STATUS ends up in
+`A`, as the return value of the whole expression). No runtime loop
+means no runtime cost beyond the fixed sequence of stores - simpler
+and cheaper than `print_str`'s mechanism, not just a shorter way to
+write the same thing. A literal longer than 32 characters is a
+compile-time error.
+
+`sound_play()`/`sound_stop()`/`sound_pause()`/`sound_resume()` take no
+arguments - each is just `LDI A,<code>; STA 0xF0001066` (`SoundCard`
+COMMAND, see above), the same pattern as `clear_screen()`.
+`sound_set_volume(v)` evaluates `v` into `A` and stores it to
+`0xF0001068` (`SoundCard` VOLUME) - the same pattern as `set_color()`,
+just one register instead of four.
+
+Reading the new visualization registers (`CHANNEL0-3_VOLUME`/`ROW`/
+`ORDER_POS`) needs no new builtin at all - a mapped array over
+`CHANNEL0-3_VOLUME` (like `SNAKE.MC`'s game board) or a plain `peek()`
+for `ROW`/`ORDER_POS` already does the job, since those addresses are
+themselves compile-time constants. See "SoundCard" above and
+`C/DEMOS/MUSIC2.MC` below for a full example.
+
 ## What's deliberately missing in v1
 
 - Strings as a full type (you can't store a string in a variable,
@@ -2795,6 +2868,21 @@ works), and `Clock` for the pause between game ticks. Controls -
 
     build snake.mc
     snake
+
+## Example: MUSIC2.MC
+
+`C/DEMOS/MUSIC2.MC` plays `space_debris.mod` (`mod_load()` +
+`sound_play()`) and, at the same time, draws a live 4-bar equalizer in
+graphics mode (`VideoCard`, `poke(VIDEO_COMMAND, 1)` for MODE_ON) - one
+bar per ProTracker channel, its height read straight from the new
+`CHANNEL0-3_VOLUME` registers through a mapped array
+(`int channelVol[4] = 0xF0001069;`). `VideoCard` and `SoundCard` are
+independent devices with their own threads (see both sections above) -
+running both from the same Mini-C program needs no special handling.
+Quit - `Ctrl+Q`. Build and run:
+
+    build music2.mc
+    music2
 
 ## Cheat sheet
 
@@ -2860,6 +2948,17 @@ See "Running a child program: exec_child()" above - up to 5 nesting
 levels, zeroes `lastKey` before launching, the disk and file name in
 `NAME` are prepared by the calling code beforehand.
 
+**Sound and music**
+
+| Call | What it does |
+|---|---|
+| `mod_load("name.mod")` | loads a `.mod` file into `SoundCard`, returns `STATUS` |
+| `sound_play()` / `sound_stop()` | start/stop playback |
+| `sound_pause()` / `sound_resume()` | pause/resume without resetting position |
+| `sound_set_volume(v)` | overall volume, 0-255 |
+
+See "Sound and music: mod_load()/sound_*()" above.
+
 **Comments**
 
     // a single-line comment to the end of the line
@@ -2874,4 +2973,6 @@ levels, zeroes `lastKey` before launching, the disk and file name in
 **Where to find examples**: `C/DEMOS/COUNTER.MC` (a function,
 `DIV`/`MOD`, printing a number), `C/DEMOS/SNAKE.MC` (arrays, mapped
 arrays, keyboard, `Clock`), `C/TOOLS/FM.MC` (a file manager,
-`exec_child()`, working with the disk directly through `poke`/`peek`).
+`exec_child()`, working with the disk directly through `poke`/`peek`),
+`C/DEMOS/MUSIC2.MC` (`mod_load()`/`sound_*()`, graphics mode alongside
+audio, mapped array over `SoundCard`'s visualization registers).

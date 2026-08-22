@@ -64,7 +64,8 @@ private:
         Block, If, While, For, Return, ExprStmt,
         Assign, IndexAssign, LogicalOr, LogicalAnd, BinOp, UnaryOp,
         Call, Index, Ident, Number, Poke, Peek,
-        PrintChar, PrintStr, SetColor, ClearScreen, ExecChild
+        PrintChar, PrintStr, SetColor, ClearScreen, ExecChild,
+        ModLoad, SoundPlay, SoundStop, SoundPause, SoundResume, SoundSetVolume
     };
 
     struct Node
@@ -147,6 +148,7 @@ private:
 
     void genPrintChar(const NodePtr& expr);
     void genPrintStr(const NodePtr& expr);
+    void genModLoad(const NodePtr& expr);
     void genSetColor(const NodePtr& expr);
     void genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr);   // HL = base + y*80 + x
 };

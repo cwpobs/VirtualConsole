@@ -32,7 +32,9 @@ void Compiler::lex(const std::string& source)
         "int", "if", "else", "while", "for", "return", "const",
         "poke", "peek",
         "print_char", "print_str", "set_color", "clear_screen",
-        "exec_child"
+        "exec_child",
+        "mod_load", "sound_play", "sound_stop", "sound_pause",
+        "sound_resume", "sound_set_volume"
     };
 
     while (i < n)
@@ -667,6 +669,66 @@ Compiler::NodePtr Compiler::parsePrimary()
         return n;
     }
 
+    if (check("mod_load") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::ModLoad);
+        expect("(");
+        if (peek().type != TokType::STRING)
+        {
+            error("mod_load ожидает строковый литерал (имя файла)");
+        }
+        n->text = advance().text;             // имя .mod-файла
+        expect(")");
+        return n;
+    }
+
+    if (check("sound_play") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::SoundPlay);
+        expect("(");
+        expect(")");
+        return n;
+    }
+
+    if (check("sound_stop") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::SoundStop);
+        expect("(");
+        expect(")");
+        return n;
+    }
+
+    if (check("sound_pause") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::SoundPause);
+        expect("(");
+        expect(")");
+        return n;
+    }
+
+    if (check("sound_resume") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::SoundResume);
+        expect("(");
+        expect(")");
+        return n;
+    }
+
+    if (check("sound_set_volume") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::SoundSetVolume);
+        expect("(");
+        n->children.push_back(parseExpr());   // volume
+        expect(")");
+        return n;
+    }
+
     if (peek().type == TokType::IDENT)
     {
         std::string name = advance().text;
@@ -1030,6 +1092,42 @@ void Compiler::genPrintStr(const NodePtr& expr)
     *codeOut << doneLabel << ":\n";
 }
 
+void Compiler::genModLoad(const NodePtr& expr)
+{
+    // В отличие от print_str, адрес назначения тут ВСЕГДА фиксирован
+    // (NAME0-31 у ModLoader, 0xF0001020-0xF000103F) - рантайм-цикл не
+    // нужен вообще, компилятор просто разворачивает запись имени файла
+    // в плоскую последовательность LDI+STA по одному байту на символ,
+    // прямо на этапе компиляции (см. ASSEMBLY.md, "mod_load"). Итоговое
+    // значение выражения - STATUS после LOAD (0=ok,1=не найден,
+    // 2=формат,3=битый) - остаётся в A, как и положено genExprToA.
+
+    const std::string& text = expr->text;
+
+    if (text.size() > 32)
+    {
+        throw std::runtime_error(
+            "Мини-C: mod_load - имя файла длиннее 32 символов: \"" + text + "\"");
+    }
+
+    const uint32_t nameBase = 0xF0001020;
+
+    for (size_t i = 0; i < text.size(); i++)
+    {
+        *codeOut << "    LDI A, " << static_cast<int>(static_cast<unsigned char>(text[i])) << "\n";
+        *codeOut << "    STA " << (nameBase + i) << "\n";
+    }
+    for (size_t i = text.size(); i < 32; i++)
+    {
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << "    STA " << (nameBase + i) << "\n";
+    }
+
+    *codeOut << "    LDI A, 1\n";
+    *codeOut << "    STA 0xF0001040\n";   // ModLoader COMMAND = LOAD
+    *codeOut << "    LDA 0xF0001041\n";   // ModLoader STATUS - остаётся в A
+}
+
 void Compiler::genExprToA(const NodePtr& expr)
 {
     switch (expr->kind)
@@ -1161,6 +1259,35 @@ void Compiler::genExprToA(const NodePtr& expr)
         // до своего RET (см. genFunction() - любая функция Мини-C,
         // включая main(), гарантированно заканчивается RET, не HLT).
         *codeOut << "    CALL 0x0000000A\n";
+        return;
+
+    case NodeKind::ModLoad:
+        genModLoad(expr);
+        return;
+
+    case NodeKind::SoundPlay:
+        *codeOut << "    LDI A, 1\n";
+        *codeOut << "    STA 0xF0001066\n";   // SoundCard COMMAND = PLAY
+        return;
+
+    case NodeKind::SoundStop:
+        *codeOut << "    LDI A, 2\n";
+        *codeOut << "    STA 0xF0001066\n";   // SoundCard COMMAND = STOP
+        return;
+
+    case NodeKind::SoundPause:
+        *codeOut << "    LDI A, 3\n";
+        *codeOut << "    STA 0xF0001066\n";   // SoundCard COMMAND = PAUSE
+        return;
+
+    case NodeKind::SoundResume:
+        *codeOut << "    LDI A, 4\n";
+        *codeOut << "    STA 0xF0001066\n";   // SoundCard COMMAND = RESUME
+        return;
+
+    case NodeKind::SoundSetVolume:
+        genExprToA(expr->children[0]);
+        *codeOut << "    STA 0xF0001068\n";   // SoundCard VOLUME
         return;
 
     case NodeKind::Call:

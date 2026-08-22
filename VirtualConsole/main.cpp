@@ -83,8 +83,11 @@ int main()
     bus.mapDevice(&pngLoader, 0xF0000FFE, 0xF0001011); // загрузчик PNG (спрайты и тайлы, stb_image)
     bus.mapDevice(&mapLoader, 0xF0001012, 0xF000101F); // загрузчик текстовой карты тайлов
     bus.mapDevice(&modLoader, 0xF0001020, 0xF0001041); // загрузчик .mod-файлов
-    bus.mapDevice(&soundCard, 0xF0001042, 0xF0001044); // звуковая карта (PLAY/STOP/VOLUME)
     bus.mapDevice(&gpu3D, 0xF0001045, 0xF0001065);     // 3D-ускоритель (вершины/треугольники/PRESENT)
+    // 0xF0001042-0xF0001044 - неиспользуемая дыра (старое место SoundCard,
+    // см. ниже) - блок SoundCard целиком перенесён ПОСЛЕ Gpu3D, чтобы не
+    // сдвигать его и не переписывать жёстко зашитые адреса в CUBE3D.ASM.
+    bus.mapDevice(&soundCard, 0xF0001066, 0xF000106E); // звуковая карта (PLAY/STOP/VOLUME + визуализация: громкость каналов/ROW/ORDER_POS)
 
 
     // ========================================

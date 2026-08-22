@@ -70,6 +70,18 @@ private:
     static const uint32_t REG_STATUS = 1;
     static const uint32_t REG_VOLUME = 2;
 
+    // Регистры визуализации (read-only) - зеркала внутреннего состояния
+    // секвенсора, обновляются раз за тик в updateVisualizationRegisters()
+    // (см. advanceTick()/resetSequencer()). Читаются с CPU-потока без
+    // блокировки songMutex - поэтому именно std::atomic, тем же приёмом,
+    // что уже есть у volume. См. ASSEMBLY.md, "SoundCard".
+    static const uint32_t REG_CHANNEL0_VOLUME = 3;
+    static const uint32_t REG_CHANNEL1_VOLUME = 4;
+    static const uint32_t REG_CHANNEL2_VOLUME = 5;
+    static const uint32_t REG_CHANNEL3_VOLUME = 6;
+    static const uint32_t REG_ROW = 7;
+    static const uint32_t REG_ORDER_POS = 8;
+
     static const int SAMPLE_RATE = 44100;
 
     // Стандартная таблица periods ProTracker (finetune = 0, 3 октавы,
@@ -100,6 +112,12 @@ private:
     uint8_t status;
     std::atomic<uint8_t> volume;   // читается из аудио-потока в renderSamples
 
+    // Зеркала для регистров визуализации (см. REG_CHANNEL*_VOLUME/REG_ROW/
+    // REG_ORDER_POS выше) - обновляются updateVisualizationRegisters().
+    std::atomic<uint8_t> channelVolumeAtomic[4]{};
+    std::atomic<uint8_t> rowAtomic{0};
+    std::atomic<uint8_t> orderPosAtomic{0};
+
     ModSong song;
     bool songLoaded;
     std::mutex songMutex;   // защищает song/songLoaded от гонки LOAD во время PLAY
@@ -129,6 +147,7 @@ private:
     void resume();
 
     void resetSequencer();
+    void updateVisualizationRegisters();
     void advanceRow();
     void applyContinuousEffects(int tick);
     void advanceTick();
