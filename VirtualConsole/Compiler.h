@@ -32,7 +32,7 @@ private:
 
     enum class TokType
     {
-        END, IDENT, NUMBER, KEYWORD, PUNCT
+        END, IDENT, NUMBER, KEYWORD, PUNCT, STRING
     };
 
     struct Token
@@ -63,7 +63,8 @@ private:
         Program, VarDecl, ArrayDecl, ConstDecl, FuncDecl, Param,
         Block, If, While, For, Return, ExprStmt,
         Assign, IndexAssign, LogicalOr, LogicalAnd, BinOp, UnaryOp,
-        Call, Index, Ident, Number, Poke, Peek
+        Call, Index, Ident, Number, Poke, Peek,
+        PrintChar, PrintStr, SetColor, ClearScreen
     };
 
     struct Node
@@ -138,4 +139,14 @@ private:
     void genCondition(const NodePtr& expr, const std::string& falseLabel);
     void genComparisonToA(const NodePtr& expr);
     void genAddressOf(const NodePtr& indexNode);   // вычисляет HL = массив+индекс
+
+    // ---- Экранные встроенные функции (print_char/print_str/set_color/
+    // clear_screen - см. ASSEMBLY.md, "Мини-C") ----
+
+    bool usesScreenHelper = false;    // нужен ли __mc_screen_offset (эмитится один раз, если хоть раз использован)
+
+    void genPrintChar(const NodePtr& expr);
+    void genPrintStr(const NodePtr& expr);
+    void genSetColor(const NodePtr& expr);
+    void genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr);   // HL = base + y*80 + x
 };

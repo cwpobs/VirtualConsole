@@ -30,7 +30,8 @@ void Compiler::lex(const std::string& source)
 
     static const char* keywords[] = {
         "int", "if", "else", "while", "for", "return", "const",
-        "poke", "peek"
+        "poke", "peek",
+        "print_char", "print_str", "set_color", "clear_screen"
     };
 
     while (i < n)
@@ -43,6 +44,28 @@ void Compiler::lex(const std::string& source)
         if (c == '/' && i + 1 < n && source[i + 1] == '/')
         {
             while (i < n && source[i] != '\n') i++;
+            continue;
+        }
+
+        if (c == '"')
+        {
+            // Строковый литерал - только для print_str. Без escape-
+            // последовательностей в v1 (\n и т.п. не нужны - Text VRAM
+            // не понимает перевод строки как управляющий символ,
+            // печать многострочного текста делается отдельными
+            // вызовами print_str на разные y).
+            size_t start = i + 1;
+            i++;
+            while (i < n && source[i] != '"' && source[i] != '\n') i++;
+            if (i >= n || source[i] != '"')
+            {
+                throw std::runtime_error(
+                    "Мини-C: строка " + std::to_string(line) +
+                    ": незакрытый строковый литерал");
+            }
+            std::string text = source.substr(start, i - start);
+            i++; // закрывающая "
+            tokens.push_back({ TokType::STRING, text, 0, line });
             continue;
         }
 
@@ -577,6 +600,63 @@ Compiler::NodePtr Compiler::parsePrimary()
         return n;
     }
 
+    if (check("print_char") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::PrintChar);
+        expect("(");
+        n->children.push_back(parseExpr());   // x
+        expect(",");
+        n->children.push_back(parseExpr());   // y
+        expect(",");
+        n->children.push_back(parseExpr());   // ch
+        expect(")");
+        return n;
+    }
+
+    if (check("print_str") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::PrintStr);
+        expect("(");
+        n->children.push_back(parseExpr());   // x
+        expect(",");
+        n->children.push_back(parseExpr());   // y
+        expect(",");
+        if (peek().type != TokType::STRING)
+        {
+            error("print_str ожидает строковый литерал третьим аргументом");
+        }
+        n->text = advance().text;             // сама строка
+        expect(")");
+        return n;
+    }
+
+    if (check("set_color") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::SetColor);
+        expect("(");
+        n->children.push_back(parseExpr());   // x
+        expect(",");
+        n->children.push_back(parseExpr());   // y
+        expect(",");
+        n->children.push_back(parseExpr());   // fg
+        expect(",");
+        n->children.push_back(parseExpr());   // bg
+        expect(")");
+        return n;
+    }
+
+    if (check("clear_screen") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::ClearScreen);
+        expect("(");
+        expect(")");
+        return n;
+    }
+
     if (peek().type == TokType::IDENT)
     {
         std::string name = advance().text;
@@ -818,6 +898,125 @@ void Compiler::genAddressOf(const NodePtr& indexNode)
     *codeOut << "    CALL __mc_hladd\n";
 }
 
+void Compiler::genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr)
+{
+    // HL = base + y*80 + x. y*80 НЕЛЬЗЯ считать через один MUL - для
+    // 80x25 экрана y доходит до 24, 24*80=1920, восьмибитный MUL это
+    // тихо завернул бы. Поэтому __mc_screen_offset прибавляет 80 к HL
+    // ровно y раз (через уже существующий __mc_hladd, каждый раз на
+    // 80 - само 80 в один hladd влезает без проблем), а x (0-79)
+    // добавляется отдельным вызовом __mc_hladd - тот же приём, что
+    // goto_row_start в SHELL.ASM использует для той же самой проблемы.
+    usesScreenHelper = true;
+
+    genExprToA(yExpr);
+    *codeOut << "    STA __mc_scr_y\n";
+    genExprToA(xExpr);
+    *codeOut << "    STA __mc_scr_x\n";
+
+    *codeOut << "    LDHL " << base << "\n";
+    *codeOut << "    LDA __mc_scr_y\n";
+    *codeOut << "    CALL __mc_screen_offset\n";
+    *codeOut << "    LDA __mc_scr_x\n";
+    *codeOut << "    CALL __mc_hladd\n";
+}
+
+void Compiler::genPrintChar(const NodePtr& expr)
+{
+    // ch считаем ДО genScreenAddress - тот в процессе вычисления x/y
+    // свободно использует A/B/C, ch должен пережить это в памяти, не
+    // в регистре.
+    genExprToA(expr->children[2]);
+    *codeOut << "    STA __mc_pc_ch\n";
+
+    genScreenAddress(0xF0000007, expr->children[0], expr->children[1]);
+
+    *codeOut << "    LDA __mc_pc_ch\n";
+    *codeOut << "    STX\n";
+}
+
+void Compiler::genSetColor(const NodePtr& expr)
+{
+    // Байт атрибута TextAttr - fg в младшем полубайте, bg в старшем
+    // (см. ASSEMBLY.md, "TextAttr"): attr = fg | (bg << 4) = fg + bg*16.
+    genExprToA(expr->children[3]);   // bg
+    *codeOut << "    STA __mc_sc_bg\n";
+    genExprToA(expr->children[2]);   // fg
+    *codeOut << "    STA __mc_sc_fg\n";
+
+    genScreenAddress(0xF000080C, expr->children[0], expr->children[1]);
+
+    *codeOut << "    LDA __mc_sc_bg\n";
+    *codeOut << "    LDI B, 16\n";
+    *codeOut << "    MUL B\n";
+    *codeOut << "    PUSH A\n";
+    *codeOut << "    LDA __mc_sc_fg\n";
+    *codeOut << "    POP B\n";
+    *codeOut << "    ADD B\n";
+    *codeOut << "    STX\n";
+}
+
+void Compiler::genPrintStr(const NodePtr& expr)
+{
+    usesScreenHelper = true;
+
+    const std::string& text = expr->text;
+    std::string strLabel = newLabel("str");
+    std::string loopLabel = newLabel("ps_loop");
+    std::string doneLabel = newLabel("ps_done");
+
+    // Байты строки - как обычный маленький массив (DB-данные), только
+    // без счёта в arraySizes - индексируется точно так же, вручную,
+    // через __mc_hladd.
+    *dataOut << strLabel << ": DB "
+        << (text.empty() ? 0 : static_cast<int>(static_cast<unsigned char>(text[0]))) << "\n";
+    for (size_t i = 1; i < text.size(); i++)
+    {
+        *dataOut << "    DB " << static_cast<int>(static_cast<unsigned char>(text[i])) << "\n";
+    }
+
+    genExprToA(expr->children[1]);   // y - не меняется на всю строку
+    *codeOut << "    STA __mc_ps_y\n";
+    genExprToA(expr->children[0]);   // x - стартовая колонка
+    *codeOut << "    STA __mc_ps_x\n";
+
+    *codeOut << "    LDI A, 0\n";
+    *codeOut << "    STA __mc_ps_i\n";
+
+    *codeOut << loopLabel << ":\n";
+    *codeOut << "    LDA __mc_ps_i\n";
+    *codeOut << "    LDI B, " << text.size() << "\n";
+    *codeOut << "    CMP B\n";
+    *codeOut << "    JZ " << doneLabel << "\n";
+
+    *codeOut << "    LDHL " << strLabel << "\n";
+    *codeOut << "    LDA __mc_ps_i\n";
+    *codeOut << "    CALL __mc_hladd\n";
+    *codeOut << "    LDX\n";
+    *codeOut << "    STA __mc_ps_ch\n";
+
+    *codeOut << "    LDHL 0xF0000007\n";
+    *codeOut << "    LDA __mc_ps_y\n";
+    *codeOut << "    CALL __mc_screen_offset\n";
+    *codeOut << "    LDA __mc_ps_x\n";
+    *codeOut << "    PUSH A\n";
+    *codeOut << "    LDA __mc_ps_i\n";
+    *codeOut << "    POP B\n";
+    *codeOut << "    ADD B\n";
+    *codeOut << "    CALL __mc_hladd\n";
+
+    *codeOut << "    LDA __mc_ps_ch\n";
+    *codeOut << "    STX\n";
+
+    *codeOut << "    LDA __mc_ps_i\n";
+    *codeOut << "    LDI B, 1\n";
+    *codeOut << "    ADD B\n";
+    *codeOut << "    STA __mc_ps_i\n";
+    *codeOut << "    JMP " << loopLabel << "\n";
+
+    *codeOut << doneLabel << ":\n";
+}
+
 void Compiler::genExprToA(const NodePtr& expr)
 {
     switch (expr->kind)
@@ -908,6 +1107,29 @@ void Compiler::genExprToA(const NodePtr& expr)
         *codeOut << "    STA " << addr << "\n";
         return;
     }
+
+    case NodeKind::PrintChar:
+        genPrintChar(expr);
+        return;
+
+    case NodeKind::PrintStr:
+        genPrintStr(expr);
+        return;
+
+    case NodeKind::SetColor:
+        genSetColor(expr);
+        return;
+
+    case NodeKind::ClearScreen:
+        // CLEAR у Text VRAM (0xF00007D8) и TextAttr (0xF0000FDD) -
+        // готовые регистры устройств (см. ASSEMBLY.md, "Text VRAM"/
+        // "TextAttr") - "очистить экран" для пользователя мини-C
+        // естественно значит и то, и другое сразу (иначе после
+        // очистки старые цвета "просвечивали" бы сквозь пробелы).
+        *codeOut << "    LDI A, 1\n";
+        *codeOut << "    STA 0xF00007D8\n";
+        *codeOut << "    STA 0xF0000FDD\n";
+        return;
 
     case NodeKind::Call:
     {
@@ -1188,6 +1410,7 @@ std::string Compiler::compile(const std::string& source)
     arraySizes.clear();
     arrayBaseAddr.clear();
     globalVars.clear();
+    usesScreenHelper = false;
 
     lex(source);
     NodePtr program = parseProgram();
@@ -1216,7 +1439,7 @@ std::string Compiler::compile(const std::string& source)
         }
     }
 
-    if (usesArrays)
+    if (usesArrays || usesScreenHelper)
     {
         code << "__mc_hladd:\n";
         code << "    PUSH A\n";
@@ -1235,6 +1458,39 @@ std::string Compiler::compile(const std::string& source)
         code << "    JMP __mc_hladd_loop\n";
         code << "__mc_hladd_done:\n";
         code << "    RET\n";
+    }
+
+    if (usesScreenHelper)
+    {
+        // HL += A*80 (через A раз __mc_hladd(80) - MUL 8-бит переполнился
+        // бы уже при A>=4, см. genScreenAddress).
+        code << "__mc_screen_offset:\n";
+        code << "    STA __mc_so_y\n";
+        code << "__mc_screen_offset_loop:\n";
+        code << "    LDA __mc_so_y\n";
+        code << "    LDI B, 0\n";
+        code << "    CMP B\n";
+        code << "    JZ __mc_screen_offset_done\n";
+        code << "    LDI A, 80\n";
+        code << "    CALL __mc_hladd\n";
+        code << "    LDA __mc_so_y\n";
+        code << "    LDI B, 1\n";
+        code << "    SUB B\n";
+        code << "    STA __mc_so_y\n";
+        code << "    JMP __mc_screen_offset_loop\n";
+        code << "__mc_screen_offset_done:\n";
+        code << "    RET\n";
+
+        data << "__mc_scr_x: DB 0\n";
+        data << "__mc_scr_y: DB 0\n";
+        data << "__mc_so_y: DB 0\n";
+        data << "__mc_pc_ch: DB 0\n";
+        data << "__mc_sc_fg: DB 0\n";
+        data << "__mc_sc_bg: DB 0\n";
+        data << "__mc_ps_x: DB 0\n";
+        data << "__mc_ps_y: DB 0\n";
+        data << "__mc_ps_i: DB 0\n";
+        data << "__mc_ps_ch: DB 0\n";
     }
 
     for (const auto& name : globalVars)
