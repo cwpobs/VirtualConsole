@@ -340,6 +340,45 @@ void Disk::changeDirUp()
     status = 0;
 }
 
+bool Disk::readRunFile(
+    const std::string& fileName,
+    std::vector<uint8_t>& code,
+    std::vector<uint32_t>& relocations)
+{
+    // Общий формат .RUN (см. build() ниже): сначала заголовок -
+    // таблица релокаций (4 байта - количество N, uint32 LE, затем N *
+    // 4 байта смещений, uint32 LE каждое - те самые смещения, что
+    // возвращает Assembler::assemble() третьим параметром), сразу за
+    // ним - сам машинный код. Раньше таблица релокаций лежала в
+    // отдельном файле ИМЯ.REL - теперь один файл, один формат.
+
+    std::ifstream file(basePath / currentDir / fileName, std::ios::binary);
+
+    if (!file)
+    {
+        return false;
+    }
+
+    uint32_t relocationCount = 0;
+    file.read(reinterpret_cast<char*>(&relocationCount), sizeof(relocationCount));
+
+    relocations.assign(relocationCount, 0);
+    if (relocationCount > 0)
+    {
+        file.read(
+            reinterpret_cast<char*>(relocations.data()),
+            static_cast<std::streamsize>(relocationCount) * sizeof(uint32_t)
+        );
+    }
+
+    code.assign(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+
+    return true;
+}
+
 void Disk::loadRaw(uint32_t targetAddress)
 {
     // В отличие от loadProgram - NAME здесь уже ГОТОВЫЙ машинный код
@@ -347,16 +386,18 @@ void Disk::loadRaw(uint32_t targetAddress)
     // есть, без ассемблера. targetAddress здесь всегда LOAD_ADDRESS -
     // обычный запуск (см. SHELL.ASM, cmd_autorun/cmd_exec_run), КУДА
     // .RUN и был собран (build() всегда использует origin =
-    // LOAD_ADDRESS), поэтому байты можно копировать как есть, без
-    // релокации. Запуск ИЗНУТРИ уже выполняющейся программы (Мини-C
-    // exec_child(), см. FM.MC) идёт через ОТДЕЛЬНЫЙ loadChildRun() -
-    // там адрес другой (CHILD_LOAD_ADDRESS), и внутренние
-    // JMP/CALL/LDA/STA программы на свои же метки/переменные нужно
-    // сдвигать (см. loadChildRun() ниже, ASSEMBLY.md - "LOAD_CHILD").
+    // LOAD_ADDRESS), поэтому релокация не нужна (дельта 0) - таблица
+    // релокаций из заголовка файла тут просто игнорируется. Запуск
+    // ИЗНУТРИ уже выполняющейся программы (Мини-C exec_child(), см.
+    // FM.MC) идёт через ОТДЕЛЬНЫЙ loadChildRun() - там адрес другой
+    // (EXEC_CHILD_DEPTHn_ADDRESS), и внутренние JMP/CALL/LDA/STA
+    // программы на свои же метки/переменные нужно сдвигать (см.
+    // loadChildRun() ниже, ASSEMBLY.md - "LOAD_CHILD").
 
-    std::ifstream file(basePath / currentDir / nameAsString(), std::ios::binary);
+    std::vector<uint8_t> code;
+    std::vector<uint32_t> relocations;
 
-    if (!file)
+    if (!readRunFile(nameAsString(), code, relocations))
     {
         status = 2;
         fileSize = 0;
@@ -368,17 +409,12 @@ void Disk::loadRaw(uint32_t targetAddress)
     // относительно правильного диска (см. Disk.h, lastExecDisk).
     lastExecDisk = this;
 
-    std::vector<uint8_t> data(
-        (std::istreambuf_iterator<char>(file)),
-        std::istreambuf_iterator<char>()
-    );
-
-    for (size_t i = 0; i < data.size(); i++)
+    for (size_t i = 0; i < code.size(); i++)
     {
-        bus->write(targetAddress + static_cast<uint32_t>(i), data[i]);
+        bus->write(targetAddress + static_cast<uint32_t>(i), code[i]);
     }
 
-    fileSize = static_cast<uint32_t>(data.size());
+    fileSize = static_cast<uint32_t>(code.size());
     status = 0;
 }
 
@@ -393,83 +429,52 @@ void Disk::loadChildRun(uint32_t targetAddress)
     // внутренние JMP/CALL/LDA/STA программы на свои же метки/
     // переменные - это абсолютные адреса, вычисленные под
     // LOAD_ADDRESS, а код физически окажется по targetAddress - без
-    // сдвига они указывали бы не туда. Поэтому читаем ещё и
-    // <стем>.REL - таблицу смещений таких адресов, которую build()
-    // сохраняет рядом с .RUN (см. build(), Assembler::assemble()), и
-    // патчим их на разницу (targetAddress - LOAD_ADDRESS) прямо в
-    // буфере перед записью в RAM.
+    // сдвига они указывали бы не туда. Поэтому используем таблицу
+    // релокаций из заголовка .RUN (см. readRunFile(), build()) и
+    // патчим смещённые адреса на разницу (targetAddress - LOAD_ADDRESS)
+    // прямо в буфере перед записью в RAM.
 
-    std::string runName = nameAsString();
+    std::vector<uint8_t> code;
+    std::vector<uint32_t> relocations;
 
-    std::ifstream runFile(basePath / currentDir / runName, std::ios::binary);
-
-    if (!runFile)
+    if (!readRunFile(nameAsString(), code, relocations))
     {
         status = 2;
         fileSize = 0;
         return;
     }
-
-    std::vector<uint8_t> data(
-        (std::istreambuf_iterator<char>(runFile)),
-        std::istreambuf_iterator<char>()
-    );
-
-    size_t dot = runName.find_last_of('.');
-    std::string stem = (dot == std::string::npos) ? runName : runName.substr(0, dot);
-
-    std::ifstream relFile(basePath / currentDir / (stem + ".REL"), std::ios::binary);
-
-    if (!relFile)
-    {
-        // .RUN собран до появления релокации (или .REL удалён) - без
-        // таблицы смещений безопасно запустить как дочернюю программу
-        // нельзя, нужно пересобрать через build().
-        status = 2;
-        fileSize = 0;
-        return;
-    }
-
-    uint32_t relocationCount = 0;
-    relFile.read(reinterpret_cast<char*>(&relocationCount), sizeof(relocationCount));
-
-    std::vector<uint32_t> relocations(relocationCount);
-    relFile.read(
-        reinterpret_cast<char*>(relocations.data()),
-        static_cast<std::streamsize>(relocationCount) * sizeof(uint32_t)
-    );
 
     int64_t delta = static_cast<int64_t>(targetAddress) - static_cast<int64_t>(LOAD_ADDRESS);
 
     for (uint32_t offset : relocations)
     {
-        if (static_cast<uint64_t>(offset) + 4 > data.size())
+        if (static_cast<uint64_t>(offset) + 4 > code.size())
         {
-            continue;   // защита от повреждённого/рассогласованного .REL
+            continue;   // защита от повреждённого/рассогласованного заголовка
         }
 
         uint32_t address =
-            static_cast<uint32_t>(data[offset]) |
-            (static_cast<uint32_t>(data[offset + 1]) << 8) |
-            (static_cast<uint32_t>(data[offset + 2]) << 16) |
-            (static_cast<uint32_t>(data[offset + 3]) << 24);
+            static_cast<uint32_t>(code[offset]) |
+            (static_cast<uint32_t>(code[offset + 1]) << 8) |
+            (static_cast<uint32_t>(code[offset + 2]) << 16) |
+            (static_cast<uint32_t>(code[offset + 3]) << 24);
 
         address = static_cast<uint32_t>(static_cast<int64_t>(address) + delta);
 
-        data[offset] = static_cast<uint8_t>(address & 0xFF);
-        data[offset + 1] = static_cast<uint8_t>((address >> 8) & 0xFF);
-        data[offset + 2] = static_cast<uint8_t>((address >> 16) & 0xFF);
-        data[offset + 3] = static_cast<uint8_t>((address >> 24) & 0xFF);
+        code[offset] = static_cast<uint8_t>(address & 0xFF);
+        code[offset + 1] = static_cast<uint8_t>((address >> 8) & 0xFF);
+        code[offset + 2] = static_cast<uint8_t>((address >> 16) & 0xFF);
+        code[offset + 3] = static_cast<uint8_t>((address >> 24) & 0xFF);
     }
 
     lastExecDisk = this;
 
-    for (size_t i = 0; i < data.size(); i++)
+    for (size_t i = 0; i < code.size(); i++)
     {
-        bus->write(targetAddress + static_cast<uint32_t>(i), data[i]);
+        bus->write(targetAddress + static_cast<uint32_t>(i), code[i]);
     }
 
-    fileSize = static_cast<uint32_t>(data.size());
+    fileSize = static_cast<uint32_t>(code.size());
     status = 0;
 }
 
@@ -548,25 +553,24 @@ void Disk::build()
         return;
     }
 
+    // Заголовок .RUN - таблица релокаций (см. readRunFile()): список
+    // смещений (относительно начала машинного кода, идущего сразу за
+    // заголовком), где лежат 4-байтные адреса, полученные из МЕТКИ (не
+    // числового литерала) - нужна, чтобы Disk::loadChildRun() (команды
+    // 15-18) могла корректно запустить эту же программу по ДРУГОМУ
+    // адресу, сдвинув такие адреса на разницу - см.
+    // Assembler::assemble(), ASSEMBLY.md, "LOAD_CHILD". Формат: 4 байта
+    // - количество смещений (uint32 LE), затем сами смещения по 4
+    // байта (uint32 LE) - один файл, без отдельного .REL.
+    uint32_t relocationCount = static_cast<uint32_t>(relocations.size());
+    outFile.write(reinterpret_cast<const char*>(&relocationCount), sizeof(relocationCount));
+    outFile.write(reinterpret_cast<const char*>(relocations.data()), relocations.size() * sizeof(uint32_t));
+
     outFile.write(reinterpret_cast<const char*>(machineCode.data()), machineCode.size());
 
-    // Таблица релокаций рядом с .RUN - список смещений (относительно
-    // начала машинного кода), где лежат 4-байтные адреса, полученные
-    // из МЕТКИ (не числового литерала) - нужна, чтобы Disk::
-    // loadChildRun() (команда 15) могла корректно запустить эту же
-    // программу по ДРУГОМУ адресу (CHILD_LOAD_ADDRESS), сдвинув такие
-    // адреса на разницу - см. Assembler::assemble(), ASSEMBLY.md,
-    // "LOAD_CHILD". Формат: 4 байта - количество смещений (uint32 LE),
-    // затем сами смещения по 4 байта (uint32 LE).
-    std::ofstream relFile(basePath / currentDir / (stem + ".REL"), std::ios::binary | std::ios::trunc);
-
-    if (relFile)
-    {
-        uint32_t count = static_cast<uint32_t>(relocations.size());
-        relFile.write(reinterpret_cast<const char*>(&count), sizeof(count));
-        relFile.write(reinterpret_cast<const char*>(relocations.data()), relocations.size() * sizeof(uint32_t));
-    }
-
-    fileSize = static_cast<uint32_t>(machineCode.size());
+    // SIZE - сколько байт реально записано в файл (заголовок + код),
+    // в отличие от loadRaw()/loadChildRun(), где SIZE - размер только
+    // самого кода, загруженного в RAM (см. ASSEMBLY.md, "BUILD").
+    fileSize = static_cast<uint32_t>(sizeof(relocationCount) + relocations.size() * sizeof(uint32_t) + machineCode.size());
     status = 0;
 }

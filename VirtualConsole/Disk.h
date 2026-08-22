@@ -6,6 +6,7 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <vector>
 
 class Bus;
 
@@ -128,4 +129,13 @@ private:
     void loadRaw(uint32_t targetAddress);
     void build();
     void loadChildRun(uint32_t targetAddress);
+
+    // Читает .RUN (формат - см. build()): заголовок (таблица
+    // релокаций) + машинный код в одном файле. Возвращает false, если
+    // файл не открылся - используется и loadRaw(), и loadChildRun().
+    bool readRunFile(
+        const std::string& fileName,
+        std::vector<uint8_t>& code,
+        std::vector<uint32_t>& relocations
+    );
 };
