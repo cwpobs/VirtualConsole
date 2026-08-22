@@ -6,6 +6,7 @@
 #include <sstream>
 
 Disk* Disk::lastExecDisk = nullptr;
+std::filesystem::path Disk::lastExecDir;
 
 namespace
 {
@@ -289,6 +290,7 @@ void Disk::loadProgram(uint32_t targetAddress)
         // относительно него же, а не всегда относительно диска C
         // (см. Disk.h, lastExecDisk).
         lastExecDisk = this;
+        lastExecDir = basePath / currentDir;
     }
 
     std::stringstream buffer;
@@ -356,14 +358,37 @@ bool Disk::readRunFile(
     std::vector<uint8_t>& code,
     std::vector<uint32_t>& relocations)
 {
+    return readRunFileFrom(currentDir, fileName, code, relocations);
+}
+
+bool Disk::readRunFileFrom(
+    const std::filesystem::path& dir,
+    const std::string& fileName,
+    std::vector<uint8_t>& code,
+    std::vector<uint32_t>& relocations)
+{
+    return readRunFileAt(basePath / dir, fileName, code, relocations);
+}
+
+bool Disk::readRunFileAt(
+    const std::filesystem::path& fullDir,
+    const std::string& fileName,
+    std::vector<uint8_t>& code,
+    std::vector<uint32_t>& relocations)
+{
     // Общий формат .RUN (см. build() ниже): сначала заголовок -
     // таблица релокаций (4 байта - количество N, uint32 LE, затем N *
     // 4 байта смещений, uint32 LE каждое - те самые смещения, что
     // возвращает Assembler::assemble() третьим параметром), сразу за
     // ним - сам машинный код. Раньше таблица релокаций лежала в
     // отдельном файле ИМЯ.REL - теперь один файл, один формат.
+    //
+    // В отличие от readRunFileFrom() - fullDir здесь УЖЕ полный путь
+    // (не примешивается к basePath ЭТОГО диска) - нужно для
+    // lastExecDir, который может указывать на ДРУГОЙ диск (свой
+    // basePath), см. loadChildRun().
 
-    std::ifstream file(basePath / currentDir / fileName, std::ios::binary);
+    std::ifstream file(fullDir / fileName, std::ios::binary);
 
     if (!file)
     {
@@ -419,6 +444,7 @@ void Disk::loadRaw(uint32_t targetAddress)
     // запущенная из .RUN, тоже должна резолвить свои PNG/карты/.mod
     // относительно правильного диска (см. Disk.h, lastExecDisk).
     lastExecDisk = this;
+    lastExecDir = basePath / currentDir;
 
     for (size_t i = 0; i < code.size(); i++)
     {
@@ -450,9 +476,33 @@ void Disk::loadChildRun(uint32_t targetAddress)
 
     if (!readRunFile(nameAsString(), code, relocations))
     {
-        status = 2;
-        fileSize = 0;
-        return;
+        // Не нашли в ТЕКУЩЕЙ папке (у FM.MC currentDir постоянно
+        // меняется вслед за панелями) - резервный поиск, в два шага:
+        //
+        // 1) Там, откуда был загружен ТЕКУЩИЙ выполняющийся top-level
+        //    процесс (lastExecDir - тот же трекинг, что уже используют
+        //    PngLoader/MapLoader/ModLoader для СВОИХ файлов, см.
+        //    Disk.h). Общая утилита (например, C/TOOLS/VIEW.MC)
+        //    естественно лежит РЯДОМ с программой, которая её
+        //    запускает через exec_child() (C/TOOLS/FM.MC) - достаточно
+        //    собрать её один раз в той же папке, никуда специально не
+        //    копировать и не класть в оговорённое заранее место.
+        // 2) В КОРНЕ диска - запасной вариант, если по каким-то
+        //    причинам утилита лежит не рядом с вызывающей программой.
+        //
+        // Обычный LOAD_RAW (loadRaw() выше, не через exec_child) в
+        // этом не нуждается - там NAME всегда готовится вызывающим
+        // кодом непосредственно перед командой, в ТЕКУЩЕЙ папке. См.
+        // ASSEMBLY.md, "LOAD_CHILD".
+        bool foundNearby = !lastExecDir.empty() &&
+            readRunFileAt(lastExecDir, nameAsString(), code, relocations);
+
+        if (!foundNearby && !readRunFileFrom(std::filesystem::path(), nameAsString(), code, relocations))
+        {
+            status = 2;
+            fileSize = 0;
+            return;
+        }
     }
 
     int64_t delta = static_cast<int64_t>(targetAddress) - static_cast<int64_t>(LOAD_ADDRESS);
@@ -479,6 +529,17 @@ void Disk::loadChildRun(uint32_t targetAddress)
     }
 
     lastExecDisk = this;
+    // lastExecDir НЕ трогаем здесь (в отличие от lastExecDisk) - в
+    // отличие от диска (которым родитель и вложенный потомок часто
+    // делят), "папка запуска" обязана остаться папкой ВЕРХНЕУРОВНЕВОЙ
+    // программы (см. loadProgram()/loadRaw() выше, где lastExecDir
+    // выставляется) на всё время её работы: если перезаписать её здесь
+    // на currentDir (где сейчас панель FM.MC, а не где лежит сама
+    // FM.MC), резервный поиск LOAD_CHILD в следующий раз будет искать
+    // *.RUN не там - ровно такой баг уже был здесь (после первого
+    // успешного запуска VIEW.MC из НЕ-своей папки F3 переставала
+    // находить VIEW.RUN, пока currentDir снова не окажется в её
+    // собственной папке).
 
     for (size_t i = 0; i < code.size(); i++)
     {

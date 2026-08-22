@@ -1731,8 +1731,26 @@ labels/variables reflect that as absolute addresses. `LOAD_CHILD` uses
 the relocation table from the header (see `BUILD` above), shifts each
 recorded offset's corresponding 4-byte address by the difference
 between the level's address and `0x00002000`, and only then writes
-the patched bytes into RAM. If `NAME.RUN` isn't found - `STATUS=2`,
-refusal - no guessing here.
+the patched bytes into RAM. If `NAME.RUN` isn't found in the CURRENT
+folder, it falls back to two more places before giving up with
+`STATUS=2` (unlike `LOAD`/`LOAD_RAW`, which only ever look in the
+current folder):
+
+1. **Wherever the currently running top-level program was itself
+   loaded from** (`Disk::lastExecDir` - the folder counterpart of
+   `lastExecDisk`, updated at the same two moments: `LOAD`/`LOAD_RAW`
+   into the main sandbox, see `PngLoader`/`MapLoader`/`ModLoader` above
+   for the disk half of this same idea). A shared utility launched via
+   `exec_child()` (see `C/TOOLS/VIEW.MC`, launched from `C/TOOLS/FM.MC`'s
+   `F3`) naturally lives right next to the program that launches it -
+   this fallback finds it there with zero extra setup: build it once,
+   in the SAME folder as the calling program's own source, and it's
+   found regardless of where that program's `currentDir` has since
+   wandered off to (`FM.MC`'s own `currentDir` tracks whichever folder
+   the user is currently browsing, which is almost never where `FM.MC`
+   itself lives).
+2. The disk's ROOT folder, as a last resort, for a utility that isn't
+   naturally paired with one specific calling program.
 
 RAM is 4 MiB (`0x00000000`-`0x003FFFFF`, see `main.cpp`) - the nesting
 level addresses live in a separate region well above
@@ -3098,6 +3116,13 @@ argument. Build and run directly:
 
     build view.mc
     view readme.txt
+
+`F3` from `FM.MC` just works, with no extra setup, as long as `VIEW.RUN`
+is built in the SAME folder as `FM.MC` itself (`C/TOOLS`) - `LOAD_CHILD`'s
+origin-folder fallback (see "LOAD_CHILD" in the "Disk" section) finds it
+there via `Disk::lastExecDir`, regardless of which folder `FM.MC`'s
+panels happen to be browsing when `F3` is pressed - no copying `.RUN`
+files around, no fixed "put it at the root" convention to remember.
 
 ## Cheat sheet
 

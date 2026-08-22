@@ -43,6 +43,21 @@ public:
     // по умолчанию используют диск C).
     static Disk* lastExecDisk;
 
+    // Полный путь (basePath/currentDir на МОМЕНТ запуска), откуда был
+    // загружен ТЕКУЩИЙ выполняющийся top-level процесс - то же самое
+    // событие, что обновляет lastExecDisk (loadProgram/loadRaw), плюс
+    // сама loadChildRun() при успешном запуске вложенного уровня (см.
+    // ниже). Нужно loadChildRun() для резервного поиска дочернего
+    // *.RUN "рядом с тем, кто его запускает" (например, C/TOOLS/
+    // VIEW.MC естественно лежит рядом с C/TOOLS/FM.MC, которая его
+    // запускает через exec_child() по F3) - без этого пришлось бы
+    // либо копировать *.RUN в КАЖДУЮ папку, куда панель FM.MC может
+    // забрести, либо держать его в одном специально оговорённом месте
+    // (например, в корне диска) независимо от того, где на самом деле
+    // лежит вызывающая программа. Пустой путь - ещё ни разу не
+    // запускался.
+    static std::filesystem::path lastExecDir;
+
 private:
 
     // Адрес в RAM, куда LOAD (8) кладёт собранный код - та же
@@ -133,7 +148,32 @@ private:
     // Читает .RUN (формат - см. build()): заголовок (таблица
     // релокаций) + машинный код в одном файле. Возвращает false, если
     // файл не открылся - используется и loadRaw(), и loadChildRun().
+    // Ищет в currentDir - см. readRunFileFrom()/readRunFileAt() для
+    // поиска по другой папке (резервный поиск, loadChildRun()).
     bool readRunFile(
+        const std::string& fileName,
+        std::vector<uint8_t>& code,
+        std::vector<uint32_t>& relocations
+    );
+
+    // То же самое, но по явно заданной папке ОТНОСИТЕЛЬНО basePath
+    // ЭТОГО диска (а не currentDir) - нужно loadChildRun() для
+    // резервного поиска в КОРНЕ диска (см. ASSEMBLY.md, "LOAD_CHILD").
+    bool readRunFileFrom(
+        const std::filesystem::path& dir,
+        const std::string& fileName,
+        std::vector<uint8_t>& code,
+        std::vector<uint32_t>& relocations
+    );
+
+    // То же самое, но по УЖЕ ПОЛНОМУ пути (basePath не примешивается) -
+    // нужно loadChildRun() для резервного поиска через lastExecDir,
+    // который может указывать на ДРУГОЙ диск (свой basePath) - в
+    // отличие от readRunFileFrom(), где dir всегда относительно ЭТОГО
+    // диска. readRunFile()/readRunFileFrom() - тонкие обёртки над этой
+    // функцией.
+    bool readRunFileAt(
+        const std::filesystem::path& fullDir,
         const std::string& fileName,
         std::vector<uint8_t>& code,
         std::vector<uint32_t>& relocations
