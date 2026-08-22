@@ -53,6 +53,33 @@ main:
     LDA 0xF00007E4
     STA 0x00000009
 
+    ; ---- Патчим точку входа "запустить дочернюю программу" (0x0000000A) ----
+    ;
+    ; Мини-C builtin exec_child() (см. Compiler.cpp, ASSEMBLY.md) не
+    ; знает адрес песочницы и не решает, какой уровень вложенности
+    ; сейчас идёт - он просто "CALL 0x0000000A", ровно как CPU при
+    ; прерывании просто прыгает на 0x00000005. Здесь, тем же способом
+    ; (LDHL метки + DebugPort + STA), кладём по 0x0000000A "JMP
+    ; shell_exec_child" - реальную логику выбора адреса/команды диска
+    ; по глубине вложенности (см. shell_exec_child ниже).
+
+    LDHL shell_exec_child
+
+    LDI A, 0x07         ; опкод JMP
+    STA 0x0000000A
+
+    LDA 0xF00007E1
+    STA 0x0000000B
+    LDA 0xF00007E2
+    STA 0x0000000C
+    LDA 0xF00007E3
+    STA 0x0000000D
+    LDA 0xF00007E4
+    STA 0x0000000E
+
+    LDI A, 0
+    STA 0x0000000F      ; EXEC_CHILD_DISK - какой диск (0=C,1=D) держит имя запускаемой программы
+
     CALL draw_banner
 
     ; ---- Настройка клавиатуры ----
@@ -65,6 +92,9 @@ main:
     STA quit            ; quit = 0
     STA cmdlen          ; cmdlen = 0
     STA 0x00010004      ; programRunning = 0
+
+    LDI A, 1
+    STA execDepth       ; execDepth = 1 - работает только "shell -> X" (см. shell_exec_child)
 
     LDI D, 0        ; D - константа "0" для сравнений на весь запуск
 
@@ -129,6 +159,25 @@ irq_handler:
 
     LDA 0xF0000005
     STA 0x00010001      ; lastKey = код клавиши
+
+    ; Пока выполняется программа (exec/run/FM.MC/вложенный exec_child -
+    ; см. programRunning, общий на всю глубину вложенности, не только
+    ; на execDepth==1) - собственный ввод команд шелла (echo символов,
+    ; Enter->dispatch_command, Backspace) должен быть полностью
+    ; приостановлен: работающая программа сама вычитывает lastKey в
+    ; своём цикле опроса (см. комментарий в do_quit ниже - раньше эта
+    ; логика была реализована ТОЛЬКО для Ctrl+Q). Без этой проверки
+    ; ЛЮБАЯ клавиша, нажатая, пока программа с EI работает (графические
+    ; демки и т.п.), реентрантно копится в cmdbuf и на Enter повторно
+    ; запускает dispatch_command поверх ещё не завершившегося внешнего
+    ; вызова - именно так ломались повторные запуски графических
+    ; демок, "неправильная" навигация шелла по папкам и крах FM вместе
+    ; с дочерней программой прямо в шелл.
+
+    LDA 0x00010004      ; programRunning
+    LDI B, 0
+    CMP B
+    JNZ irq_done
 
     LDA 0x00010001      ; A = код клавиши
 
@@ -1985,6 +2034,157 @@ cmd_poke:
     RET
 
 
+shell_exec_child:
+
+    ; Системный вызов "запустить дочернюю программу" - точка входа
+    ; 0x0000000A (см. main, патч в начале файла), вызывается Мини-C
+    ; builtin'ом exec_child() (см. Compiler.cpp, ASSEMBLY.md) из ЛЮБОЙ
+    ; уже выполняющейся программы (сейчас - FM.MC, но не только). Сама
+    ; программа НЕ решает, по какому адресу грузить дочерний *.RUN -
+    ; только кладёт диск с именем файла в NAME в EXEC_CHILD_DISK
+    ; (0x0000000F, 0=C, 1=D) и делает CALL сюда.
+    ;
+    ; execDepth - текущая глубина вложенности (1 = обычная "shell -> X"
+    ; программа, ещё не звала exec_child()). Каждому следующему уровню
+    ; - своя команда диска и свой адрес песочницы (см. Disk.h,
+    ; EXEC_CHILD_DEPTHn_ADDRESS) - RAM много (4 МиБ), эти адреса лежат
+    ; далеко от LOAD_ADDRESS/SHELL_LOAD_ADDRESS и друг от друга, экономить
+    ; незачем. Глубже 5 не поддержано - тихий отказ, как и при
+    ; отсутствии .REL/файла.
+
+    PUSH D          ; на случай, если дочерняя программа испортит "константу 0"
+
+    LDA execDepth
+    LDI B, 1
+    ADD B
+    STA execDepth
+
+    LDA execDepth
+    LDI B, 2
+    CMP B
+    JZ sec_cmd15
+    LDA execDepth
+    LDI B, 3
+    CMP B
+    JZ sec_cmd16
+    LDA execDepth
+    LDI B, 4
+    CMP B
+    JZ sec_cmd17
+    LDA execDepth
+    LDI B, 5
+    CMP B
+    JZ sec_cmd18
+
+    JMP sec_fail    ; глубже 5 не поддержано
+
+sec_cmd15:
+    LDI A, 15
+    STA sec_cmdValue
+    JMP sec_have_cmd
+sec_cmd16:
+    LDI A, 16
+    STA sec_cmdValue
+    JMP sec_have_cmd
+sec_cmd17:
+    LDI A, 17
+    STA sec_cmdValue
+    JMP sec_have_cmd
+sec_cmd18:
+    LDI A, 18
+    STA sec_cmdValue
+
+sec_have_cmd:
+
+    LDA 0x0000000F      ; EXEC_CHILD_DISK
+    LDI B, 0
+    CMP B
+    JNZ sec_disk_d
+
+    LDA sec_cmdValue
+    STA 0xF00007F2      ; DiskC COMMAND
+    LDA 0xF00007F3      ; DiskC STATUS
+    JMP sec_check_status
+
+sec_disk_d:
+    LDA sec_cmdValue
+    STA 0xF0000805      ; DiskD COMMAND
+    LDA 0xF0000806      ; DiskD STATUS
+
+sec_check_status:
+
+    LDI B, 2
+    CMP B
+    JZ sec_fail     ; не найден/не собран (нет .REL и т.п.) - молча отказываем
+
+    ; Адрес CALL - тот же execDepth. DI перед входом во вложенный
+    ; уровень - явная гарантия известного состояния прерываний на
+    ; границе вызова (дочерняя программа сама решает, звать ли EI, и
+    ; обязана сделать DI перед своим RET - см. CUBE3D.ASM/TILEDEMO.ASM/
+    ; MUSIC.ASM).
+
+    LDI A, 0
+    STA 0x00010001      ; lastKey = 0 - свежий старт (см. cmd_run) -
+                        ; иначе дочерняя программа, сравнивающая
+                        ; lastKey с кодом клавиши в своём цикле опроса,
+                        ; увидит СТАРОЕ значение от ПРЕДЫДУЩЕГО запуска
+                        ; и выйдет мгновенно, ни разу не увидев
+                        ; настоящего нажатия - а клавиша, нажатая уже
+                        ; ПОСЛЕ этого для неё, окажется никем не
+                        ; съеденной и "провалится" в того, кто её
+                        ; вызвал (например, FM.MC тоже увидит Ctrl+Q и
+                        ; выйдет сам)
+
+    LDA execDepth
+    LDI B, 2
+    CMP B
+    JZ sec_addr2
+    LDA execDepth
+    LDI B, 3
+    CMP B
+    JZ sec_addr3
+    LDA execDepth
+    LDI B, 4
+    CMP B
+    JZ sec_addr4
+
+    DI
+    CALL 0x001C0000     ; EXEC_CHILD_DEPTH5_ADDRESS
+    JMP sec_after_call
+
+sec_addr2:
+    DI
+    CALL 0x00100000     ; EXEC_CHILD_DEPTH2_ADDRESS
+    JMP sec_after_call
+sec_addr3:
+    DI
+    CALL 0x00140000     ; EXEC_CHILD_DEPTH3_ADDRESS
+    JMP sec_after_call
+sec_addr4:
+    DI
+    CALL 0x00180000     ; EXEC_CHILD_DEPTH4_ADDRESS
+
+sec_after_call:
+
+    LDA execDepth
+    LDI B, 1
+    SUB B
+    STA execDepth
+
+    POP D
+    RET
+
+sec_fail:
+
+    LDA execDepth
+    LDI B, 1
+    SUB B
+    STA execDepth
+
+    POP D
+    RET
+
+
 cmd_run:
 
     PUSH D          ; на случай, если код в песочнице испортит "константу 0"
@@ -1995,6 +2195,18 @@ cmd_run:
                           ; do_quit; main.cpp тоже читает этот адрес,
                           ; чтобы включать перерисовку по таймеру
                           ; только пока реально работает программа
+
+    LDI A, 0
+    STA 0x00010001        ; lastKey = 0 - свежий старт: иначе программа,
+                          ; которая в цикле опроса сравнивает lastKey с
+                          ; кодом клавиши (например Ctrl+Q=17), увидит
+                          ; СТАРОЕ значение, оставшееся от ПРЕДЫДУЩЕГО
+                          ; запуска, и выйдет мгновенно, даже не увидев
+                          ; ни одного реального нажатия - именно так
+                          ; повторный запуск программы "не запускался"
+                          ; и лишний Ctrl+Q "проваливался" в того, кто
+                          ; её вызвал (см. shell_exec_child ниже - там
+                          ; та же проблема и тот же фикс)
 
     CALL 0x00002000
 
@@ -2691,6 +2903,9 @@ cmd_exec_run:
                           ; do_quit; main.cpp тоже читает этот адрес,
                           ; чтобы включать перерисовку по таймеру
                           ; только пока реально работает программа
+
+    LDI A, 0
+    STA 0x00010001        ; lastKey = 0 - свежий старт (см. cmd_run)
 
     CALL 0x00002000
 
@@ -3414,6 +3629,12 @@ row:        DB 0
 cmdlen:     DB 0
 lastChar:   DB 0
 currentDisk: DB 0   ; 0 = диск C, 1 = диск D (см. cmd_cd)
+
+; Глубина вложенности exec_child() (см. shell_exec_child) - 1, пока
+; выполняется только обычная программа "shell -> X" (exec/run/
+; autorun), увеличивается на время CALL во вложенный уровень.
+execDepth:    DB 1
+sec_cmdValue: DB 0   ; scratch - номер команды диска, выбранной в shell_exec_child
 
 ; Стек имён папок для промпта (произвольная вложенность, не только
 ; один уровень - см. cmd_cd_dir*/cmd_cd_up/print_prompt). Disk сам по

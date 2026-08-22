@@ -64,7 +64,7 @@ private:
         Block, If, While, For, Return, ExprStmt,
         Assign, IndexAssign, LogicalOr, LogicalAnd, BinOp, UnaryOp,
         Call, Index, Ident, Number, Poke, Peek,
-        PrintChar, PrintStr, SetColor, ClearScreen
+        PrintChar, PrintStr, SetColor, ClearScreen, ExecChild
     };
 
     struct Node

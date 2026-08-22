@@ -66,6 +66,28 @@ private:
     // с большим запасом хватает - подняли зазор до ~120 КиБ.
     static const uint32_t SHELL_LOAD_ADDRESS = 0x00020000;
 
+    // "Стек" песочниц для программ, запускаемых ИЗНУТРИ уже
+    // выполняющейся программы (вложенный exec) - см. Мини-C builtin
+    // exec_child() и SHELL.ASM::shell_exec_child, который решает,
+    // какой из этих адресов использовать, по текущей глубине
+    // вложенности (execDepth). Программа, вызвавшая exec_child(), сама
+    // выполняется по LOAD_ADDRESS (глубина 1) - если бы дочернюю
+    // программу грузили туда же, загрузка затёрла бы код, который в
+    // этот момент как раз исполняется, поэтому у каждого следующего
+    // уровня - СВОЙ адрес.
+    //
+    // RAM - 4 МиБ (0x00000000-0x003FFFFF, см. main.cpp), а
+    // LOAD_ADDRESS..SHELL_LOAD_ADDRESS - только ~120 КиБ рядом с
+    // резидентным SHELL.ASM. Экономить незачем - эти адреса лежат в
+    // ОТДЕЛЬНОЙ, большой области намного выше SHELL_LOAD_ADDRESS, по
+    // 256 КиБ на уровень (с большим запасом - самая большая программа
+    // в проекте, FM.MC, весит около 20 КБ), и не мешают ни
+    // LOAD_ADDRESS, ни SHELL_LOAD_ADDRESS.
+    static const uint32_t EXEC_CHILD_DEPTH2_ADDRESS = 0x00100000;
+    static const uint32_t EXEC_CHILD_DEPTH3_ADDRESS = 0x00140000;
+    static const uint32_t EXEC_CHILD_DEPTH4_ADDRESS = 0x00180000;
+    static const uint32_t EXEC_CHILD_DEPTH5_ADDRESS = 0x001C0000;
+
     std::filesystem::path basePath;
 
     // Текущая папка относительно basePath (пусто = корень диска).
@@ -103,6 +125,7 @@ private:
     void deleteFile();
     void changeDir();
     void changeDirUp();
-    void loadRaw();
+    void loadRaw(uint32_t targetAddress);
     void build();
+    void loadChildRun(uint32_t targetAddress);
 };

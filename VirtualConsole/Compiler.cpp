@@ -31,7 +31,8 @@ void Compiler::lex(const std::string& source)
     static const char* keywords[] = {
         "int", "if", "else", "while", "for", "return", "const",
         "poke", "peek",
-        "print_char", "print_str", "set_color", "clear_screen"
+        "print_char", "print_str", "set_color", "clear_screen",
+        "exec_child"
     };
 
     while (i < n)
@@ -657,6 +658,15 @@ Compiler::NodePtr Compiler::parsePrimary()
         return n;
     }
 
+    if (check("exec_child") && peek().type == TokType::KEYWORD)
+    {
+        advance();
+        auto n = node(NodeKind::ExecChild);
+        expect("(");
+        expect(")");
+        return n;
+    }
+
     if (peek().type == TokType::IDENT)
     {
         std::string name = advance().text;
@@ -1132,6 +1142,25 @@ void Compiler::genExprToA(const NodePtr& expr)
         *codeOut << "    LDI A, 1\n";
         *codeOut << "    STA 0xF00007D8\n";
         *codeOut << "    STA 0xF0000FDD\n";
+        return;
+
+    case NodeKind::ExecChild:
+        // Запуск дочерней программы - НЕ напрямую в песочницу, а через
+        // системный вызов резидентного SHELL.ASM: фиксированная точка
+        // входа 0x0000000A (shell_exec_child), запатченная SHELL.ASM
+        // при старте (тем же способом, что и вектор прерывания
+        // 0x00000005 - см. SHELL.ASM::main). Именно shell_exec_child
+        // решает, по какому адресу и какой командой диска грузить
+        // дочернюю программу (см. Disk.h, EXEC_CHILD_DEPTHn_ADDRESS) -
+        // компилятору эти детали знать не нужно, они могут меняться
+        // независимо (например, при добавлении ещё одного уровня
+        // вложенности). Перед вызовом вызывающая программа должна
+        // указать диск с именем запускаемого файла через
+        // poke(EXEC_CHILD_DISK, diskId) - см. ASSEMBLY.md, "exec_child".
+        // Управление вернётся сюда же, когда дочерняя программа дойдёт
+        // до своего RET (см. genFunction() - любая функция Мини-C,
+        // включая main(), гарантированно заканчивается RET, не HLT).
+        *codeOut << "    CALL 0x0000000A\n";
         return;
 
     case NodeKind::Call:

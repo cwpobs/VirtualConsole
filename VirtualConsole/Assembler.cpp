@@ -650,6 +650,7 @@ void Assembler::secondPass(
             ss >> addressText;
 
             uint32_t address;
+            bool isLabelAddress = false;
 
             if (std::isdigit(addressText[0]) ||
                 addressText[0] == '-')
@@ -666,6 +667,7 @@ void Assembler::secondPass(
                     );
 
                 address = static_cast<uint32_t>(labelAddress);
+                isLabelAddress = true;
             }
 
 
@@ -700,6 +702,18 @@ void Assembler::secondPass(
 
 
             output.push_back(opcode);
+
+            if (isLabelAddress)
+            {
+                // Смещение относительно начала output (= относительно
+                // origin) - позиция, где сейчас начнутся 4 байта
+                // адреса, полученного из метки. Это единственное
+                // место, куда попадают адреса, зависящие от того, где
+                // реально лежит программа - см. Assembler.h.
+                lastRelocations.push_back(
+                    static_cast<uint32_t>(output.size())
+                );
+            }
 
             output.push_back(
                 static_cast<uint8_t>(address & 0xFF)
@@ -878,9 +892,11 @@ void Assembler::secondPass(
 
 std::vector<uint8_t> Assembler::assemble(
     const std::string& source,
-    uint32_t origin)
+    uint32_t origin,
+    std::vector<uint32_t>* relocations)
 {
     labels.clear();
+    lastRelocations.clear();
 
     std::vector<std::string> lines;
 
@@ -906,6 +922,11 @@ std::vector<uint8_t> Assembler::assemble(
     std::vector<uint8_t> output;
 
     secondPass(lines, output);
+
+    if (relocations != nullptr)
+    {
+        *relocations = lastRelocations;
+    }
 
     return output;
 }

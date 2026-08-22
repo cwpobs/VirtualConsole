@@ -20,12 +20,21 @@
 // CLOSE) - SHELL.ASM не тронут вообще, это отдельная программа.
 //
 // Управление: Tab - переключить панель, стрелки Вверх/Вниз - по
-// списку, Enter - зайти в папку, Backspace - подняться на уровень
-// выше, Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q -
-// выход. Внизу экрана - подсказка F1-F10 в стиле Norton Commander -
-// реально работает пока только F5 (Copy), остальные - только подписи
-// (v1, задел на будущее: F3 View, F4 Edit, F6 Move, F7 MkDir, F8 Del
-// и т.д.).
+// списку, Enter - зайти в папку ИЛИ запустить выбранный *.RUN (см.
+// exec_child() ниже), Backspace - подняться на уровень выше,
+// Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
+// Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
+// работает пока только F5 (Copy), остальные - только подписи (v1,
+// задел на будущее: F3 View, F4 Edit, F6 Move, F7 MkDir, F8 Del и
+// т.д.).
+//
+// Запуск *.RUN (run_program()) - через системный вызов SHELL.ASM
+// (shell_exec_child, см. ASSEMBLY.md/exec_child) - FM.MC только кладёт
+// NAME на нужный диск и говорит shell'у, какой это диск
+// (EXEC_CHILD_DISK), сам выбор адреса песочницы и учёт вложенности -
+// целиком на стороне shell'а. После возврата дочерней программы (её
+// main() дойдёт до RET) - полная перерисовка экрана, который она
+// наверняка использовала под себя.
 //
 // F-клавиши на этой клавиатуре (через _getch()) приходят ДВУМЯ
 // байтами - сначала 0, потом код клавиши (F1=59 ... F10=68) - первый
@@ -46,6 +55,8 @@ const ALT_F2 = 105;   // сменить диск правой панели
 
 const MAX_PATH_DEPTH = 8;
 const NONE_PANEL = 2;   // сентинел diskOwnerPanel - "ещё никто" (в мини-C нет отрицательных литералов)
+
+const EXEC_CHILD_DISK = 0x0000000F;   // диск (0=C,1=D) с NAME запускаемой программы - читает shell_exec_child (см. exec_child())
 
 const C_CMD = 0xF00007F2;
 const C_STATUS = 0xF00007F3;
@@ -457,6 +468,94 @@ int select_disk_right() {
     return 0;
 }
 
+// ---- запуск *.RUN ----
+
+int is_run_file(int panel, int sel) {
+    // Ищет длину имени (до первого 0 в 12-байтовом NAME) и сравнивает
+    // последние 4 символа с ".RUN" (46,82,85,78).
+    int len;
+    int done;
+    int ch;
+    int c1;
+    int c2;
+    int c3;
+    int c4;
+
+    len = 0;
+    done = 0;
+    while (done == 0) {
+        if (panel == 0) { ch = leftNames[sel * 12 + len]; } else { ch = rightNames[sel * 12 + len]; }
+        if (ch == 0) {
+            done = 1;
+        } else {
+            len = len + 1;
+            if (len >= 12) { done = 1; }
+        }
+    }
+
+    if (len < 4) { return 0; }
+
+    if (panel == 0) {
+        c1 = leftNames[sel * 12 + len - 4];
+        c2 = leftNames[sel * 12 + len - 3];
+        c3 = leftNames[sel * 12 + len - 2];
+        c4 = leftNames[sel * 12 + len - 1];
+    } else {
+        c1 = rightNames[sel * 12 + len - 4];
+        c2 = rightNames[sel * 12 + len - 3];
+        c3 = rightNames[sel * 12 + len - 2];
+        c4 = rightNames[sel * 12 + len - 1];
+    }
+
+    if (c1 != 46) { return 0; }   // '.'
+    if (c2 != 82) { return 0; }   // 'R'
+    if (c3 != 85) { return 0; }   // 'U'
+    if (c4 != 78) { return 0; }   // 'N'
+    return 1;
+}
+
+int run_program() {
+    // Запускает выбранный *.RUN как дочернюю программу - см.
+    // ASSEMBLY.md, "exec_child". Сама загрузка (какой командой диска,
+    // по какому адресу) и учёт глубины вложенности теперь целиком на
+    // стороне SHELL.ASM (shell_exec_child, системный вызов по
+    // 0x0000000A) - FM.MC только кладёт NAME на нужный диск, говорит
+    // shell'у, какой это диск (EXEC_CHILD_DISK), и зовёт exec_child().
+    // Управление возвращается сюда же, когда дочерняя программа
+    // завершится (её Mini-C main() дойдёт до RET) - или сразу же, если
+    // shell не нашёл/не смог собрать файл (тихий отказ).
+    int panel;
+    int diskId;
+    int sel;
+    int i;
+    int ch;
+
+    panel = activeRight;
+    if (panel == 0) { diskId = leftDisk; sel = leftSel; } else { diskId = rightDisk; sel = rightSel; }
+
+    sync_disk_to_panel(panel);
+
+    i = 0;
+    while (i < 12) {
+        if (panel == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        d_set_name_char(diskId, i, ch);
+        i = i + 1;
+    }
+
+    poke(EXEC_CHILD_DISK, diskId);
+    exec_child();
+
+    // Дочерняя программа наверняка использовала экран под себя -
+    // полная перерисовка; leftNames/rightNames и т.д. не тронуты,
+    // заново их читать (populate_*) не нужно.
+    clear_screen();
+    render_left();
+    render_right();
+    render_status();
+
+    return 0;
+}
+
 int enter_dir() {
     int diskId;
     int sel;
@@ -476,7 +575,10 @@ int enter_dir() {
         isDir = rightIsDir[sel];
         depth = rightPathDepth;
     }
-    if (isDir == 0) { return 0; }
+    if (isDir == 0) {
+        if (is_run_file(activeRight, sel) == 1) { run_program(); }
+        return 0;
+    }
     if (depth >= MAX_PATH_DEPTH) { return 0; }   // дальше вглубь не пускаем
 
     sync_disk_to_panel(activeRight);
