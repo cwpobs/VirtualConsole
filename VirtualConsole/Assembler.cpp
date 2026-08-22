@@ -195,6 +195,12 @@ void Assembler::firstPass(
 
             address += 5;
         }
+        else if (instruction == "ADDHL")
+        {
+            // opcode + 2 регистра (как LDI - opcode + reg + value)
+
+            address += 3;
+        }
         else if (instruction == "HLT" ||
             instruction == "RET" ||
             instruction == "EI" ||
@@ -710,6 +716,43 @@ void Assembler::secondPass(
             output.push_back(
                 static_cast<uint8_t>((address >> 24) & 0xFF)
             );
+        }
+
+
+        // -------------------------
+        // ADDHL regHigh, regLow
+        // -------------------------
+
+        else if (instruction == "ADDHL")
+        {
+            std::string regHighName;
+            std::string regLowName;
+
+            ss >> regHighName;
+            ss >> regLowName;
+
+            if (!regHighName.empty() &&
+                regHighName.back() == ',')
+            {
+                regHighName.pop_back();
+            }
+
+            int regHigh = parseRegister(regHighName);
+            int regLow = parseRegister(regLowName);
+
+            if (regHigh < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regHighName
+                );
+
+            if (regLow < 0)
+                throw std::runtime_error(
+                    "Invalid register: " + regLowName
+                );
+
+            output.push_back(0x23);
+            output.push_back(static_cast<uint8_t>(regHigh));
+            output.push_back(static_cast<uint8_t>(regLow));
         }
 
 

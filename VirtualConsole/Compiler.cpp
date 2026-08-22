@@ -900,13 +900,14 @@ void Compiler::genAddressOf(const NodePtr& indexNode)
 
 void Compiler::genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr)
 {
-    // HL = base + y*80 + x. y*80 НЕЛЬЗЯ считать через один MUL - для
-    // 80x25 экрана y доходит до 24, 24*80=1920, восьмибитный MUL это
-    // тихо завернул бы. Поэтому __mc_screen_offset прибавляет 80 к HL
-    // ровно y раз (через уже существующий __mc_hladd, каждый раз на
-    // 80 - само 80 в один hladd влезает без проблем), а x (0-79)
-    // добавляется отдельным вызовом __mc_hladd - тот же приём, что
-    // goto_row_start в SHELL.ASM использует для той же самой проблемы.
+    // HL = base + y*80 + x. y*80 НЕЛЬЗЯ считать через один 8-битный MUL
+    // - для 80x25 экрана y доходит до 24, 24*80=1920, тихо завернулся
+    // бы. __mc_screen_offset копит y*80+x как настоящую 16-битную пару
+    // байт (ADD/ADC - перенос между байтами) и одним ADDHL прибавляет
+    // результат к HL за один шаг (см. CPU.h/ASSEMBLY.md, ADDHL) - x
+    // передаётся через __mc_scr_x и учитывается внутри самого
+    // __mc_screen_offset, отдельного вызова __mc_hladd для x больше
+    // не нужно.
     usesScreenHelper = true;
 
     genExprToA(yExpr);
@@ -917,8 +918,6 @@ void Compiler::genScreenAddress(long long base, const NodePtr& xExpr, const Node
     *codeOut << "    LDHL " << base << "\n";
     *codeOut << "    LDA __mc_scr_y\n";
     *codeOut << "    CALL __mc_screen_offset\n";
-    *codeOut << "    LDA __mc_scr_x\n";
-    *codeOut << "    CALL __mc_hladd\n";
 }
 
 void Compiler::genPrintChar(const NodePtr& expr)
@@ -995,15 +994,19 @@ void Compiler::genPrintStr(const NodePtr& expr)
     *codeOut << "    LDX\n";
     *codeOut << "    STA __mc_ps_ch\n";
 
-    *codeOut << "    LDHL 0xF0000007\n";
-    *codeOut << "    LDA __mc_ps_y\n";
-    *codeOut << "    CALL __mc_screen_offset\n";
+    // __mc_screen_offset теперь сама добавляет и y*80, и x (через
+    // __mc_scr_x) - считаем текущую колонку (x+i) и кладём именно
+    // туда перед вызовом (это её контракт, см. genScreenAddress).
     *codeOut << "    LDA __mc_ps_x\n";
     *codeOut << "    PUSH A\n";
     *codeOut << "    LDA __mc_ps_i\n";
     *codeOut << "    POP B\n";
     *codeOut << "    ADD B\n";
-    *codeOut << "    CALL __mc_hladd\n";
+    *codeOut << "    STA __mc_scr_x\n";
+
+    *codeOut << "    LDHL 0xF0000007\n";
+    *codeOut << "    LDA __mc_ps_y\n";
+    *codeOut << "    CALL __mc_screen_offset\n";
 
     *codeOut << "    LDA __mc_ps_ch\n";
     *codeOut << "    STX\n";
@@ -1441,49 +1444,73 @@ std::string Compiler::compile(const std::string& source)
 
     if (usesArrays || usesScreenHelper)
     {
+        // A = offset (0-255). HL += offset за ОДИН шаг через ADDHL
+        // (раньше был цикл INCHL - O(offset); индекс массива всегда
+        // < 256, поэтому старший байт смещения всегда 0).
         code << "__mc_hladd:\n";
         code << "    PUSH A\n";
-        code << "    POP B\n";
-        code << "__mc_hladd_loop:\n";
-        code << "    LDI A, 0\n";
-        code << "    CMP B\n";
-        code << "    JZ __mc_hladd_done\n";
-        code << "    INCHL\n";
-        code << "    PUSH B\n";
-        code << "    POP A\n";
-        code << "    LDI C, 1\n";
-        code << "    SUB C\n";
-        code << "    PUSH A\n";
-        code << "    POP B\n";
-        code << "    JMP __mc_hladd_loop\n";
-        code << "__mc_hladd_done:\n";
+        code << "    POP C\n";
+        code << "    LDI B, 0\n";
+        code << "    ADDHL B, C\n";
         code << "    RET\n";
     }
 
     if (usesScreenHelper)
     {
-        // HL += A*80 (через A раз __mc_hladd(80) - MUL 8-бит переполнился
-        // бы уже при A>=4, см. genScreenAddress).
+        // Вход: A = y (0-24), __mc_scr_x уже = x (0-79, см.
+        // genScreenAddress). Копит y*80+x как настоящую 16-битную пару
+        // байт через ADD/ADC (перенос между байтами - тот же приём,
+        // что и в ASSEMBLY.md для сложения многобайтовых чисел; 8-битный
+        // MUL тут не годится - 24*80=1920 не влезает в байт), затем
+        // ОДИН ADDHL - вместо тысяч INCHL, что было раньше.
         code << "__mc_screen_offset:\n";
         code << "    STA __mc_so_y\n";
+        code << "    LDI A, 0\n";
+        code << "    STA __mc_so_accLow\n";
+        code << "    STA __mc_so_accHigh\n";
         code << "__mc_screen_offset_loop:\n";
         code << "    LDA __mc_so_y\n";
         code << "    LDI B, 0\n";
         code << "    CMP B\n";
-        code << "    JZ __mc_screen_offset_done\n";
-        code << "    LDI A, 80\n";
-        code << "    CALL __mc_hladd\n";
+        code << "    JZ __mc_screen_offset_y_done\n";
+        code << "    LDA __mc_so_accLow\n";
+        code << "    LDI B, 80\n";
+        code << "    ADD B\n";
+        code << "    STA __mc_so_accLow\n";
+        code << "    LDA __mc_so_accHigh\n";
+        code << "    LDI B, 0\n";
+        code << "    ADC B\n";
+        code << "    STA __mc_so_accHigh\n";
         code << "    LDA __mc_so_y\n";
         code << "    LDI B, 1\n";
         code << "    SUB B\n";
         code << "    STA __mc_so_y\n";
         code << "    JMP __mc_screen_offset_loop\n";
-        code << "__mc_screen_offset_done:\n";
+        code << "__mc_screen_offset_y_done:\n";
+        code << "    LDA __mc_scr_x\n";
+        code << "    PUSH A\n";
+        code << "    POP B\n";
+        code << "    LDA __mc_so_accLow\n";
+        code << "    ADD B\n";
+        code << "    STA __mc_so_accLow\n";
+        code << "    LDA __mc_so_accHigh\n";
+        code << "    LDI B, 0\n";
+        code << "    ADC B\n";
+        code << "    STA __mc_so_accHigh\n";
+        code << "    LDA __mc_so_accHigh\n";
+        code << "    PUSH A\n";
+        code << "    POP B\n";
+        code << "    LDA __mc_so_accLow\n";
+        code << "    PUSH A\n";
+        code << "    POP C\n";
+        code << "    ADDHL B, C\n";
         code << "    RET\n";
 
         data << "__mc_scr_x: DB 0\n";
         data << "__mc_scr_y: DB 0\n";
         data << "__mc_so_y: DB 0\n";
+        data << "__mc_so_accLow: DB 0\n";
+        data << "__mc_so_accHigh: DB 0\n";
         data << "__mc_pc_ch: DB 0\n";
         data << "__mc_sc_fg: DB 0\n";
         data << "__mc_sc_bg: DB 0\n";

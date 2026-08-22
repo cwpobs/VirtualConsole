@@ -876,6 +876,45 @@ void CPU::step()
     }
 
     // -------------------------
+    // ADDHL regHigh, regLow (HL += (regHigh << 8) | regLow)
+    // -------------------------
+    //
+    // Единственный способ сдвинуть HL на runtime-смещение раньше был
+    // INCHL (+1 за раз) - для больших смещений (например, y*80+x на
+    // экране 80x25, до 1999) это до ~2000 отдельных шагов на КАЖДОЕ
+    // обращение - см. Compiler.cpp/__mc_screen_offset и ASSEMBLY.md,
+    // "Мини-C" (print_char/set_color). ADDHL прибавляет 16-битное
+    // значение из пары регистров за один шаг.
+
+    case 0x23:
+    {
+        uint8_t highIndex = busRead(PC);
+        PC++;
+
+        uint8_t lowIndex = busRead(PC);
+        PC++;
+
+        uint8_t* highReg = getRegister(highIndex);
+        uint8_t* lowReg = getRegister(lowIndex);
+
+        uint16_t offset = 0;
+
+        if (highReg != nullptr)
+        {
+            offset |= static_cast<uint16_t>(*highReg) << 8;
+        }
+
+        if (lowReg != nullptr)
+        {
+            offset |= *lowReg;
+        }
+
+        HL += offset;
+
+        break;
+    }
+
+    // -------------------------
     // HLT
     // -------------------------
 
