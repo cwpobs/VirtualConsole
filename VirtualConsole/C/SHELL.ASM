@@ -405,9 +405,157 @@ de_check19:
     LDA cmdlen
     LDI B, 19
     CMP B
-    JNZ de_buf_done
+    JNZ de_check20
     LDA lastChar
     STA cmdbuf19
+    JMP de_buf_done
+
+; ---- cmdbuf20..35 - расширение под аргументы командной строки (см.
+; ASSEMBLY.md, "Аргументы командной строки" - "exec ИМЯ АРГУМЕНТ") - тот
+; же механический приём, что и cmdbuf0..19 выше, просто продолжен дальше.
+
+de_check20:
+    LDA cmdlen
+    LDI B, 20
+    CMP B
+    JNZ de_check21
+    LDA lastChar
+    STA cmdbuf20
+    JMP de_buf_done
+
+de_check21:
+    LDA cmdlen
+    LDI B, 21
+    CMP B
+    JNZ de_check22
+    LDA lastChar
+    STA cmdbuf21
+    JMP de_buf_done
+
+de_check22:
+    LDA cmdlen
+    LDI B, 22
+    CMP B
+    JNZ de_check23
+    LDA lastChar
+    STA cmdbuf22
+    JMP de_buf_done
+
+de_check23:
+    LDA cmdlen
+    LDI B, 23
+    CMP B
+    JNZ de_check24
+    LDA lastChar
+    STA cmdbuf23
+    JMP de_buf_done
+
+de_check24:
+    LDA cmdlen
+    LDI B, 24
+    CMP B
+    JNZ de_check25
+    LDA lastChar
+    STA cmdbuf24
+    JMP de_buf_done
+
+de_check25:
+    LDA cmdlen
+    LDI B, 25
+    CMP B
+    JNZ de_check26
+    LDA lastChar
+    STA cmdbuf25
+    JMP de_buf_done
+
+de_check26:
+    LDA cmdlen
+    LDI B, 26
+    CMP B
+    JNZ de_check27
+    LDA lastChar
+    STA cmdbuf26
+    JMP de_buf_done
+
+de_check27:
+    LDA cmdlen
+    LDI B, 27
+    CMP B
+    JNZ de_check28
+    LDA lastChar
+    STA cmdbuf27
+    JMP de_buf_done
+
+de_check28:
+    LDA cmdlen
+    LDI B, 28
+    CMP B
+    JNZ de_check29
+    LDA lastChar
+    STA cmdbuf28
+    JMP de_buf_done
+
+de_check29:
+    LDA cmdlen
+    LDI B, 29
+    CMP B
+    JNZ de_check30
+    LDA lastChar
+    STA cmdbuf29
+    JMP de_buf_done
+
+de_check30:
+    LDA cmdlen
+    LDI B, 30
+    CMP B
+    JNZ de_check31
+    LDA lastChar
+    STA cmdbuf30
+    JMP de_buf_done
+
+de_check31:
+    LDA cmdlen
+    LDI B, 31
+    CMP B
+    JNZ de_check32
+    LDA lastChar
+    STA cmdbuf31
+    JMP de_buf_done
+
+de_check32:
+    LDA cmdlen
+    LDI B, 32
+    CMP B
+    JNZ de_check33
+    LDA lastChar
+    STA cmdbuf32
+    JMP de_buf_done
+
+de_check33:
+    LDA cmdlen
+    LDI B, 33
+    CMP B
+    JNZ de_check34
+    LDA lastChar
+    STA cmdbuf33
+    JMP de_buf_done
+
+de_check34:
+    LDA cmdlen
+    LDI B, 34
+    CMP B
+    JNZ de_check35
+    LDA lastChar
+    STA cmdbuf34
+    JMP de_buf_done
+
+de_check35:
+    LDA cmdlen
+    LDI B, 35
+    CMP B
+    JNZ de_buf_done
+    LDA lastChar
+    STA cmdbuf35
 
 de_buf_done:
 
@@ -1329,7 +1477,12 @@ check_cd_dir:
 
 check_exec:
 
-    ; "exec " + имя файла, переменная длина 1-12 символов (см. check_type)
+    ; "exec " + имя файла (1-12 символов) + необязательный " " + аргумент
+    ; (0-16 символов, см. ASSEMBLY.md, "Аргументы командной строки") -
+    ; верхняя граница 36 = "exec "(5) + имя(12) + " "(1) + аргумент(16) +
+    ; 2 байта запаса, а не строго 18 как раньше (когда аргументов не
+    ; было). Сам разбор имени/аргумента - find_name_and_arg_len, см.
+    ; cmd_exec.
 
     LDA cmdlen
     LDI B, 6
@@ -1337,7 +1490,7 @@ check_exec:
     JC check_create
 
     LDA cmdlen
-    LDI B, 18
+    LDI B, 36
     CMP B
     JNC check_create
 
@@ -2457,6 +2610,7 @@ cmd_type_c:
 
     LDI A, 5
     STA cn_prefix_len   ; длина префикса "type "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskc
 
     LDI A, 3
@@ -2514,6 +2668,7 @@ cmd_type_d:
 
     LDI A, 5
     STA cn_prefix_len   ; длина префикса "type "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskd
 
     LDI A, 3
@@ -2703,6 +2858,7 @@ cmd_cd_dir_c:
 
     LDI A, 3
     STA cn_prefix_len   ; длина префикса "cd "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskc
 
     LDI A, 11
@@ -2783,6 +2939,7 @@ cmd_cd_dir_d:
 
     LDI A, 3
     STA cn_prefix_len   ; длина префикса "cd "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskd
 
     LDI A, 11
@@ -2864,6 +3021,13 @@ cmd_exec_c:
 
     LDI A, 5
     STA cn_prefix_len   ; длина префикса "exec "
+    CALL find_name_and_arg_len
+
+    LDA cn_name_len
+    LDI B, 13
+    CMP B
+    JNC cmd_exec_done   ; имя длиннее 12 байт - не влезет в NAME, молча выходим
+
     CALL copy_name_to_diskc
 
     LDI A, 8
@@ -2881,6 +3045,13 @@ cmd_exec_d:
 
     LDI A, 5
     STA cn_prefix_len   ; длина префикса "exec "
+    CALL find_name_and_arg_len
+
+    LDA cn_name_len
+    LDI B, 13
+    CMP B
+    JNC cmd_exec_done   ; имя длиннее 12 байт - не влезет в NAME, молча выходим
+
     CALL copy_name_to_diskd
 
     LDI A, 8
@@ -2894,6 +3065,17 @@ cmd_exec_d:
     ; --- дошли сюда после успешной сборки - запускаем, как cmd_run ---
 
 cmd_exec_run:
+
+    ; Общая точка входа и для cmd_exec (exec ИМЯ [АРГУМЕНТ]), и для
+    ; cmd_autorun (ИМЯ [АРГУМЕНТ]) - оба вызывали find_name_and_arg_len
+    ; раньше в своей ветке, так что cn_arg_start/cn_arg_len уже готовы;
+    ; copy_args_to_fixed переносит аргумент (или обнуляет канал, если
+    ; его не было) в CMD_ARGS_LEN/CMD_ARGS_TEXT ДО запуска программы -
+    ; см. ASSEMBLY.md, "Аргументы командной строки". cmd_run (голое
+    ; "run", повторный запуск уже загруженного кода без разбора имени)
+    ; сюда не заходит - у него нет cn_arg_len, канал он не трогает.
+
+    CALL copy_args_to_fixed
 
     PUSH D          ; на случай, если программа испортит "константу 0"
 
@@ -2950,6 +3132,7 @@ cmd_create_c:
 
     LDI A, 7
     STA cn_prefix_len   ; длина префикса "create "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskc
 
     LDI A, 5
@@ -2964,6 +3147,7 @@ cmd_create_d:
 
     LDI A, 7
     STA cn_prefix_len   ; длина префикса "create "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskd
 
     LDI A, 5
@@ -2988,6 +3172,7 @@ cmd_del_c:
 
     LDI A, 4
     STA cn_prefix_len   ; длина префикса "del "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskc
 
     LDI A, 9
@@ -3000,6 +3185,7 @@ cmd_del_d:
 
     LDI A, 4
     STA cn_prefix_len   ; длина префикса "del "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskd
 
     LDI A, 9
@@ -3017,6 +3203,7 @@ cmd_copy:
 
     LDI A, 5
     STA cn_prefix_len   ; длина префикса "copy "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskc
 
     LDI A, 5
@@ -3129,6 +3316,7 @@ cmd_build_c:
 
     LDI A, 6
     STA cn_prefix_len   ; длина префикса "build "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskc
 
     LDI A, 14
@@ -3141,6 +3329,7 @@ cmd_build_d:
 
     LDI A, 6
     STA cn_prefix_len   ; длина префикса "build "
+    CALL find_name_and_arg_len
     CALL copy_name_to_diskd
 
     LDI A, 14
@@ -3151,21 +3340,27 @@ cmd_build_d:
 
 cmd_autorun:
 
-    ; Последняя попытка распознать введённую строку: считаем её ЦЕЛИКОМ
-    ; именем программы, приписываем ".RUN" и пробуем запустить как
-    ; готовый машинный код (LOAD_RAW = 13 в Disk) - так же, как в DOS
-    ; печатают имя .exe без расширения. Тихо ничего не делает, если
-    ; получившееся имя не влезает в 12-байтовый NAME или файл не
-    ; нашёлся - введённая строка в этом случае просто выглядит как
-    ; неизвестная команда (как и раньше).
+    ; Последняя попытка распознать введённую строку: считаем её (или её
+    ; часть до первого пробела - см. find_name_and_arg_len, ASSEMBLY.md,
+    ; "Аргументы командной строки") именем программы, приписываем ".RUN"
+    ; и пробуем запустить как готовый машинный код (LOAD_RAW = 13 в
+    ; Disk) - так же, как в DOS печатают имя .exe без расширения (и, как
+    ; в DOS, всё, что после первого пробела - аргумент, а не часть
+    ; имени). Тихо ничего не делает, если получившееся имя не влезает в
+    ; 12-байтовый NAME или файл не нашёлся - введённая строка в этом
+    ; случае просто выглядит как неизвестная команда (как и раньше).
 
     LDA cmdlen
     LDI B, 1
     CMP B
     JC cmd_autorun_done   ; пустая строка (Enter без ввода) - нечего запускать
 
-    LDA cmdlen
-    LDI B, 9              ; cmdlen+4 <= 12  =>  cmdlen <= 8  =>  cmdlen < 9
+    LDI A, 0
+    STA cn_prefix_len     ; нет префикса-команды - имя начинается с cmdbuf0
+    CALL find_name_and_arg_len
+
+    LDA cn_name_len
+    LDI B, 9              ; cn_name_len+4 <= 12  =>  cn_name_len <= 8  =>  <9
     CMP B
     JNC cmd_autorun_done  ; слишком длинное имя - ИМЯ+".RUN" не влезет в NAME
 
@@ -3177,8 +3372,6 @@ cmd_autorun:
 
 cmd_autorun_c:
 
-    LDI A, 0
-    STA cn_prefix_len     ; копируем ВЕСЬ cmdbuf - тут нет префикса-команды
     CALL copy_name_to_diskc
     CALL append_run_suffix_c
 
@@ -3195,8 +3388,6 @@ cmd_autorun_c:
 
 cmd_autorun_d:
 
-    LDI A, 0
-    STA cn_prefix_len
     CALL copy_name_to_diskd
     CALL append_run_suffix_d
 
@@ -3218,13 +3409,15 @@ cmd_autorun_done:
 
 append_run_suffix_c:
 
-    ; Дописывает ".RUN" в DiskC NAME сразу после уже скопированных
-    ; cmdlen символов (copy_name_to_diskc уже обнулил остаток NAME -
-    ; здесь просто перезаписываем следующие 4 байта).
+    ; Дописывает ".RUN" в DiskC NAME сразу после уже скопированного
+    ; имени (cn_name_len символов - см. find_name_and_arg_len; НЕ
+    ; cmdlen, который теперь может включать ещё и аргумент через
+    ; пробел). copy_name_to_diskc уже обнулил остаток NAME - здесь
+    ; просто перезаписываем следующие 4 байта.
 
     LDHL 0xF00007E6       ; DiskC NAME0
-    LDA cmdlen
-    CALL hl_add_offset    ; HL = NAME0 + cmdlen
+    LDA cn_name_len
+    CALL hl_add_offset    ; HL = NAME0 + cn_name_len
 
     LDI A, 46             ; '.'
     STX
@@ -3246,7 +3439,7 @@ append_run_suffix_c:
 append_run_suffix_d:
 
     LDHL 0xF00007F9       ; DiskD NAME0
-    LDA cmdlen
+    LDA cn_name_len
     CALL hl_add_offset
 
     LDI A, 46             ; '.'
@@ -3266,6 +3459,178 @@ append_run_suffix_d:
     RET
 
 
+find_name_and_arg_len:
+
+    ; Разбор "ИМЯ АРГУМЕНТ" (см. ASSEMBLY.md, "Аргументы командной
+    ; строки") - ищет первый пробел (32) в cmdbuf начиная с cn_prefix_len
+    ; (уже выставлен вызывающим кодом, как и раньше). Если нашла на
+    ; позиции p: cn_name_len = p - cn_prefix_len, cn_arg_start = p + 1,
+    ; cn_arg_len = cmdlen - cn_arg_start. Если не нашла (дошли до
+    ; cmdlen): cn_name_len = cmdlen - cn_prefix_len (как раньше, без
+    ; аргумента), cn_arg_len = 0. ДОЛЖНА вызываться ДО
+    ; copy_name_to_diskc/d (который теперь читает cn_name_len, а не
+    ; cmdlen напрямую).
+
+    LDA cn_prefix_len
+    STA fnl_i            ; i = prefix_len
+
+fnl_loop:
+
+    LDA fnl_i
+    PUSH A
+    POP B                ; B = i
+    LDA cmdlen
+    CMP B
+    JZ fnl_no_space      ; i == cmdlen - дошли до конца, пробел не найден
+
+    LDHL cmdbuf0
+    LDA fnl_i
+    CALL hl_add_offset   ; HL = cmdbuf0 + i
+    LDX                  ; A = cmdbuf[i]
+
+    LDI B, 32            ; ' '
+    CMP B
+    JZ fnl_found
+
+    LDA fnl_i
+    LDI B, 1
+    ADD B
+    STA fnl_i
+
+    JMP fnl_loop
+
+fnl_found:
+
+    LDA cn_prefix_len
+    PUSH A
+    POP B
+    LDA fnl_i             ; A = p
+    SUB B                 ; A = p - prefix_len
+    STA cn_name_len
+
+    LDA fnl_i
+    LDI B, 1
+    ADD B                 ; A = p + 1
+    STA cn_arg_start
+
+    LDA cn_arg_start
+    PUSH A
+    POP B
+    LDA cmdlen            ; A = cmdlen
+    SUB B                 ; A = cmdlen - arg_start
+    STA cn_arg_len
+
+    CALL goto_row_start   ; HL был занят под cmdbuf - вернуть на экран
+
+    RET
+
+fnl_no_space:
+
+    LDA cn_prefix_len
+    PUSH A
+    POP B
+    LDA cmdlen
+    SUB B
+    STA cn_name_len
+
+    LDI A, 0
+    STA cn_arg_len
+
+    CALL goto_row_start   ; HL мог быть занят под cmdbuf - вернуть на экран
+
+    RET
+
+
+copy_args_to_fixed:
+
+    ; Копирует cn_arg_len байт из cmdbuf[cn_arg_start..] в CMD_ARGS_TEXT
+    ; (0x00010006..0x00010015, ARGS_MAX=16 - см. ASSEMBLY.md, "Аргументы
+    ; командной строки"), дозаполняет нулями до 16 байт, пишет итоговую
+    ; длину в CMD_ARGS_LEN (0x00010005). Тот же приём, что
+    ; copy_name_to_diskc, но адресат - фиксированный адрес, а не
+    ; NAME-регистр устройства. Клэмпит cn_arg_len до 16, если строка
+    ; ввода была длиннее (защита от переполнения буфера назначения -
+    ; чтение из cmdbuf сверх реально введённого тихо даёт нулевые байты).
+    ; Вызывается ВСЕГДА (даже с cn_arg_len=0) - обнуляет канал для
+    ; программ без аргументов, как и lastKey перед CALL 0x00002000.
+
+    LDA cn_arg_len
+    LDI B, 16
+    CMP B
+    JC cafx_len_ok        ; cn_arg_len < 16 - используем как есть
+    LDI A, 16
+    STA cn_arg_len         ; клэмп до ARGS_MAX
+
+cafx_len_ok:
+
+    LDA cn_arg_len
+    STA 0x00010005         ; CMD_ARGS_LEN
+
+    LDI A, 0
+    STA ca_i
+
+cafx_loop:
+
+    LDA ca_i
+    PUSH A
+    POP B
+    LDA cn_arg_len
+    CMP B
+    JZ cafx_pad           ; i == cn_arg_len - копирование окончено
+
+    LDHL cmdbuf0
+    LDA cn_arg_start
+    PUSH A
+    POP B
+    LDA ca_i
+    ADD B                 ; A = arg_start + i
+    CALL hl_add_offset    ; HL = cmdbuf0 + arg_start + i
+
+    LDX
+    STA ca_char
+
+    LDHL 0x00010006       ; CMD_ARGS_TEXT
+    LDA ca_i
+    CALL hl_add_offset    ; HL = CMD_ARGS_TEXT + i
+
+    LDA ca_char
+    STX
+
+    LDA ca_i
+    LDI B, 1
+    ADD B
+    STA ca_i
+
+    JMP cafx_loop
+
+cafx_pad:
+
+    LDA ca_i
+    LDI B, 16
+    CMP B
+    JZ cafx_done          ; i == 16 - весь остаток обнулён
+
+    LDHL 0x00010006
+    LDA ca_i
+    CALL hl_add_offset
+
+    LDI A, 0
+    STX
+
+    LDA ca_i
+    LDI B, 1
+    ADD B
+    STA ca_i
+
+    JMP cafx_pad
+
+cafx_done:
+
+    CALL goto_row_start   ; HL был занят - вернуть на экранный курсор
+
+    RET
+
+
 copy_name_to_diskc:
 
     ; Копирует cmdbuf[prefix_len]..cmdbuf[prefix_len+len-1] в DiskC
@@ -3278,13 +3643,13 @@ copy_name_to_diskc:
     ; последовательные MMIO-регистры), поэтому используем
     ; hl_add_offset дважды на байт - один раз для чтения (HL на
     ; cmdbuf), один раз для записи (HL на NAME) - HL держит только
-    ; один адрес одновременно.
+    ; один адрес одновременно. len берётся из cn_name_len - его должен
+    ; заранее посчитать find_name_and_arg_len (см. выше), которая
+    ; отделяет имя файла от необязательного аргумента по первому
+    ; пробелу - CALL copy_name_to_diskc/d без предварительного CALL
+    ; find_name_and_arg_len даст мусор в cn_name_len.
 
-    LDA cn_prefix_len
-    PUSH A
-    POP B
-    LDA cmdlen
-    SUB B
+    LDA cn_name_len
     STA tmp1            ; tmp1 = len
 
     LDI A, 0
@@ -3357,13 +3722,9 @@ cnc_done:
 copy_name_to_diskd:
 
     ; То же самое, но диск D: NAME0 = 0xF00007F9. См. copy_name_to_diskc
-    ; про cn_prefix_len.
+    ; про cn_prefix_len/cn_name_len.
 
-    LDA cn_prefix_len
-    PUSH A
-    POP B
-    LDA cmdlen
-    SUB B
+    LDA cn_name_len
     STA tmp1
 
     LDI A, 0
@@ -3621,6 +3982,17 @@ irq_done:
 ; внутри CALL 0x00002000 у exec/run, см. do_quit/cmd_run/cmd_exec_run)
 ; main.cpp использует, чтобы включать перерисовку экрана по таймеру
 ; только пока реально работает программа, а не постоянно.
+;
+; CMD_ARGS_LEN (0x00010005) и CMD_ARGS_TEXT (0x00010006-0x00010015, 16
+; байт) - по той же причине фиксированные адреса, но интерфейс не с
+; main.cpp, а с ЗАПУЩЕННОЙ программой (см. copy_args_to_fixed выше,
+; ASSEMBLY.md "Аргументы командной строки") - канал, которым shell
+; передаёт запущенной программе текст после имени файла ("exec ИМЯ
+; АРГУМЕНТ", автозапуск "ИМЯ АРГУМЕНТ"), а любая уже выполняющаяся
+; программа - своей дочерней через exec_child() (сама кладёт значения
+; сюда перед CALL, канал в этом случае НЕ обнуляется автоматически - как
+; и EXEC_CHILD_DISK, 0x0000000F). Доступны из Мини-C как CMD_ARGS_LEN/
+; cmdArgs[16] (см. прелюдию устройств, Compiler.cpp).
 ; ============================================================
 
 quit:       DB 0
@@ -3771,13 +4143,24 @@ cn_prefix_len: DB 0 ; длина префикса команды перед им
                     ; copy_name_to_diskc/d (5 для type/exec/copy,
                     ; 7 для create, 4 для del)
 
-; Буфер команды - 20 отдельных байт (0..19), не единый массив (см.
+; Разбор "ИМЯ АРГУМЕНТ" (см. find_name_and_arg_len, ASSEMBLY.md,
+; "Аргументы командной строки") - вызывающий код (cmd_exec/cmd_autorun)
+; выставляет cn_prefix_len и зовёт find_name_and_arg_len ДО
+; copy_name_to_diskc/d (который теперь читает cn_name_len вместо того,
+; чтобы пересчитывать его из cmdlen самостоятельно).
+fnl_i:         DB 0   ; scratch - текущая позиция поиска пробела
+cn_name_len:   DB 0   ; длина имени файла (до пробела или до конца строки)
+cn_arg_start:  DB 0   ; позиция в cmdbuf, откуда начинается аргумент (после пробела)
+cn_arg_len:    DB 0   ; длина аргумента (0 - аргумента нет)
+ca_i:          DB 0   ; scratch - индекс копирования в copy_args_to_fixed
+ca_char:       DB 0   ; scratch - байт аргумента на время переноса cmdbuf->CMD_ARGS_TEXT
+
+; Буфер команды - 36 отдельных байт (0..35), не единый массив (см.
 ; комментарий в do_echo). Изначально был 12 байт (под "poke NNN VVV"),
-; но самая длинная реальная команда - "create ИМЯ.ЕХТ" (7 символов
-; префикса + до 12 на имя 8.3) = 19 символов; 12 байт обрезали хвост
-; имени файла и copy_name_to_diskc/d читали "мусор" за пределами
-; буфера (баг: "type" внутри папки не находил файл длиннее 7 симв.
-; после префикса).
+; затем 20 (под "create ИМЯ.ЕХТ" = 19 символов); расширен до 36, чтобы
+; влезло "exec "(5) + имя(12) + " "(1) + аргумент(16, см. CMD_ARGS_TEXT)
+; = 34, с небольшим запасом - см. ASSEMBLY.md, "Аргументы командной
+; строки".
 
 cmdbuf0:    DB 0
 cmdbuf1:    DB 0
@@ -3799,3 +4182,19 @@ cmdbuf16:   DB 0
 cmdbuf17:   DB 0
 cmdbuf18:   DB 0
 cmdbuf19:   DB 0
+cmdbuf20:   DB 0
+cmdbuf21:   DB 0
+cmdbuf22:   DB 0
+cmdbuf23:   DB 0
+cmdbuf24:   DB 0
+cmdbuf25:   DB 0
+cmdbuf26:   DB 0
+cmdbuf27:   DB 0
+cmdbuf28:   DB 0
+cmdbuf29:   DB 0
+cmdbuf30:   DB 0
+cmdbuf31:   DB 0
+cmdbuf32:   DB 0
+cmdbuf33:   DB 0
+cmdbuf34:   DB 0
+cmdbuf35:   DB 0

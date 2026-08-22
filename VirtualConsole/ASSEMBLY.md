@@ -1753,6 +1753,51 @@ variable length thanks to the `CARRY` flag (see section "2.
 Registers") - before `CARRY` existed, there used to be a forced
 "exactly 7 characters, space-padded" limit.
 
+## Command-line arguments
+
+DOS-style: typing a space after the program name, followed by more
+text, passes that text to the launched program as an argument -
+
+    exec view.mc readme.txt
+    view readme.txt          ; same thing, after "build view.mc" once
+
+Works for both `exec NAME` and bare autorun (`NAME` alone, see
+`LOAD_RAW` above) - `SHELL.ASM` splits the typed line at the FIRST
+space after the program name (`find_name_and_arg_len`); everything
+before it is the file name (still capped at 12 bytes - too long and the
+whole line is silently ignored, same as an unrecognized command),
+everything after it is the argument, handed to the program through a
+fixed low-memory channel:
+
+    0x00010005              CMD_ARGS_LEN   (1 byte - argument length, 0 = none)
+    0x00010006-0x00010015   CMD_ARGS_TEXT  (16 bytes - raw argument text)
+
+This is the same kind of fixed "interface" address as `lastKey`
+(`0x00010001`, see "Interrupts") - reserved by convention, safely clear
+of code growth, since `main.cpp`/other programs can't see assembler
+labels. Unlike `lastKey`, it isn't read by `main.cpp` - it's read by
+whatever program the shell just launched. `SHELL.ASM` always sets it
+before `CALL 0x00002000` (`copy_args_to_fixed`, called from
+`cmd_exec_run` - the shared tail of both `cmd_exec` and `cmd_autorun`),
+including setting it to length 0 when no argument was typed - the same
+reasoning as zeroing `lastKey`: otherwise a program would see a STALE
+argument left over from whatever ran before it.
+
+A program launched via `exec_child()` (see "Running a child program:
+exec_child()" below) gets an argument the same way, but the CALLING
+program fills the channel itself, directly, before calling
+`exec_child()` - `shell_exec_child` does NOT touch it (same precedent
+as `EXEC_CHILD_DISK`, `0x0000000F`, which it also never clears). A
+program that doesn't care about arguments simply never reads
+`CMD_ARGS_LEN` - a stale value from someone else's previous run is
+harmless if nobody looks at it.
+
+From Mini-C, both are already declared for you - `CMD_ARGS_LEN`,
+`cmdArgs[16]`, `EXEC_CHILD_DISK` - see "Built-in device register
+constants (prelude)" below. Ready-made example: `C/TOOLS/FM.MC`'s `F3`
+(`view_selected_file()`) launches `C/TOOLS/VIEW.MC` with the selected
+file's name as its argument.
+
 
 ## TextAttr
 
@@ -2710,11 +2755,17 @@ device prefix so registers that share a name across devices (`COMMAND`,
     VIDEOCARD_SCROLL_X_LOW .. VIDEOCARD_SCROLL_Y_HIGH   (tile scroll)
     PNGLOADER_NAME0, PNGLOADER_SRC_X_LOW .. PNGLOADER_TILE_INDEX
     MAPLOADER_NAME0, MAPLOADER_COMMAND, MAPLOADER_STATUS
+    EXEC_CHILD_DISK
+    CMD_ARGS_LEN
 
 Two ready-made mapped arrays over the `NAME0-11` buffers come prepended
 alongside them - `pngLoaderName`/`mapLoaderName` (`int ...[12] = ...;`),
 meant to be used directly with `str_copy()` (see below) instead of
-writing a device's file name byte by byte.
+writing a device's file name byte by byte. A third, `cmdArgs[16]`, is a
+mapped array over `CMD_ARGS_TEXT` (see "Command-line arguments" in the
+"Disk" section above) - the argument text after the program's own name
+on the command line, or whatever a parent program placed there before
+calling `exec_child()`.
 
 If your own program happens to declare a `const`/array under the same
 name, yours simply wins - the compiler has no duplicate-declaration
@@ -2818,6 +2869,22 @@ file in the list copies its name into `NAME`, puts the disk into
 `EXEC_CHILD_DISK`, then calls `exec_child()`; after it returns -
 `clear_screen()` and a full redraw of both panels (the child program
 almost certainly used the screen for itself).
+
+To also pass the child an argument (see "Command-line arguments" in
+the "Disk" section above), fill `cmdArgs`/`CMD_ARGS_LEN` yourself
+before calling `exec_child()` - `shell_exec_child` doesn't touch that
+channel, only your own code does:
+
+    cmdArgs[0] = 84; cmdArgs[1] = 88; cmdArgs[2] = 84;   // "TXT" - or str_copy(cmdArgs, "...")
+    poke(CMD_ARGS_LEN, 3);
+    poke(EXEC_CHILD_DISK, diskId);
+    exec_child();
+
+Ready-made example - `C/TOOLS/FM.MC`'s `F3` (`view_selected_file()`):
+puts `VIEW.RUN` in `NAME` (the program to launch) and the SELECTED
+file's name in `cmdArgs` (the argument) - two different strings at the
+same time, which is exactly why this needs its own channel separate
+from `NAME`.
 
 ## Sound and music: mod_load()/sound_*()
 
@@ -3009,6 +3076,29 @@ file. Build and run:
     build libdemo.mc
     libdemo
 
+## Example: VIEW.MC / DISKIO.MC
+
+`C/DEV/LIB/DISKIO.MC` is a small library of `Disk`-register wrappers
+parameterized by `diskId` (0=C, 1=D) - the same `d_cmd`/`d_status`/
+`d_data`/`d_set_data` pattern already used directly inside `C/TOOLS/
+FM.MC`, factored out for new consumers instead of copy-pasting it again
+(`FM.MC` itself keeps its own copies - no need to churn working code).
+`C/TOOLS/VIEW.MC` is a paged text-file viewer built on top of it and
+`STRLIB.MC`'s `print_number3()`: it reads its file name from `cmdArgs`
+(see "Command-line arguments" in the "Disk" section, and "Built-in
+device register constants" above) and which disk to read it from via
+`peek(EXEC_CHILD_DISK)`, then re-opens the file and re-counts newlines
+from the start on every page flip rather than holding the whole file in
+memory (Mini-C arrays can't exceed 255 elements - see "Types and
+variables" above - a real text file wouldn't fit). Controls - `Up`/
+`Down` - previous/next page (24 lines each, the 25th screen row is a
+status line), `Esc` - back to whoever launched it. `C/TOOLS/FM.MC`'s
+`F3` (`view_selected_file()`) launches it with the selected file as its
+argument. Build and run directly:
+
+    build view.mc
+    view readme.txt
+
 ## Cheat sheet
 
 A compact syntax summary - without explanations (those are above, via
@@ -3059,8 +3149,9 @@ the links in the last column).
 
 Already declared for you in every program - `KEYBOARD_*`, `CLOCK_*`,
 `VIDEOCARD_*` (background/sprites/scroll), `PNGLOADER_*`, `MAPLOADER_*`,
-plus ready mapped arrays `pngLoaderName`/`mapLoaderName`. See "Built-in
-device register constants (prelude)" above for the full list.
+`EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus ready mapped arrays
+`pngLoaderName`/`mapLoaderName`/`cmdArgs`. See "Built-in device register
+constants (prelude)" above for the full list.
 
 **Screen (Text VRAM/TextAttr)**
 
@@ -3073,12 +3164,16 @@ device register constants (prelude)" above for the full list.
 
 **Child programs**
 
-    poke(0x0000000F, diskId);   // EXEC_CHILD_DISK - 0=C, 1=D
-    exec_child();               // run *.RUN from NAME on disk diskId, returns after its RET
+    poke(EXEC_CHILD_DISK, diskId);   // 0=C, 1=D
+    exec_child();                    // run *.RUN from NAME on disk diskId, returns after its RET
+
+    cmdArgs[0] = 65; poke(CMD_ARGS_LEN, 1);   // optional: pass an argument (or str_copy(cmdArgs, "..."))
 
 See "Running a child program: exec_child()" above - up to 5 nesting
 levels, zeroes `lastKey` before launching, the disk and file name in
-`NAME` are prepared by the calling code beforehand.
+`NAME` are prepared by the calling code beforehand; `cmdArgs`/
+`CMD_ARGS_LEN` are yours to fill if the child takes an argument (see
+"Command-line arguments" in the "Disk" section).
 
 **Sound and music**
 
@@ -3126,4 +3221,6 @@ arrays, keyboard, `Clock`), `C/TOOLS/FM.MC` (a file manager,
 `C/DEMOS/MUSIC2.MC` (`mod_load()`/`sound_*()`, graphics mode alongside
 audio, mapped array over `SoundCard`'s visualization registers),
 `C/DEV/LIB/STRLIB.MC` + `C/DEV/SRC/LIBDEMO.MC` (`#include`, a reusable
-library function).
+library function), `C/DEV/LIB/DISKIO.MC` + `C/TOOLS/VIEW.MC` (reading a
+file with the low-level `Disk` protocol, command-line arguments via
+`cmdArgs`, `exec_child()` launched from `C/TOOLS/FM.MC`'s `F3`).

@@ -78,7 +78,10 @@ static const std::string kDevicePrelude =
     "const MAPLOADER_NAME0 = 0xF0001012;\n"
     "const MAPLOADER_COMMAND = 0xF000101E;\n"
     "const MAPLOADER_STATUS = 0xF000101F;\n"
-    "int mapLoaderName[12] = 0xF0001012;\n";
+    "int mapLoaderName[12] = 0xF0001012;\n"
+    "const EXEC_CHILD_DISK = 0x0000000F;\n"
+    "const CMD_ARGS_LEN = 0x00010005;\n"
+    "int cmdArgs[16] = 0x00010006;\n";
 
 static const char* kKeywords[] = {
     "int", "if", "else", "while", "for", "return", "const",

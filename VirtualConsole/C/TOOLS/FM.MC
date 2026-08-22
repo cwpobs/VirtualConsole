@@ -24,9 +24,9 @@
 // exec_child() ниже), Backspace - подняться на уровень выше,
 // Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
 // Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
-// работает пока только F5 (Copy), остальные - только подписи (v1,
-// задел на будущее: F3 View, F4 Edit, F6 Move, F7 MkDir, F8 Del и
-// т.д.).
+// работают F3 (View - см. view_selected_file(), открывает выделенный
+// файл в C/TOOLS/VIEW.MC) и F5 (Copy), остальные - только подписи (v1,
+// задел на будущее: F4 Edit, F6 Move, F7 MkDir, F8 Del и т.д.).
 //
 // Запуск *.RUN (run_program()) - через системный вызов SHELL.ASM
 // (shell_exec_child, см. ASSEMBLY.md/exec_child) - FM.MC только кладёт
@@ -47,6 +47,7 @@
 const KEY_DATA = 0xF0000005;
 const CLOCK_LOW = 0xF0000FFC;
 
+const FKEY_F3 = 61;   // View
 const FKEY_F5 = 63;   // Copy
 const KEY_UP = 72;    // стрелка вверх (extended-код _getch())
 const KEY_DOWN = 80;  // стрелка вниз
@@ -393,10 +394,10 @@ int render_right() {
 }
 
 int render_status() {
-    // Подсказка в стиле Norton Commander - реально работает пока
-    // только F5 (Copy), остальные - только подписи (см. комментарий
-    // в начале файла). Чёрный текст на белом фоне на всю ширину
-    // строки - классическая полоса подсказок NC.
+    // Подсказка в стиле Norton Commander - реально работают F3 (View)
+    // и F5 (Copy), остальные - только подписи (см. комментарий в
+    // начале файла). Чёрный текст на белом фоне на всю ширину строки -
+    // классическая полоса подсказок NC.
     int x;
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
@@ -548,6 +549,60 @@ int run_program() {
     // Дочерняя программа наверняка использовала экран под себя -
     // полная перерисовка; leftNames/rightNames и т.д. не тронуты,
     // заново их читать (populate_*) не нужно.
+    clear_screen();
+    render_left();
+    render_right();
+    render_status();
+
+    return 0;
+}
+
+int view_selected_file() {
+    // F3 - открывает выделенный файл в C/TOOLS/VIEW.MC (см. ASSEMBLY.md,
+    // "Аргументы командной строки"). В отличие от run_program(), имя
+    // ЗАПУСКАЕМОЙ программы (VIEW.RUN) и имя ПРОСМАТРИВАЕМОГО файла -
+    // РАЗНЫЕ строки: NAME на диске держит "VIEW.RUN" (то, что грузит
+    // shell_exec_child), а имя выбранного файла кладётся в cmdArgs -
+    // отдельный канал, читает его VIEW.MC через peek(CMD_ARGS_LEN)/
+    // cmdArgs (прелюдия компилятора - см. Compiler.cpp).
+    int panel;
+    int diskId;
+    int sel;
+    int i;
+    int ch;
+
+    panel = activeRight;
+    if (panel == 0) { diskId = leftDisk; sel = leftSel; } else { diskId = rightDisk; sel = rightSel; }
+
+    if (panel == 0) { if (leftCount == 0) { return 0; } } else { if (rightCount == 0) { return 0; } }
+    if (panel == 0) { if (leftIsDir[sel] == 1) { return 0; } } else { if (rightIsDir[sel] == 1) { return 0; } }
+
+    sync_disk_to_panel(panel);
+
+    i = 0;
+    while (i < 12) {
+        if (panel == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        cmdArgs[i] = ch;
+        i = i + 1;
+    }
+    poke(CMD_ARGS_LEN, 12);
+
+    d_set_name_char(diskId, 0, 86);    // V
+    d_set_name_char(diskId, 1, 73);    // I
+    d_set_name_char(diskId, 2, 69);    // E
+    d_set_name_char(diskId, 3, 87);    // W
+    d_set_name_char(diskId, 4, 46);    // .
+    d_set_name_char(diskId, 5, 82);    // R
+    d_set_name_char(diskId, 6, 85);    // U
+    d_set_name_char(diskId, 7, 78);    // N
+    d_set_name_char(diskId, 8, 0);
+    d_set_name_char(diskId, 9, 0);
+    d_set_name_char(diskId, 10, 0);
+    d_set_name_char(diskId, 11, 0);
+
+    poke(EXEC_CHILD_DISK, diskId);
+    exec_child();
+
     clear_screen();
     render_left();
     render_right();
@@ -761,6 +816,7 @@ int main() {
         if (key == 13) { enter_dir(); }     // Enter
         if (key == 8)  { go_up_dir(); }     // Backspace
 
+        if (key == FKEY_F3) { view_selected_file(); }   // F3
         if (key == FKEY_F5) { do_copy(); }   // F5
 
         if (key == ALT_F1) { select_disk_left(); }
