@@ -69,7 +69,7 @@ main:
     LDI D, 0        ; D - константа "0" для сравнений на весь запуск
 
     LDI A, 0
-    STA inSubdir    ; стартуем в корне диска C
+    STA dirDepth    ; стартуем в корне диска C
 
     CALL print_prompt
 
@@ -739,8 +739,8 @@ pnl_loop:
 
 print_prompt:
 
-    ; Промпт в стиле DOS: "C:\>" в корне, "C:\ИМЯ>" внутри папки (см.
-    ; inSubdir/curDirName0..11, устанавливаются cmd_cd*). Заменяет
+    ; Промпт в стиле DOS: "C:\>" в корне, "C:\A\B\C>" на глубине 3 и
+    ; т.д. (см. dirDepth/dirNames, устанавливаются cmd_cd*). Заменяет
     ; прежний статичный "> ".
 
     LDA currentDisk
@@ -763,60 +763,95 @@ pp_colon:
     LDI A, 92    ; '\'
     CALL print_char
 
-    LDA inSubdir
+    LDA dirDepth
     CMP D
-    JZ pp_done   ; в корне - имя папки не печатаем
+    JZ pp_done   ; в корне - имена папок не печатаем
 
-    LDI B, 0
+    LDI A, 0
+    STA ppLevel
 
-    LDA curDirName0
-    CMP B
-    JZ pp_done
+pp_level_loop:
+
+    ; цикл, пока ppLevel < dirDepth
+    LDA dirDepth
+    PUSH A
+    LDA ppLevel
+    POP B
+    CMP B                 ; CARRY=1, если ppLevel < dirDepth
+    JNC pp_levels_done
+
+    ; разделитель "\" перед каждым уровнем, КРОМЕ самого первого - до
+    ; него уже напечатан "\" сразу после буквы диска
+    LDA ppLevel
+    CMP D
+    JZ pp_no_sep
+    LDI A, 92    ; '\'
     CALL print_char
-    LDA curDirName1
+pp_no_sep:
+
+    LDI A, 0
+    STA ppChar
+
+pp_char_loop:
+
+    ; напечатать до 12 символов имени уровня, остановиться на первом 0
+    LDA ppChar
+    LDI B, 12
     CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName2
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName3
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName4
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName5
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName6
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName7
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName8
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName9
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName10
-    CMP B
-    JZ pp_done
-    CALL print_char
-    LDA curDirName11
-    CMP B
-    JZ pp_done
-    CALL print_char
+    JZ pp_char_done
+
+    ; HL нужен для двух разных вещей - курсор экрана (print_char) и
+    ; чтение dirNames - PUSH HL не существует (см. goto_row_start),
+    ; поэтому каждый раз пересчитываем HL заново под то, что сейчас
+    ; нужно, а не пытаемся его "сохранить".
+    LDHL dirNames
+    LDA ppLevel
+    LDI B, 12
+    MUL B
+    PUSH A
+    LDA ppChar
+    POP B
+    ADD B                 ; A = ppLevel*12 + ppChar (макс. 7*12+11=95)
+    CALL hl_add_offset     ; HL = dirNames + смещение
+
+    LDX                    ; A = символ имени
+    CMP D
+    JZ pp_char_done        ; 0 - конец имени этого уровня
+
+    STA ppByte             ; отложить символ, пока пересчитываем HL под экран
+
+    CALL goto_row_start
+    LDA column
+    CALL hl_add_offset     ; HL = текущая позиция курсора на экране
+
+    LDA ppByte
+    CALL print_char         ; печатает A, сам сдвигает HL/column
+
+    LDA ppChar
+    LDI B, 1
+    ADD B
+    STA ppChar
+    JMP pp_char_loop
+
+pp_char_done:
+
+    ; Сюда попадаем и найдя 0 (конец имени - HL ещё указывает В
+    ; dirNames, не на экран!), и исчерпав 12 символов (HL уже на
+    ; экране от последнего print_char, но лишний пересчёт безвреден) -
+    ; в ОБОИХ случаях гарантируем HL на экране перед тем, как дальше
+    ; печатать "\" следующего уровня или ">" (баг был именно тут -
+    ; ">" улетал в dirNames вместо экрана, живым тестом нашли).
+    CALL goto_row_start
+    LDA column
+    CALL hl_add_offset
+
+    LDA ppLevel
+    LDI B, 1
+    ADD B
+    STA ppLevel
+    JMP pp_level_loop
+
+pp_levels_done:
 
 pp_done:
 
@@ -824,7 +859,6 @@ pp_done:
     CALL print_char
 
     RET
-
 
 print_number:
 
@@ -1993,13 +2027,13 @@ cmd_reset:
     STA 0xF00007D8    ; CLEAR (Text VRAM)
     STA 0xF0000FDD    ; CLEAR (TextAttr)
 
-    LDI A, 12
-    STA 0xF00007F2    ; DiskC COMMAND = CHDIR_UP (сброс в корень)
-    LDI A, 12
-    STA 0xF0000805    ; DiskD COMMAND = CHDIR_UP
+    ; сброс в корень на любой глубине - см. cmd_cd_reset_current
+    ; (общая с cmd_cd): поднимает currentDisk в корень CHDIR_UP'ом
+    ; dirDepth раз и сама обнуляет dirDepth.
+
+    CALL cmd_cd_reset_current
 
     LDI A, 0
-    STA inSubdir
     STA currentDisk
 
     CALL draw_banner  ; сама выставит column/row/HL и перекрасит рамку
@@ -2320,9 +2354,15 @@ cmd_type_d_done:
 cmd_cd:
 
     ; "cd c" / "cd d" (4 символа) - переключает currentDisk для
-    ; dir/type/... Символ диска - cmdbuf3. Заодно возвращает выбранный
-    ; диск в корень (v1 не помнит "где был" на каждом диске отдельно -
-    ; см. план) и сбрасывает промпт на корень.
+    ; dir/type/... Символ диска - cmdbuf3. Заодно возвращает В КОРЕНЬ
+    ; диск, на котором стояли ДО переключения (v1 не помнит "где был"
+    ; на каждом диске отдельно) - dirDepth относится именно к нему,
+    ; не к тому, на который переключаемся (тот и так уже в корне - на
+    ; нём ещё не были). CHDIR_UP поднимает только на один уровень за
+    ; раз, поэтому cmd_cd_reset_current (общая с cmd_reset) - цикл по
+    ; dirDepth ДО того, как currentDisk поменяется.
+
+    CALL cmd_cd_reset_current
 
     LDA cmdbuf3
     LDI B, 100    ; 'd'
@@ -2331,30 +2371,75 @@ cmd_cd:
 
     LDI A, 1
     STA currentDisk
-
-    LDI A, 12
-    STA 0xF0000805      ; DiskD COMMAND = CHDIR_UP (сброс в корень)
-
-    LDI A, 0
-    STA inSubdir
     RET
 
 cmd_cd_c:
 
     LDI A, 0
     STA currentDisk
+    RET
+
+
+cmd_cd_reset_current:
+
+    ; Общая для cmd_cd (смена диска) и cmd_reset - поднимает диск,
+    ; который СЕЙЧАС является currentDisk, в корень (CHDIR_UP
+    ; dirDepth раз - у Disk нет "сразу в корень"), обнуляет dirDepth.
+    ; Вызывать ДО смены currentDisk.
+
+    LDA currentDisk
+    CMP D
+    JNZ ccrc_d_loop
+
+ccrc_c_loop:
+
+    LDA dirDepth
+    CMP D
+    JZ ccrc_done
 
     LDI A, 12
     STA 0xF00007F2      ; DiskC COMMAND = CHDIR_UP
 
+    LDA dirDepth
+    LDI B, 1
+    SUB B
+    STA dirDepth
+
+    JMP ccrc_c_loop
+
+ccrc_d_loop:
+
+    LDA dirDepth
+    CMP D
+    JZ ccrc_done
+
+    LDI A, 12
+    STA 0xF0000805      ; DiskD COMMAND = CHDIR_UP
+
+    LDA dirDepth
+    LDI B, 1
+    SUB B
+    STA dirDepth
+
+    JMP ccrc_d_loop
+
+ccrc_done:
+
     LDI A, 0
-    STA inSubdir
+    STA dirDepth
+
     RET
 
 
 cmd_cd_up:
 
-    ; "cd.." - выйти из папки на уровень выше (на currentDisk)
+    ; "cd.." - выйти из папки на уровень выше (на currentDisk).
+    ; dirDepth - общий счётчик глубины для промпта (не по дискам,
+    ; как и currentDisk/CHDIR сам по себе).
+
+    LDA dirDepth
+    CMP D
+    JZ cmd_cd_up_done   ; уже в корне - ничего не делаем (как в DOS)
 
     LDA currentDisk
     CMP D
@@ -2362,17 +2447,22 @@ cmd_cd_up:
 
     LDI A, 12
     STA 0xF00007F2      ; DiskC COMMAND = CHDIR_UP
-    JMP cmd_cd_up_done
+    JMP cmd_cd_up_after
 
 cmd_cd_up_d:
 
     LDI A, 12
     STA 0xF0000805      ; DiskD COMMAND = CHDIR_UP
 
+cmd_cd_up_after:
+
+    LDA dirDepth
+    LDI B, 1
+    SUB B
+    STA dirDepth
+
 cmd_cd_up_done:
 
-    LDI A, 0
-    STA inSubdir
     RET
 
 
@@ -2388,6 +2478,17 @@ cmd_cd_dir:
 
 cmd_cd_dir_c:
 
+    ; dirDepth - общий счётчик глубины, используемый ТОЛЬКО промптом
+    ; (см. print_prompt) - сам Disk::currentDir глубину не ограничивает
+    ; вообще, ограничение только на размер стека имён здесь, в шелле.
+
+    LDA dirDepth
+    LDI B, 8
+    CMP B
+    JNC cmd_cd_dir_done   ; уже на пределе глубины - молча отказываем,
+                          ; как "папка не найдена" - CHDIR даже не
+                          ; пробуем, чтобы Disk и промпт не разошлись
+
     LDI A, 3
     STA cn_prefix_len   ; длина префикса "cd "
     CALL copy_name_to_diskc
@@ -2400,43 +2501,73 @@ cmd_cd_dir_c:
     CMP B
     JNZ cmd_cd_dir_done  ; не папка/не найдена - молча выходим
 
-    ; успех - копируем имя из NAME диска в curDirName для промпта
-    ; (фиксированные адреса с обеих сторон - HL не нужен)
+    ; успех - копируем имя из NAME диска C в dirNames[dirDepth*12..+11]
+    ; для промпта (см. print_prompt)
+
+    LDHL dirNames
+    LDA dirDepth
+    LDI B, 12
+    MUL B
+    CALL hl_add_offset    ; HL = dirNames + dirDepth*12
 
     LDA 0xF00007E6
-    STA curDirName0
+    STX
+    INCHL
     LDA 0xF00007E7
-    STA curDirName1
+    STX
+    INCHL
     LDA 0xF00007E8
-    STA curDirName2
+    STX
+    INCHL
     LDA 0xF00007E9
-    STA curDirName3
+    STX
+    INCHL
     LDA 0xF00007EA
-    STA curDirName4
+    STX
+    INCHL
     LDA 0xF00007EB
-    STA curDirName5
+    STX
+    INCHL
     LDA 0xF00007EC
-    STA curDirName6
+    STX
+    INCHL
     LDA 0xF00007ED
-    STA curDirName7
+    STX
+    INCHL
     LDA 0xF00007EE
-    STA curDirName8
+    STX
+    INCHL
     LDA 0xF00007EF
-    STA curDirName9
+    STX
+    INCHL
     LDA 0xF00007F0
-    STA curDirName10
+    STX
+    INCHL
     LDA 0xF00007F1
-    STA curDirName11
+    STX
 
-    LDI A, 1
-    STA inSubdir
+    LDA dirDepth
+    LDI B, 1
+    ADD B
+    STA dirDepth
 
 cmd_cd_dir_done:
+
+    ; copy_name_to_diskc и копирование в dirNames выше держали HL под
+    ; свои нужды (адреса NAME/dirNames, не экран) - возвращаем HL на
+    ; курсор экрана перед тем, как do_enter напечатает новый промпт
+    ; (см. goto_row_start - тот же приём, что после dump/poke/exec).
+    CALL goto_row_start
 
     RET
 
 
 cmd_cd_dir_d:
+
+    LDA dirDepth
+    LDI B, 8
+    CMP B
+    JNC cmd_cd_dir_d_done
 
     LDI A, 3
     STA cn_prefix_len   ; длина префикса "cd "
@@ -2450,35 +2581,58 @@ cmd_cd_dir_d:
     CMP B
     JNZ cmd_cd_dir_d_done
 
-    LDA 0xF00007F9
-    STA curDirName0
-    LDA 0xF00007FA
-    STA curDirName1
-    LDA 0xF00007FB
-    STA curDirName2
-    LDA 0xF00007FC
-    STA curDirName3
-    LDA 0xF00007FD
-    STA curDirName4
-    LDA 0xF00007FE
-    STA curDirName5
-    LDA 0xF00007FF
-    STA curDirName6
-    LDA 0xF0000800
-    STA curDirName7
-    LDA 0xF0000801
-    STA curDirName8
-    LDA 0xF0000802
-    STA curDirName9
-    LDA 0xF0000803
-    STA curDirName10
-    LDA 0xF0000804
-    STA curDirName11
+    LDHL dirNames
+    LDA dirDepth
+    LDI B, 12
+    MUL B
+    CALL hl_add_offset    ; HL = dirNames + dirDepth*12
 
-    LDI A, 1
-    STA inSubdir
+    LDA 0xF00007F9
+    STX
+    INCHL
+    LDA 0xF00007FA
+    STX
+    INCHL
+    LDA 0xF00007FB
+    STX
+    INCHL
+    LDA 0xF00007FC
+    STX
+    INCHL
+    LDA 0xF00007FD
+    STX
+    INCHL
+    LDA 0xF00007FE
+    STX
+    INCHL
+    LDA 0xF00007FF
+    STX
+    INCHL
+    LDA 0xF0000800
+    STX
+    INCHL
+    LDA 0xF0000801
+    STX
+    INCHL
+    LDA 0xF0000802
+    STX
+    INCHL
+    LDA 0xF0000803
+    STX
+    INCHL
+    LDA 0xF0000804
+    STX
+
+    LDA dirDepth
+    LDI B, 1
+    ADD B
+    STA dirDepth
 
 cmd_cd_dir_d_done:
+
+    ; см. cmd_cd_dir_done - copy_name_to_diskd/dirNames держали HL под
+    ; свои нужды, возвращаем на экран перед новым промптом
+    CALL goto_row_start
 
     RET
 
@@ -3261,20 +3415,116 @@ cmdlen:     DB 0
 lastChar:   DB 0
 currentDisk: DB 0   ; 0 = диск C, 1 = диск D (см. cmd_cd)
 
-inSubdir:    DB 0   ; 0 = в корне диска, 1 = внутри папки (см. print_prompt)
+; Стек имён папок для промпта (произвольная вложенность, не только
+; один уровень - см. cmd_cd_dir*/cmd_cd_up/print_prompt). Disk сам по
+; себе (Disk::currentDir - std::filesystem::path) уже поддерживал
+; любую глубину с самого начала - ограничены были только шелл и его
+; промпт, хранившие "текущую папку" как один булев флаг + одно имя.
+; DIR_MAX_DEPTH = 8 - памяти много (4 МБ RAM), 96 байт под это не
+; жалко.
+dirDepth: DB 0      ; 0..8 - текущая глубина вложенности
+dirNames: DB 0      ; 8 * 12 байт подряд - имя каждого уровня (формат
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
+          DB 0      ; 8.3, как NAME) - уровень N занимает [N*12..N*12+11]
 
-curDirName0:  DB 0  ; имя текущей папки (для промпта), см. cmd_cd_dir
-curDirName1:  DB 0
-curDirName2:  DB 0
-curDirName3:  DB 0
-curDirName4:  DB 0
-curDirName5:  DB 0
-curDirName6:  DB 0
-curDirName7:  DB 0
-curDirName8:  DB 0
-curDirName9:  DB 0
-curDirName10: DB 0
-curDirName11: DB 0
+; временные для print_prompt (печать имён из dirNames - см. ниже про
+; конфликт HL между "курсор экрана" и "чтение dirNames")
+ppLevel: DB 0   ; текущий уровень 0..dirDepth-1
+ppChar:  DB 0   ; текущий символ внутри имени уровня, 0..11
+ppByte:  DB 0   ; прочитанный из dirNames символ, ждёт печати
 
 savedA:     DB 0
 savedB:     DB 0
