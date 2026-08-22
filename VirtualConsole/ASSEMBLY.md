@@ -2692,6 +2692,39 @@ A named compile-time constant - convenient for device register
 addresses instead of bare hex in every program. Takes up no memory -
 wherever the name appears, the compiler substitutes the number.
 
+## Built-in device register constants (prelude)
+
+Before your own source is compiled, the compiler silently prepends a
+fixed block of `const`/mapped-array declarations for the registers most
+graphics/tile programs need - `Keyboard`, `Clock`, `VideoCard`
+(background, hardware sprites, tile scroll), `PngLoader`, `MapLoader`
+(see their sections above for what each register does). You don't
+declare these yourself - they're just already there, named with a
+device prefix so registers that share a name across devices (`COMMAND`,
+`STATUS`) don't collide:
+
+    KEYBOARD_DATA, KEYBOARD_CONTROL
+    CLOCK_LOW, CLOCK_HIGH
+    VIDEOCARD_X_LOW .. VIDEOCARD_STATUS                 (background)
+    VIDEOCARD_SPRITE_INDEX .. VIDEOCARD_SPRITE_STATUS   (hardware sprites)
+    VIDEOCARD_SCROLL_X_LOW .. VIDEOCARD_SCROLL_Y_HIGH   (tile scroll)
+    PNGLOADER_NAME0, PNGLOADER_SRC_X_LOW .. PNGLOADER_TILE_INDEX
+    MAPLOADER_NAME0, MAPLOADER_COMMAND, MAPLOADER_STATUS
+
+Two ready-made mapped arrays over the `NAME0-11` buffers come prepended
+alongside them - `pngLoaderName`/`mapLoaderName` (`int ...[12] = ...;`),
+meant to be used directly with `str_copy()` (see below) instead of
+writing a device's file name byte by byte.
+
+If your own program happens to declare a `const`/array under the same
+name, yours simply wins - the compiler has no duplicate-declaration
+check (see "const" above, it's a plain "last one assigned" map), and
+your own declaration compiles AFTER the prelude. Line numbers in your
+own error messages are unaffected either way: the prelude is lexed as
+its own chunk with its own line counter restarting at 1, entirely
+independent of your file's - the same mechanism `#include` (see below)
+uses for library files.
+
 ## Comments
 
 Single-line, `//` to the end of the line - like everywhere else.
@@ -2829,11 +2862,89 @@ for `ROW`/`ORDER_POS` already does the job, since those addresses are
 themselves compile-time constants. See "SoundCard" above and
 `C/DEMOS/MUSIC2.MC` below for a full example.
 
+## str_copy() - copying a string literal into a mapped array
+
+    str_copy(pngLoaderName, "TILES.PNG");
+    poke(PNGLOADER_COMMAND, 1);          // LOAD - str_copy() doesn't trigger it itself
+    if (peek(PNGLOADER_STATUS) != 0) { ... }
+
+Copies a string literal into a mapped array (`int arr[N] = address;`,
+see "Mapped arrays" above) at compile time - the same trick `mod_load`
+uses (a flat sequence of `LDI A,<byte>; STA <address>` pairs, zero-padded
+to fill the rest), generalized to work with ANY mapped array instead of
+just `ModLoader`'s fixed `NAME0-31`. Meant for writing a device's file
+name in one line instead of one `poke()`/array-element assignment per
+character - e.g. filling `PngLoader`'s or `MapLoader`'s `NAME` buffer
+through the prelude's `pngLoaderName`/`mapLoaderName` (see "Built-in
+device register constants" above) before triggering `LOAD`/`EXTRACT`/
+etc. yourself.
+
+Unlike `mod_load`, `str_copy()` does NOT trigger any device command on
+its own - it's purely "copy these bytes"; the `poke(..._COMMAND, ...)`
+that actually does something with them is a separate, explicit step
+(the same buffer might get filled and reused for several different
+commands in a row - `LOAD`, then `EXTRACT_TILE` several times, say).
+Compile-time errors: the array must be mapped (a plain, non-mapped
+array has nowhere sensible to copy device-facing bytes to), and the
+string must fit within the array's own declared size (zero-padded if
+shorter, a hard compile error if longer - no silent truncation).
+
+## #include - shared library files
+
+    #include "STRLIB.MC"
+
+Pulls in another Mini-C source file at compile time - a library of
+`const`s/functions you don't want to retype into every program, kept in
+one place. Libraries always live in a FIXED location - disk C, folder
+`DEV/LIB` (the real file `C/DEV/LIB/STRLIB.MC` next to the emulator
+executable) - regardless of which disk the program actually being
+built lives on; `build`'s preprocessing step (`Disk::build()`) always
+looks there, never in the current folder or on the other disk.
+
+A `#include` line must be the ONLY thing on its line (surrounding
+whitespace is fine) - `build` scans the raw source TEXT for such lines
+BEFORE Mini-C's own lexer ever runs (`#` isn't a valid character
+anywhere else in the language), reads the named file's full text, and
+replaces the `#include` line with a blank one - so line numbers for the
+REST of your own file are completely unaffected. Each included
+library's text is then lexed as its own independent chunk with its OWN
+line counter starting at 1 (the same mechanism the built-in device
+prelude above uses) - a syntax error inside a library reports the
+correct line INSIDE that library file, not some shifted position in
+yours.
+
+A library file is plain Mini-C text - `const`s, `int arr[N] = addr;`,
+functions - with no `main()` of its own (it's never compiled standalone,
+only spliced into whoever includes it). Deliberate v1 limitations:
+
+- Only the top-level file passed to `build` is scanned for `#include` -
+  a library's own text is not itself re-scanned, so a library can't
+  include another library (no nested/recursive includes to worry about).
+- Works for `.MC` builds only, not `.ASM`.
+- A missing/misspelled library file, or a malformed `#include` line
+  (missing quotes), fails the whole `build` (`STATUS=2`, same as any
+  other build error).
+- Re-including the same library twice (or a name that happens to
+  collide with something you declared yourself) isn't an error - same
+  "last declaration wins" tolerance as everywhere else in the compiler
+  (see "const" above) - not an include guard, just harmless by
+  construction.
+- A library's file name is matched against the raw source TEXT before
+  any real Mini-C token exists - it does NOT go through `Disk`'s
+  12-byte `NAME` register protocol like ordinary `.MC`/`.RUN` file
+  names do, so it isn't restricted to 8.3 naming, though staying short
+  is still a reasonable convention.
+
+See `C/DEV/LIB/STRLIB.MC` (a small `print_number3(x, y, value)` helper)
+and `C/DEV/SRC/LIBDEMO.MC` (includes it) for a working example.
+
 ## What's deliberately missing in v1
 
 - Strings as a full type (you can't store a string in a variable,
-  compare it, concatenate it) - only a literal directly inside
-  `print_str`.
+  compare it, concatenate it) - only as a literal directly inside
+  `print_str`/`mod_load`/`str_copy`, each copying it into a fixed
+  destination at compile time, never as a runtime value you can pass
+  around.
 - Pointers, `struct`, 16/32-bit types, `switch`.
 - Recursion (see "Functions" above).
 - Compound assignment operators (`+=` etc.) and `++`/`--` - write
@@ -2884,6 +2995,20 @@ Quit - `Ctrl+Q`. Build and run:
     build music2.mc
     music2
 
+## Example: STRLIB.MC / LIBDEMO.MC
+
+`C/DEV/LIB/STRLIB.MC` is a tiny reusable library - one function,
+`print_number3(x, y, value)`, printing a 0-255 value as three decimal
+digits (the same digit-splitting trick as `COUNTER.MC`/`SNAKE.MC`'s
+`show_score`, factored out into something any other program can pull in
+instead of retyping it). `C/DEV/SRC/LIBDEMO.MC` is the minimal
+`#include` example - `#include "STRLIB.MC"` then a plain call to
+`print_number3()`, as if the function had been typed directly into the
+file. Build and run:
+
+    build libdemo.mc
+    libdemo
+
 ## Cheat sheet
 
 A compact syntax summary - without explanations (those are above, via
@@ -2930,6 +3055,13 @@ the links in the last column).
 | `peek(address)` | read a byte at an address | "poke/peek" |
 | `const NAME = value;` | a named compile-time constant, takes up no memory | "const" |
 
+**Built-in device register constants**
+
+Already declared for you in every program - `KEYBOARD_*`, `CLOCK_*`,
+`VIDEOCARD_*` (background/sprites/scroll), `PNGLOADER_*`, `MAPLOADER_*`,
+plus ready mapped arrays `pngLoaderName`/`mapLoaderName`. See "Built-in
+device register constants (prelude)" above for the full list.
+
 **Screen (Text VRAM/TextAttr)**
 
 | Call | What it does |
@@ -2959,13 +3091,30 @@ levels, zeroes `lastKey` before launching, the disk and file name in
 
 See "Sound and music: mod_load()/sound_*()" above.
 
+**str_copy()**
+
+    str_copy(arr, "text");   // arr must be a mapped array - int arr[N] = address;
+
+Copies a string literal into a mapped array at compile time, zero-padded
+to the array's size, no device command triggered - see "str_copy() -
+copying a string literal into a mapped array" above.
+
+**#include**
+
+    #include "NAME.MC"
+
+Pulls in a library file from disk C, `DEV/LIB`, at compile time - see
+"#include - shared library files" above.
+
 **Comments**
 
     // a single-line comment to the end of the line
 
 **What's missing in v1**
 
-- Strings as a type (only a literal inside `print_str`).
+- Strings as a type (only as a literal inside `print_str`/`mod_load`/
+  `str_copy`, each copying it into a fixed destination at compile time -
+  never a runtime value you can pass around).
 - Pointers, `struct`, 16/32-bit types, `switch`.
 - Recursion.
 - `+=`/`-=`/... and `++`/`--` - write `i = i + 1;` instead.
@@ -2975,4 +3124,6 @@ See "Sound and music: mod_load()/sound_*()" above.
 arrays, keyboard, `Clock`), `C/TOOLS/FM.MC` (a file manager,
 `exec_child()`, working with the disk directly through `poke`/`peek`),
 `C/DEMOS/MUSIC2.MC` (`mod_load()`/`sound_*()`, graphics mode alongside
-audio, mapped array over `SoundCard`'s visualization registers).
+audio, mapped array over `SoundCard`'s visualization registers),
+`C/DEV/LIB/STRLIB.MC` + `C/DEV/SRC/LIBDEMO.MC` (`#include`, a reusable
+library function).
