@@ -96,6 +96,7 @@ void Disk::write(uint32_t address, uint8_t value)
         case 19: makeDir(); break;
         case 20: rememberRenameFrom(); break;
         case 21: renameFile(); break;
+        case 22: readErrorByte(); break;
         default: break;
         }
 
@@ -376,6 +377,25 @@ void Disk::renameFile()
     status = ec ? 2 : 0;
 }
 
+void Disk::readErrorByte()
+{
+    // READ_ERROR_BYTE (22) - отдаёт lastBuildError (см. build()) байт
+    // за байтом через тот же регистр DATA (14), что и READ_BYTE - и с
+    // той же конвенцией STATUS==1 значит "конец" (тут - конец текста
+    // ошибки, а не файла). Позволяет шеллу напечатать РЕАЛЬНЫЙ текст
+    // ошибки компилятора/ассемблера после неудачного BUILD, а не
+    // просто "ничего не произошло" (см. cmd_build_c/d в SHELL.ASM).
+    if (buildErrorPos >= lastBuildError.size())
+    {
+        status = 1;
+        return;
+    }
+
+    dataByte = static_cast<uint8_t>(lastBuildError[buildErrorPos]);
+    buildErrorPos++;
+    status = 0;
+}
+
 void Disk::changeDir()
 {
     std::error_code ec;
@@ -605,10 +625,14 @@ void Disk::build()
     // exec, - иначе метки в .RUN резолвились бы не туда, куда его
     // потом кладёт loadRaw().
 
+    lastBuildError.clear();
+    buildErrorPos = 0;
+
     std::ifstream sourceFile(basePath / currentDir / nameAsString());
 
     if (!sourceFile)
     {
+        lastBuildError = "исходный файл не найден";
         status = 2;
         fileSize = 0;
         return;
@@ -678,6 +702,8 @@ void Disk::build()
 
             if (includeError)
             {
+                lastBuildError = "ошибка #include - библиотека не найдена или "
+                    "строка с #include повреждена";
                 status = 2;
                 fileSize = 0;
                 return;
@@ -690,8 +716,9 @@ void Disk::build()
                 Compiler compiler;
                 sourceText = compiler.compile(sourceText, libSources);
             }
-            catch (const std::exception&)
+            catch (const std::exception& e)
             {
+                lastBuildError = e.what();
                 status = 2;
                 fileSize = 0;
                 return;
@@ -706,8 +733,9 @@ void Disk::build()
     {
         machineCode = assembler.assemble(sourceText, LOAD_ADDRESS, &relocations);
     }
-    catch (const std::exception&)
+    catch (const std::exception& e)
     {
+        lastBuildError = e.what();
         status = 2;
         fileSize = 0;
         return;

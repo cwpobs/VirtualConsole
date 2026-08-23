@@ -3300,11 +3300,79 @@ cmd_copy_done:
     RET
 
 
+print_build_ok:
+
+    ; "BUILD OK" - см. cmd_build_c/d. Печатается сырыми LDI+print_char
+    ; по символу - тот же приём, что draw_banner (в этом ассемблере нет
+    ; строковых литералов, см. Assembler.cpp, DB принимает только
+    ; число).
+
+    LDI A, 66
+    CALL print_char   ; B
+    LDI A, 85
+    CALL print_char   ; U
+    LDI A, 73
+    CALL print_char   ; I
+    LDI A, 76
+    CALL print_char   ; L
+    LDI A, 68
+    CALL print_char   ; D
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 79
+    CALL print_char   ; O
+    LDI A, 75
+    CALL print_char   ; K
+
+    RET
+
+
+print_build_failed_prefix:
+
+    ; "BUILD FAILED: " - за ней cmd_build_c/d допечатывают РЕАЛЬНЫЙ
+    ; текст ошибки компилятора/ассемблера через READ_ERROR_BYTE (22).
+
+    LDI A, 66
+    CALL print_char   ; B
+    LDI A, 85
+    CALL print_char   ; U
+    LDI A, 73
+    CALL print_char   ; I
+    LDI A, 76
+    CALL print_char   ; L
+    LDI A, 68
+    CALL print_char   ; D
+    LDI A, 32
+    CALL print_char   ; (пробел)
+    LDI A, 70
+    CALL print_char   ; F
+    LDI A, 65
+    CALL print_char   ; A
+    LDI A, 73
+    CALL print_char   ; I
+    LDI A, 76
+    CALL print_char   ; L
+    LDI A, 69
+    CALL print_char   ; E
+    LDI A, 68
+    CALL print_char   ; D
+    LDI A, 58
+    CALL print_char   ; :
+    LDI A, 32
+    CALL print_char   ; (пробел)
+
+    RET
+
+
 cmd_build:
 
     ; "build ИМЯ.ASM" - собирает .asm в ИМЯ.RUN на currentDisk
     ; (BUILD = 14 в Disk) - готовый .RUN потом запускается напрямую
-    ; по имени, без exec (см. cmd_autorun).
+    ; по имени, без exec (см. cmd_autorun). После сборки печатает
+    ; "BUILD OK" или "BUILD FAILED: <текст ошибки>" (см.
+    ; print_build_ok/print_build_failed_prefix и READ_ERROR_BYTE=22 в
+    ; Disk.cpp) - раньше молчал в обоих случаях, и пользователь не мог
+    ; понять, собралось ли что-то вообще.
 
     LDA currentDisk
     CMP D
@@ -3322,6 +3390,36 @@ cmd_build_c:
     LDI A, 14
     STA 0xF00007F2      ; DiskC COMMAND = BUILD
 
+    LDA 0xF00007F3      ; DiskC STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_build_c_failed
+
+    CALL print_build_ok
+    JMP cmd_build_c_done
+
+cmd_build_c_failed:
+
+    CALL print_build_failed_prefix
+
+cmd_build_c_err_loop:
+
+    LDI A, 22
+    STA 0xF00007F2      ; DiskC COMMAND = READ_ERROR_BYTE
+
+    LDA 0xF00007F3
+    LDI B, 1
+    CMP B
+    JZ cmd_build_c_done
+
+    LDA 0xF00007F4
+    CALL print_char
+    JMP cmd_build_c_err_loop
+
+cmd_build_c_done:
+
+    CALL print_newline
+
     RET
 
 
@@ -3334,6 +3432,36 @@ cmd_build_d:
 
     LDI A, 14
     STA 0xF0000805      ; DiskD COMMAND = BUILD
+
+    LDA 0xF0000806      ; DiskD STATUS
+    LDI B, 0
+    CMP B
+    JNZ cmd_build_d_failed
+
+    CALL print_build_ok
+    JMP cmd_build_d_done
+
+cmd_build_d_failed:
+
+    CALL print_build_failed_prefix
+
+cmd_build_d_err_loop:
+
+    LDI A, 22
+    STA 0xF0000805      ; DiskD COMMAND = READ_ERROR_BYTE
+
+    LDA 0xF0000806
+    LDI B, 1
+    CMP B
+    JZ cmd_build_d_done
+
+    LDA 0xF0000807
+    CALL print_char
+    JMP cmd_build_d_err_loop
+
+cmd_build_d_done:
+
+    CALL print_newline
 
     RET
 

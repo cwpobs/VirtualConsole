@@ -126,6 +126,17 @@ private:
     // перезапишет NAME новым именем и пошлёт RENAME.
     uint8_t renameFrom[12];
 
+    // Текст последней ошибки BUILD (14) - компилятор/ассемблер бросают
+    // std::runtime_error с текстом ошибки, но раньше он просто
+    // отбрасывался (STATUS=2 - и всё, шелл не мог показать пользователю
+    // ПОЧЕМУ). READ_ERROR_BYTE (22) отдаёт этот текст байт за байтом
+    // (тот же STATUS==1-значит-конец приём, что READ_BYTE) - см.
+    // readErrorByte(). Сбрасывается в начале КАЖДОГО build() - и при
+    // успехе (пусто, читать нечего), и при новой ошибке (старый текст
+    // не должен утечь в следующий READ_ERROR_BYTE).
+    std::string lastBuildError;
+    size_t buildErrorPos = 0;
+
     std::filesystem::directory_iterator dirIt;
     std::ifstream readStream;
     std::ofstream writeStream;
@@ -149,6 +160,7 @@ private:
     void makeDir();
     void rememberRenameFrom();
     void renameFile();
+    void readErrorByte();
     void changeDir();
     void changeDirUp();
     void loadRaw(uint32_t targetAddress);
