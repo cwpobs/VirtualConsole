@@ -25,10 +25,11 @@
 // Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
 // Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
 // работают F3 (View - см. view_selected_file(), открывает выделенный
-// файл в C/TOOLS/VIEW.MC), F5 (Copy) и F10 (Build - см.
-// build_selected_file(), собирает выделенный *.ASM/*.MC через BUILD в
-// Disk), остальные - только подписи (v1, задел на будущее: F4 Edit,
-// F6 Move, F7 MkDir, F8 Del и т.д.).
+// файл в C/TOOLS/VIEW.MC), F5 (Copy), F8 (Del - см. request_delete(),
+// удаляет выделенный файл/ПУСТУЮ папку после подтверждения Y/N) и F10
+// (Build - см. build_selected_file(), собирает выделенный *.ASM/*.MC
+// через BUILD в Disk), остальные - только подписи (v1, задел на
+// будущее: F4 Edit, F6 Move, F7 MkDir и т.д.).
 //
 // Запуск *.RUN (run_program()) - через системный вызов SHELL.ASM
 // (shell_exec_child, см. ASSEMBLY.md/exec_child) - FM.MC только кладёт
@@ -51,6 +52,7 @@ const CLOCK_LOW = 0xF0000FFC;
 
 const FKEY_F3 = 61;   // View
 const FKEY_F5 = 63;   // Copy
+const FKEY_F8 = 66;   // Del
 const FKEY_F10 = 68;  // Build
 const KEY_UP = 72;    // стрелка вверх (extended-код _getch())
 const KEY_DOWN = 80;  // стрелка вниз
@@ -102,6 +104,13 @@ int rightPathNames[96];      // MAX_PATH_DEPTH(8) * 12
 int diskOwnerPanel[2];   // индекс - diskId (0=C,1=D), значение - чей путь сейчас на диске (0=left,1=right,NONE_PANEL=никто)
 
 int activeRight;   // 0 = активна левая панель, 1 = правая
+
+// ---- подтверждение удаления (F8, см. request_delete()/perform_delete()) ----
+int confirmPending;   // 0 = нет диалога, 1 = ждём Y/N/Enter/Esc
+int delPanel;
+int delDiskId;
+int delSel;
+int delName[12];
 
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
@@ -398,9 +407,9 @@ int render_right() {
 
 int render_status() {
     // Подсказка в стиле Norton Commander - реально работают F3 (View),
-    // F5 (Copy) и F10 (Build), остальные - только подписи (см.
-    // комментарий в начале файла). Чёрный текст на белом фоне на всю
-    // ширину строки - классическая полоса подсказок NC.
+    // F5 (Copy), F8 (Del) и F10 (Build), остальные - только подписи
+    // (см. комментарий в начале файла). Чёрный текст на белом фоне на
+    // всю ширину строки - классическая полоса подсказок NC.
     int x;
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
@@ -620,6 +629,130 @@ int build_selected_file() {
 
     // Новый ИМЯ.RUN появился рядом с исходником - обновить список.
     if (panel == 0) { populate_left(); render_left(); } else { populate_right(); render_right(); }
+
+    return 0;
+}
+
+// ---- удаление файла/пустой папки (F8, как в Norton Commander) ----
+//
+// Двухшаговое подтверждение: F8 запоминает, ЧТО удалять
+// (request_delete()), и включает confirmPending - пока он включён,
+// main() игнорирует все обычные клавиши и ждёт только Y/N/Enter/Esc
+// (см. main()). Disk::deleteFile() (DELETE=9) сам по себе уже отличает
+// файл от НЕПУСТОЙ папки (std::filesystem::remove просто отказывает,
+// STATUS=2) - здесь это никак отдельно не проверяется, тихий отказ
+// (папка останется в списке) - тот же стиль, что уже принят для
+// build_selected_file()/шелловского "build".
+
+const DELCONF_X = 20;
+const DELCONF_Y = 9;
+const DELCONF_W = 40;
+const DELCONF_H = 5;
+
+int draw_confirm_box() {
+    int x;
+    int y;
+    int i;
+    int ch;
+
+    print_char(DELCONF_X, DELCONF_Y, 201);                      // ╔
+    print_char(DELCONF_X + DELCONF_W - 1, DELCONF_Y, 187);       // ╗
+    x = DELCONF_X + 1;
+    while (x < DELCONF_X + DELCONF_W - 1) { print_char(x, DELCONF_Y, 205); x = x + 1; }
+
+    y = DELCONF_Y + 1;
+    while (y < DELCONF_Y + DELCONF_H - 1) {
+        print_char(DELCONF_X, y, 186);                           // ║
+        print_char(DELCONF_X + DELCONF_W - 1, y, 186);
+        x = DELCONF_X + 1;
+        while (x < DELCONF_X + DELCONF_W - 1) { print_char(x, y, 32); x = x + 1; }
+        y = y + 1;
+    }
+
+    print_char(DELCONF_X, DELCONF_Y + DELCONF_H - 1, 200);       // ╚
+    print_char(DELCONF_X + DELCONF_W - 1, DELCONF_Y + DELCONF_H - 1, 188); // ╝
+    x = DELCONF_X + 1;
+    while (x < DELCONF_X + DELCONF_W - 1) { print_char(x, DELCONF_Y + DELCONF_H - 1, 205); x = x + 1; }
+
+    // жёлтый текст на синем - классический модальный диалог NC
+    y = DELCONF_Y;
+    while (y < DELCONF_Y + DELCONF_H) {
+        x = DELCONF_X;
+        while (x < DELCONF_X + DELCONF_W) { set_color(x, y, 14, 1); x = x + 1; }
+        y = y + 1;
+    }
+
+    print_str(DELCONF_X + 2, DELCONF_Y + 1, "Delete");
+    i = 0;
+    while (i < 12) {
+        ch = delName[i];
+        if (ch == 0) { ch = 32; }
+        print_char(DELCONF_X + 9 + i, DELCONF_Y + 1, ch);
+        i = i + 1;
+    }
+    print_char(DELCONF_X + 21, DELCONF_Y + 1, 63);   // '?'
+
+    print_str(DELCONF_X + 2, DELCONF_Y + 3, "Y - yes    N/Esc - cancel");
+
+    return 0;
+}
+
+int request_delete() {
+    int panel;
+    int sel;
+    int i;
+
+    panel = activeRight;
+    if (panel == 0) { if (leftCount == 0) { return 0; } sel = leftSel; }
+    else { if (rightCount == 0) { return 0; } sel = rightSel; }
+
+    delPanel = panel;
+    if (panel == 0) { delDiskId = leftDisk; } else { delDiskId = rightDisk; }
+    delSel = sel;
+
+    i = 0;
+    while (i < 12) {
+        if (panel == 0) { delName[i] = leftNames[sel * 12 + i]; } else { delName[i] = rightNames[sel * 12 + i]; }
+        i = i + 1;
+    }
+
+    confirmPending = 1;
+    draw_confirm_box();
+
+    return 0;
+}
+
+int perform_delete() {
+    int i;
+    int ch;
+
+    sync_disk_to_panel(delPanel);
+
+    i = 0;
+    while (i < 12) {
+        ch = delName[i];
+        if (ch == 47) { ch = 0; }   // обрезать хвостовой '/' у папок - см. enter_dir()
+        d_set_name_char(delDiskId, i, ch);
+        i = i + 1;
+    }
+
+    d_cmd(delDiskId, 9);   // DELETE
+
+    if (delPanel == 0) { populate_left(); } else { populate_right(); }
+
+    clear_screen();
+    render_left();
+    render_right();
+    render_status();
+
+    return 0;
+}
+
+int cancel_delete() {
+    clear_screen();
+    render_left();
+    render_right();
+    render_status();
 
     return 0;
 }
@@ -913,6 +1046,7 @@ int main() {
     rightPathDepth = 0;
     diskOwnerPanel[0] = NONE_PANEL;
     diskOwnerPanel[1] = NONE_PANEL;
+    confirmPending = 0;
 
     populate_left();
     populate_right();
@@ -925,22 +1059,34 @@ int main() {
     while (running == 1) {
         key = peek(KEY_DATA);
 
-        if (key == 17) { running = 0; }   // Ctrl+Q
+        if (confirmPending == 1) {
+            // Диалог подтверждения удаления (F8) - все обычные клавиши
+            // игнорируются, пока не придёт один из этих четырёх кодов.
+            if (key == 89)  { confirmPending = 0; perform_delete(); }   // Y
+            if (key == 121) { confirmPending = 0; perform_delete(); }   // y
+            if (key == 13)  { confirmPending = 0; perform_delete(); }   // Enter
+            if (key == 78)  { confirmPending = 0; cancel_delete(); }    // N
+            if (key == 110) { confirmPending = 0; cancel_delete(); }    // n
+            if (key == 27)  { confirmPending = 0; cancel_delete(); }    // Esc
+        } else {
+            if (key == 17) { running = 0; }   // Ctrl+Q
 
-        if (key == 9) { switch_panel(); }   // Tab
+            if (key == 9) { switch_panel(); }   // Tab
 
-        if (key == KEY_UP)   { move_up(); }
-        if (key == KEY_DOWN) { move_down(); }
+            if (key == KEY_UP)   { move_up(); }
+            if (key == KEY_DOWN) { move_down(); }
 
-        if (key == 13) { enter_dir(); }     // Enter
-        if (key == 8)  { go_up_dir(); }     // Backspace
+            if (key == 13) { enter_dir(); }     // Enter
+            if (key == 8)  { go_up_dir(); }     // Backspace
 
-        if (key == FKEY_F3) { view_selected_file(); }   // F3
-        if (key == FKEY_F5) { do_copy(); }   // F5
-        if (key == FKEY_F10) { build_selected_file(); }   // F10
+            if (key == FKEY_F3) { view_selected_file(); }   // F3
+            if (key == FKEY_F5) { do_copy(); }   // F5
+            if (key == FKEY_F8) { request_delete(); }   // F8
+            if (key == FKEY_F10) { build_selected_file(); }   // F10
 
-        if (key == ALT_F1) { select_disk_left(); }
-        if (key == ALT_F2) { select_disk_right(); }
+            if (key == ALT_F1) { select_disk_left(); }
+            if (key == ALT_F2) { select_disk_right(); }
+        }
 
         wait_ms(80);
     }
