@@ -1560,7 +1560,7 @@ own address range.
 | Offset | Register | Description |
 |----------|---------|----------|
 | 0-11 | NAME | File name, ASCII, up to 12 characters, zero-padded |
-| 12 | COMMAND (write) | `1`=LIST_FIRST, `2`=LIST_NEXT, `3`=OPEN_READ, `4`=READ_BYTE, `5`=OPEN_WRITE, `6`=WRITE_BYTE, `7`=CLOSE, `8`=LOAD, `9`=DELETE, `10`=LOAD_SHELL, `11`=CHDIR, `12`=CHDIR_UP, `13`=LOAD_RAW, `14`=BUILD, `15`-`18`=LOAD_CHILD (levels 2-5) |
+| 12 | COMMAND (write) | `1`=LIST_FIRST, `2`=LIST_NEXT, `3`=OPEN_READ, `4`=READ_BYTE, `5`=OPEN_WRITE, `6`=WRITE_BYTE, `7`=CLOSE, `8`=LOAD, `9`=DELETE, `10`=LOAD_SHELL, `11`=CHDIR, `12`=CHDIR_UP, `13`=LOAD_RAW, `14`=BUILD, `15`-`18`=LOAD_CHILD (levels 2-5), `19`=MKDIR |
 | 13 | STATUS (read) | `0`=OK, `1`=EOF/no more files, `2`=error |
 | 14 | DATA | Read - the byte after `READ_BYTE`; write - the byte for `WRITE_BYTE` |
 | 15-18 | SIZE (read) | Size of the open file, 4 bytes little-endian (valid after `OPEN_READ`) |
@@ -1668,10 +1668,21 @@ the running `SHELL.ASM` while it's executing. In practice there's
 plenty of room even for large Mini-C programs (see below) - but this
 is a hard boundary, not a soft limit.
 
-`DELETE` (`9`) deletes the file `NAME` (`std::filesystem::remove`).
-`STATUS=0` on success, `STATUS=2` if the file didn't exist or
-couldn't be deleted. Ready-made usage example - the `del` terminal
-command.
+`DELETE` (`9`) deletes the file `NAME` (`std::filesystem::remove`) -
+also happily removes an EMPTY directory (the same call handles both;
+a non-empty directory is simply refused, no recursive delete exists).
+`STATUS=0` on success, `STATUS=2` if the file/directory didn't exist,
+wasn't empty, or couldn't be deleted. Ready-made usage examples - the
+`del` terminal command, and `C/TOOLS/FM.MC`'s `F8` (with a Y/N confirm
+dialog first - see `request_delete()`).
+
+`MKDIR` (`19`) creates a new, empty directory `NAME` in the current
+folder (`std::filesystem::create_directory`). `STATUS=0` on success,
+`STATUS=2` if a file/directory with that name already exists or the
+name is invalid. Unlike the other commands here, there's no `mkdir`
+terminal command in `SHELL.ASM` (yet) - the only ready-made usage
+example is `C/TOOLS/FM.MC`'s `F7` (prompts for a name in a small input
+box, then sends `MKDIR` - see `request_mkdir()`).
 
 `BUILD` (`14`) is like `LOAD`, but the assembled result is written NOT
 to RAM but to a new file on disk: the same name as `NAME`, but with

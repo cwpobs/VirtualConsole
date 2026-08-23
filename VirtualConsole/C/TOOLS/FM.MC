@@ -25,11 +25,12 @@
 // Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
 // Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
 // работают F3 (View - см. view_selected_file(), открывает выделенный
-// файл в C/TOOLS/VIEW.MC), F5 (Copy), F8 (Del - см. request_delete(),
-// удаляет выделенный файл/ПУСТУЮ папку после подтверждения Y/N) и F10
-// (Build - см. build_selected_file(), собирает выделенный *.ASM/*.MC
-// через BUILD в Disk), остальные - только подписи (v1, задел на
-// будущее: F4 Edit, F6 Move, F7 MkDir и т.д.).
+// файл в C/TOOLS/VIEW.MC), F5 (Copy), F7 (MkDir - см. request_mkdir(),
+// создаёт папку в текущей папке активной панели по введённому имени),
+// F8 (Del - см. request_delete(), удаляет выделенный файл/ПУСТУЮ папку
+// после подтверждения Y/N) и F10 (Build - см. build_selected_file(),
+// собирает выделенный *.ASM/*.MC через BUILD в Disk), остальные -
+// только подписи (v1, задел на будущее: F4 Edit, F6 Move и т.д.).
 //
 // Запуск *.RUN (run_program()) - через системный вызов SHELL.ASM
 // (shell_exec_child, см. ASSEMBLY.md/exec_child) - FM.MC только кладёт
@@ -52,6 +53,7 @@ const CLOCK_LOW = 0xF0000FFC;
 
 const FKEY_F3 = 61;   // View
 const FKEY_F5 = 63;   // Copy
+const FKEY_F7 = 65;   // MkDir
 const FKEY_F8 = 66;   // Del
 const FKEY_F10 = 68;  // Build
 const KEY_UP = 72;    // стрелка вверх (extended-код _getch())
@@ -111,6 +113,11 @@ int delPanel;
 int delDiskId;
 int delSel;
 int delName[12];
+
+// ---- ввод имени новой папки (F7, см. request_mkdir()/perform_mkdir()) ----
+int inputPending;   // 0 = нет диалога, 1 = ждём ввод имени (печатаемые символы/Backspace/Enter/Esc)
+int mkdirName[12];
+int mkdirLen;
 
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
@@ -407,9 +414,9 @@ int render_right() {
 
 int render_status() {
     // Подсказка в стиле Norton Commander - реально работают F3 (View),
-    // F5 (Copy), F8 (Del) и F10 (Build), остальные - только подписи
-    // (см. комментарий в начале файла). Чёрный текст на белом фоне на
-    // всю ширину строки - классическая полоса подсказок NC.
+    // F5 (Copy), F7 (MkDir), F8 (Del) и F10 (Build), остальные - только
+    // подписи (см. комментарий в начале файла). Чёрный текст на белом
+    // фоне на всю ширину строки - классическая полоса подсказок NC.
     int x;
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
@@ -740,6 +747,16 @@ int perform_delete() {
 
     if (delPanel == 0) { populate_left(); } else { populate_right(); }
 
+    redraw_panels();
+
+    return 0;
+}
+
+int redraw_panels() {
+    // Полная перерисовка обеих панелей - снимает с экрана любое
+    // модальное окошко (подтверждение удаления/ввод имени папки) и
+    // приводит вид в порядок после него. Общая для отмены (Esc/N) в
+    // обоих диалогах - см. main().
     clear_screen();
     render_left();
     render_right();
@@ -748,11 +765,96 @@ int perform_delete() {
     return 0;
 }
 
-int cancel_delete() {
-    clear_screen();
-    render_left();
-    render_right();
-    render_status();
+// ---- создание папки (F7, как в Norton Commander) ----
+//
+// В отличие от F8 (Y/N-подтверждение) - тут настоящий ввод текста:
+// печатаемые символы копятся в mkdirName/mkdirLen по одному за кадр,
+// пока inputPending==1 - main() в этом режиме тоже игнорирует все
+// обычные клавиши (см. main()). Использует то же окошко (координаты
+// DELCONF_X/Y/W/H), что и диалог удаления - они никогда не показаны
+// одновременно.
+
+int draw_mkdir_box() {
+    int x;
+    int y;
+    int i;
+    int ch;
+
+    print_char(DELCONF_X, DELCONF_Y, 201);                      // ╔
+    print_char(DELCONF_X + DELCONF_W - 1, DELCONF_Y, 187);       // ╗
+    x = DELCONF_X + 1;
+    while (x < DELCONF_X + DELCONF_W - 1) { print_char(x, DELCONF_Y, 205); x = x + 1; }
+
+    y = DELCONF_Y + 1;
+    while (y < DELCONF_Y + DELCONF_H - 1) {
+        print_char(DELCONF_X, y, 186);                           // ║
+        print_char(DELCONF_X + DELCONF_W - 1, y, 186);
+        x = DELCONF_X + 1;
+        while (x < DELCONF_X + DELCONF_W - 1) { print_char(x, y, 32); x = x + 1; }
+        y = y + 1;
+    }
+
+    print_char(DELCONF_X, DELCONF_Y + DELCONF_H - 1, 200);       // ╚
+    print_char(DELCONF_X + DELCONF_W - 1, DELCONF_Y + DELCONF_H - 1, 188); // ╝
+    x = DELCONF_X + 1;
+    while (x < DELCONF_X + DELCONF_W - 1) { print_char(x, DELCONF_Y + DELCONF_H - 1, 205); x = x + 1; }
+
+    // жёлтый текст на синем - тот же стиль, что и окошко удаления
+    y = DELCONF_Y;
+    while (y < DELCONF_Y + DELCONF_H) {
+        x = DELCONF_X;
+        while (x < DELCONF_X + DELCONF_W) { set_color(x, y, 14, 1); x = x + 1; }
+        y = y + 1;
+    }
+
+    print_str(DELCONF_X + 2, DELCONF_Y + 1, "New folder name:");
+
+    i = 0;
+    while (i < 12) {
+        if (i < mkdirLen) { ch = mkdirName[i]; } else { ch = 32; }
+        print_char(DELCONF_X + 2 + i, DELCONF_Y + 3, ch);
+        i = i + 1;
+    }
+    print_char(DELCONF_X + 2 + mkdirLen, DELCONF_Y + 3, 95);   // '_' - курсор сразу после введённого текста
+
+    return 0;
+}
+
+int request_mkdir() {
+    int i;
+
+    if (confirmPending == 1) { return 0; }   // диалог удаления уже открыт
+
+    mkdirLen = 0;
+    i = 0;
+    while (i < 12) { mkdirName[i] = 0; i = i + 1; }   // хвост от предыдущего ввода не должен утечь в NAME
+
+    inputPending = 1;
+    draw_mkdir_box();
+
+    return 0;
+}
+
+int perform_mkdir() {
+    int diskId;
+    int i;
+
+    diskId = leftDisk;
+    if (activeRight == 1) { diskId = rightDisk; }
+
+    sync_disk_to_panel(activeRight);
+
+    i = 0;
+    while (i < 12) {
+        d_set_name_char(diskId, i, mkdirName[i]);
+        i = i + 1;
+    }
+
+    d_cmd(diskId, 19);   // MKDIR
+
+    if (activeRight == 0) { populate_left(); } else { populate_right(); }
+
+    redraw_panels();
 
     return 0;
 }
@@ -1047,6 +1149,7 @@ int main() {
     diskOwnerPanel[0] = NONE_PANEL;
     diskOwnerPanel[1] = NONE_PANEL;
     confirmPending = 0;
+    inputPending = 0;
 
     populate_left();
     populate_right();
@@ -1065,27 +1168,51 @@ int main() {
             if (key == 89)  { confirmPending = 0; perform_delete(); }   // Y
             if (key == 121) { confirmPending = 0; perform_delete(); }   // y
             if (key == 13)  { confirmPending = 0; perform_delete(); }   // Enter
-            if (key == 78)  { confirmPending = 0; cancel_delete(); }    // N
-            if (key == 110) { confirmPending = 0; cancel_delete(); }    // n
-            if (key == 27)  { confirmPending = 0; cancel_delete(); }    // Esc
+            if (key == 78)  { confirmPending = 0; redraw_panels(); }    // N
+            if (key == 110) { confirmPending = 0; redraw_panels(); }    // n
+            if (key == 27)  { confirmPending = 0; redraw_panels(); }    // Esc
         } else {
-            if (key == 17) { running = 0; }   // Ctrl+Q
+            if (inputPending == 1) {
+                // Диалог ввода имени новой папки (F7) - обычные клавиши
+                // тоже игнорируются; печатаемые символы (кроме '/' -
+                // зарезервирован под маркер папки в списках, см.
+                // populate_left/right) копятся в mkdirName.
+                if (key == 13) { if (mkdirLen > 0) { inputPending = 0; perform_mkdir(); } }   // Enter
+                if (key == 27) { inputPending = 0; redraw_panels(); }                          // Esc
+                if (key == 8) {
+                    if (mkdirLen > 0) { mkdirLen = mkdirLen - 1; mkdirName[mkdirLen] = 0; draw_mkdir_box(); }
+                }   // Backspace
+                if (key >= 32) {
+                    if (key <= 126) {
+                        if (key != 47) {
+                            if (mkdirLen < 12) {
+                                mkdirName[mkdirLen] = key;
+                                mkdirLen = mkdirLen + 1;
+                                draw_mkdir_box();
+                            }
+                        }
+                    }
+                }
+            } else {
+                if (key == 17) { running = 0; }   // Ctrl+Q
 
-            if (key == 9) { switch_panel(); }   // Tab
+                if (key == 9) { switch_panel(); }   // Tab
 
-            if (key == KEY_UP)   { move_up(); }
-            if (key == KEY_DOWN) { move_down(); }
+                if (key == KEY_UP)   { move_up(); }
+                if (key == KEY_DOWN) { move_down(); }
 
-            if (key == 13) { enter_dir(); }     // Enter
-            if (key == 8)  { go_up_dir(); }     // Backspace
+                if (key == 13) { enter_dir(); }     // Enter
+                if (key == 8)  { go_up_dir(); }     // Backspace
 
-            if (key == FKEY_F3) { view_selected_file(); }   // F3
-            if (key == FKEY_F5) { do_copy(); }   // F5
-            if (key == FKEY_F8) { request_delete(); }   // F8
-            if (key == FKEY_F10) { build_selected_file(); }   // F10
+                if (key == FKEY_F3) { view_selected_file(); }   // F3
+                if (key == FKEY_F5) { do_copy(); }   // F5
+                if (key == FKEY_F7) { request_mkdir(); }   // F7
+                if (key == FKEY_F8) { request_delete(); }   // F8
+                if (key == FKEY_F10) { build_selected_file(); }   // F10
 
-            if (key == ALT_F1) { select_disk_left(); }
-            if (key == ALT_F2) { select_disk_right(); }
+                if (key == ALT_F1) { select_disk_left(); }
+                if (key == ALT_F2) { select_disk_right(); }
+            }
         }
 
         wait_ms(80);

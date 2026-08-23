@@ -93,6 +93,7 @@ void Disk::write(uint32_t address, uint8_t value)
         case 16: loadChildRun(EXEC_CHILD_DEPTH3_ADDRESS); break;
         case 17: loadChildRun(EXEC_CHILD_DEPTH4_ADDRESS); break;
         case 18: loadChildRun(EXEC_CHILD_DEPTH5_ADDRESS); break;
+        case 19: makeDir(); break;
         default: break;
         }
 
@@ -328,6 +329,20 @@ void Disk::deleteFile()
     bool removed = std::filesystem::remove(basePath / currentDir / nameAsString(), ec);
 
     status = (!ec && removed) ? 0 : 2;
+}
+
+void Disk::makeDir()
+{
+    // MKDIR (19) - создаёт папку NAME в текущей папке (F7 в FM.MC, см.
+    // ASSEMBLY.md, "Disk"). create_directory() возвращает false (без
+    // ec), если папка с таким именем уже есть - тот же STATUS=2, что и
+    // прочие отказы здесь, отдельно не различаем "уже есть" от
+    // "невалидное имя".
+    std::error_code ec;
+
+    bool created = std::filesystem::create_directory(basePath / currentDir / nameAsString(), ec);
+
+    status = (!ec && created) ? 0 : 2;
 }
 
 void Disk::changeDir()

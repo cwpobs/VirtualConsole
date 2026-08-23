@@ -139,6 +139,7 @@ private:
 
     void loadProgram(uint32_t targetAddress);
     void deleteFile();
+    void makeDir();
     void changeDir();
     void changeDirUp();
     void loadRaw(uint32_t targetAddress);
