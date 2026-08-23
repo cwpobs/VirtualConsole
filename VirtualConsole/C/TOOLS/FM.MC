@@ -25,8 +25,10 @@
 // Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
 // Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
 // работают F3 (View - см. view_selected_file(), открывает выделенный
-// файл в C/TOOLS/VIEW.MC) и F5 (Copy), остальные - только подписи (v1,
-// задел на будущее: F4 Edit, F6 Move, F7 MkDir, F8 Del и т.д.).
+// файл в C/TOOLS/VIEW.MC), F5 (Copy) и F10 (Build - см.
+// build_selected_file(), собирает выделенный *.ASM/*.MC через BUILD в
+// Disk), остальные - только подписи (v1, задел на будущее: F4 Edit,
+// F6 Move, F7 MkDir, F8 Del и т.д.).
 //
 // Запуск *.RUN (run_program()) - через системный вызов SHELL.ASM
 // (shell_exec_child, см. ASSEMBLY.md/exec_child) - FM.MC только кладёт
@@ -49,6 +51,7 @@ const CLOCK_LOW = 0xF0000FFC;
 
 const FKEY_F3 = 61;   // View
 const FKEY_F5 = 63;   // Copy
+const FKEY_F10 = 68;  // Build
 const KEY_UP = 72;    // стрелка вверх (extended-код _getch())
 const KEY_DOWN = 80;  // стрелка вниз
 const ALT_F1 = 104;   // сменить диск левой панели
@@ -394,15 +397,15 @@ int render_right() {
 }
 
 int render_status() {
-    // Подсказка в стиле Norton Commander - реально работают F3 (View)
-    // и F5 (Copy), остальные - только подписи (см. комментарий в
-    // начале файла). Чёрный текст на белом фоне на всю ширину строки -
-    // классическая полоса подсказок NC.
+    // Подсказка в стиле Norton Commander - реально работают F3 (View),
+    // F5 (Copy) и F10 (Build), остальные - только подписи (см.
+    // комментарий в начале файла). Чёрный текст на белом фоне на всю
+    // ширину строки - классическая полоса подсказок NC.
     int x;
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
 
-    print_str(0, MAX_FILES + 3, "F1Help F2Menu F3View F4Edit F5Copy F6Move F7MkDir F8Del F9PgDn F10Quit");
+    print_str(0, MAX_FILES + 3, "F1Help F2Menu F3View F4Edit F5Copy F6Move F7MkDir F8Del F9PgDn F10Build");
     x = 0;
     while (x < 80) {
         set_color(x, MAX_FILES + 3, 0, 7);
@@ -515,6 +518,112 @@ int is_run_file(int panel, int sel) {
     return 1;
 }
 
+// ---- сборка *.ASM/*.MC (F10) ----
+
+int is_buildable_file(int panel, int sel) {
+    // Тот же приём, что is_run_file() выше, но проверяет ".ASM" (4
+    // символа) ИЛИ ".MC" (3 символа) - оба расширения Disk::build()
+    // уже различает сам (см. ASSEMBLY.md, "Disk", BUILD). Каталоги
+    // (имя оканчивается на '/', 47) ни под одно из них не подходят -
+    // отдельной проверки isDir не нужно.
+    int len;
+    int done;
+    int ch;
+    int c1;
+    int c2;
+    int c3;
+    int c4;
+
+    len = 0;
+    done = 0;
+    while (done == 0) {
+        if (panel == 0) { ch = leftNames[sel * 12 + len]; } else { ch = rightNames[sel * 12 + len]; }
+        if (ch == 0) {
+            done = 1;
+        } else {
+            len = len + 1;
+            if (len >= 12) { done = 1; }
+        }
+    }
+
+    if (len >= 4) {
+        if (panel == 0) {
+            c1 = leftNames[sel * 12 + len - 4];
+            c2 = leftNames[sel * 12 + len - 3];
+            c3 = leftNames[sel * 12 + len - 2];
+            c4 = leftNames[sel * 12 + len - 1];
+        } else {
+            c1 = rightNames[sel * 12 + len - 4];
+            c2 = rightNames[sel * 12 + len - 3];
+            c3 = rightNames[sel * 12 + len - 2];
+            c4 = rightNames[sel * 12 + len - 1];
+        }
+        if (c1 == 46) {                    // '.'
+            if (c2 == 65) {                // 'A'
+                if (c3 == 83) {            // 'S'
+                    if (c4 == 77) { return 1; }   // 'M'
+                }
+            }
+        }
+    }
+
+    if (len >= 3) {
+        if (panel == 0) {
+            c2 = leftNames[sel * 12 + len - 3];
+            c3 = leftNames[sel * 12 + len - 2];
+            c4 = leftNames[sel * 12 + len - 1];
+        } else {
+            c2 = rightNames[sel * 12 + len - 3];
+            c3 = rightNames[sel * 12 + len - 2];
+            c4 = rightNames[sel * 12 + len - 1];
+        }
+        if (c2 == 46) {                // '.'
+            if (c3 == 77) {            // 'M'
+                if (c4 == 67) { return 1; }   // 'C'
+            }
+        }
+    }
+
+    return 0;
+}
+
+int build_selected_file() {
+    // F10 - собирает выделенный *.ASM/*.MC через BUILD (14 в Disk) -
+    // в отличие от run_program()/view_selected_file(), не запускает
+    // ничего (не exec_child, обычная команда устройства) - просто
+    // кладёт NAME на диск панели и ждёт результата синхронно, как
+    // "build ИМЯ" в шелле (см. ASSEMBLY.md, "Disk"). Тихо ничего не
+    // делает при ошибке компиляции/сборки - как и сам шелл, отдельного
+    // сообщения об ошибке не показывает.
+    int panel;
+    int diskId;
+    int sel;
+    int i;
+    int ch;
+
+    panel = activeRight;
+    if (panel == 0) { diskId = leftDisk; sel = leftSel; } else { diskId = rightDisk; sel = rightSel; }
+
+    if (panel == 0) { if (leftCount == 0) { return 0; } } else { if (rightCount == 0) { return 0; } }
+    if (is_buildable_file(panel, sel) == 0) { return 0; }
+
+    sync_disk_to_panel(panel);
+
+    i = 0;
+    while (i < 12) {
+        if (panel == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        d_set_name_char(diskId, i, ch);
+        i = i + 1;
+    }
+
+    d_cmd(diskId, 14);   // BUILD
+
+    // Новый ИМЯ.RUN появился рядом с исходником - обновить список.
+    if (panel == 0) { populate_left(); render_left(); } else { populate_right(); render_right(); }
+
+    return 0;
+}
+
 int run_program() {
     // Запускает выбранный *.RUN как дочернюю программу - см.
     // ASSEMBLY.md, "exec_child". Сама загрузка (какой командой диска,
@@ -570,9 +679,11 @@ int view_selected_file() {
     // (diskId), но НЕ обязательно в той же папке, где сейчас currentDir
     // (FM.MC постоянно уводит его по панелям) - если LOAD_CHILD не
     // найдёт VIEW.RUN в текущей папке, Disk::loadChildRun() сам
-    // подстрахуется резервным поиском в КОРНЕ диска (см. Disk.cpp) -
-    // поэтому достаточно один раз положить VIEW.RUN в корень диска
-    // (C:\ и/или D:\, смотря откуда просматривать файлы).
+    // подстрахуется резервным поиском там, откуда была запущена сама
+    // FM.MC (Disk::lastExecDir), и только потом - в корне диска (см.
+    // Disk.cpp) - поэтому достаточно собрать VIEW.RUN один раз, В ТОЙ
+    // ЖЕ папке, что и сама FM.MC (обычно C/TOOLS) - никуда специально
+    // копировать не нужно.
     int panel;
     int diskId;
     int sel;
@@ -826,6 +937,7 @@ int main() {
 
         if (key == FKEY_F3) { view_selected_file(); }   // F3
         if (key == FKEY_F5) { do_copy(); }   // F5
+        if (key == FKEY_F10) { build_selected_file(); }   // F10
 
         if (key == ALT_F1) { select_disk_left(); }
         if (key == ALT_F2) { select_disk_right(); }
