@@ -88,6 +88,7 @@ int scrollTop;             // вертикальная прокрутка (пе�
 int dirty;                 // 1 = есть несохранённые правки
 int fileTruncated;         // 1 = часть файла не влезла при загрузке
 int endsWithNewline;       // 1 = исходный файл кончался '\n' (для точного сохранения)
+int usesCRLF;              // 1 = исходный файл использовал "\r\n" (Windows) - см. load_file()
 
 int exitConfirmPending;    // Esc при dirty==1 -> Y/N/Esc модалка
 int saveWarnPending;       // Ctrl+S при fileTruncated==1 -> предупреждение
@@ -273,6 +274,8 @@ int load_file(int diskId) {
     int ch;
     int col;
     int done;
+    int pendingCR;
+    int handled;
 
     diskio_cmd(diskId, DISKIO_OPEN_READ);
     if (diskio_status(diskId) == 2) {
@@ -281,6 +284,7 @@ int load_file(int diskId) {
         lineLen[0] = 0;
         endsWithNewline = 1;
         fileTruncated = 0;
+        usesCRLF = 0;
         return 0;
     }
 
@@ -288,12 +292,32 @@ int load_file(int diskId) {
     col = 0;
     fileTruncated = 0;
     endsWithNewline = 1;
+    usesCRLF = 0;
+    pendingCR = 0;
     done = 0;
 
+    // '\r' (13) сам по себе НЕ считается разделителем строк и никогда
+    // не попадает в буфер напрямую - если хранить его как обычный
+    // символ (файл с Windows-переводом строк "\r\n"), при выводе на
+    // реальный терминал (TextVRAM::render() -> writeUtf8()) он
+    // печатается КАК НАСТОЯЩИЙ возврат каретки - терминал перематывает
+    // курсор в начало ТЕКУЩЕЙ строки, и всё, что рисуется после,
+    // накладывается на уже напечатанное - экран выглядит как "мусор,
+    // текста не видно" (реальный баг, найден на game1.txt). "\r\n"
+    // трактуется как один перевод строки (usesCRLF=1 - для точного
+    // сохранения в том же формате), одиночный "\r" (не перед '\n') -
+    // редкий случай, сохраняется как обычный символ.
     while (done == 0) {
         diskio_cmd(diskId, DISKIO_READ_BYTE);
         if (diskio_status(diskId) == 1) {
             // EOF
+            if (pendingCR == 1) {
+                if (lineCount < MAX_LINES) {
+                    if (col < MAX_COLS) { set_char(lineCount, col, 13); col = col + 1; }
+                    else { fileTruncated = 1; }
+                }
+                pendingCR = 0;
+            }
             if (col > 0) {
                 if (lineCount < MAX_LINES) {
                     lineLen[lineCount] = col;
@@ -306,25 +330,54 @@ int load_file(int diskId) {
             done = 1;
         } else {
             ch = diskio_data(diskId);
-            if (ch == 10) {
-                if (lineCount < MAX_LINES) {
-                    lineLen[lineCount] = col;
-                    lineCount = lineCount + 1;
-                } else {
-                    fileTruncated = 1;   // нет места для новой строки
-                }
-                col = 0;
-            } else {
-                if (lineCount < MAX_LINES) {
-                    if (col < MAX_COLS) {
-                        set_char(lineCount, col, ch);
-                        col = col + 1;
+            handled = 0;
+
+            if (pendingCR == 1) {
+                pendingCR = 0;
+                if (ch == 10) {
+                    usesCRLF = 1;
+                    if (lineCount < MAX_LINES) {
+                        lineLen[lineCount] = col;
+                        lineCount = lineCount + 1;
                     } else {
-                        fileTruncated = 1;   // строка длиннее MAX_COLS - хвост отброшен
+                        fileTruncated = 1;
+                    }
+                    col = 0;
+                    handled = 1;
+                } else {
+                    // одиночный '\r' (не перед '\n') - сохраняем как обычный символ
+                    if (lineCount < MAX_LINES) {
+                        if (col < MAX_COLS) { set_char(lineCount, col, 13); col = col + 1; }
+                        else { fileTruncated = 1; }
                     }
                 }
-                // если lineCount >= MAX_LINES - байт молча пропускается,
-                // fileTruncated уже выставлен веткой '\n' выше
+            }
+
+            if (handled == 0) {
+                if (ch == 13) {
+                    pendingCR = 1;
+                } else {
+                    if (ch == 10) {
+                        if (lineCount < MAX_LINES) {
+                            lineLen[lineCount] = col;
+                            lineCount = lineCount + 1;
+                        } else {
+                            fileTruncated = 1;   // нет места для новой строки
+                        }
+                        col = 0;
+                    } else {
+                        if (lineCount < MAX_LINES) {
+                            if (col < MAX_COLS) {
+                                set_char(lineCount, col, ch);
+                                col = col + 1;
+                            } else {
+                                fileTruncated = 1;   // строка длиннее MAX_COLS - хвост отброшен
+                            }
+                        }
+                        // если lineCount >= MAX_LINES - байт молча пропускается,
+                        // fileTruncated уже выставлен веткой '\n' выше
+                    }
+                }
             }
         }
     }
@@ -354,10 +407,12 @@ int save_file(int diskId) {
             c = c + 1;
         }
         if (r < lineCount - 1) {
+            if (usesCRLF == 1) { diskio_set_data(diskId, 13); diskio_cmd(diskId, DISKIO_WRITE_BYTE); }
             diskio_set_data(diskId, 10);
             diskio_cmd(diskId, DISKIO_WRITE_BYTE);
         } else {
             if (endsWithNewline == 1) {
+                if (usesCRLF == 1) { diskio_set_data(diskId, 13); diskio_cmd(diskId, DISKIO_WRITE_BYTE); }
                 diskio_set_data(diskId, 10);
                 diskio_cmd(diskId, DISKIO_WRITE_BYTE);
             }
