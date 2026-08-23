@@ -3,6 +3,7 @@
 #include "TextVRAM.h"
 #include "TextAttr.h"
 #include "Font8x16.h"
+#include "VideoCard.h"
 
 #include <cstring>
 #include <utility>
@@ -108,9 +109,8 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
 {
     if (msg == WM_CLOSE || msg == WM_DESTROY)
     {
-        // Как у VideoCard - не подвешиваем рендер-поток, он сам
-        // заметит WM_QUIT в своём цикле сообщений и завершится (см.
-        // renderThreadMain).
+        // Не подвешиваем рендер-поток - он сам заметит WM_QUIT в своём
+        // цикле сообщений и завершится (см. renderThreadMain).
         PostQuitMessage(0);
         return 0;
     }
@@ -172,8 +172,7 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         // Окно видеоконсоли живёт своим отдельным HWND - если у него
         // фокус ОС, консольные _kbhit()/_getch() у Keyboard ничего не
         // получают. Ловим нажатия сами и кладём их в ту же очередь
-        // Keyboard, что и обычный консольный ввод/VideoCard - тот же
-        // приём, что VideoCard.cpp, WindowProc.
+        // Keyboard, что и обычный консольный ввод.
         VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
         if (self != nullptr && self->keyboard != nullptr)
@@ -201,8 +200,8 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-VideoConsole::VideoConsole(Keyboard* keyboard, int scale)
-    : keyboard(keyboard), scale(scale), stopRequested(false),
+VideoConsole::VideoConsole(Keyboard* keyboard, VideoCard* videoCard, int scale)
+    : keyboard(keyboard), videoCard(videoCard), scale(scale), stopRequested(false),
     cursorRow(0), cursorCol(0), cursorVisible(false), frameGeneration(0)
 {
     for (int i = 0; i < COLS * ROWS; i++)
@@ -269,13 +268,26 @@ void VideoConsole::rasterize(uint8_t* rgb) const
             uint8_t ch = chars[cell];
             uint8_t attribute = attrs[cell];
 
+            // "Нетронутая" ячейка (пробел, дефолтный атрибут - т.е.
+            // состояние сразу после CLEAR/загрузки) - прозрачна, не
+            // трогаем rgb вообще: под ней виден слой VideoCard (или
+            // чёрный фон), см. compositeVideoCardLayer, вызванный
+            // раньше в renderThreadMain, и комментарий класса про
+            // правило прозрачности. Курсор поверх прозрачной ячейки
+            // всё равно должен быть виден - его ОТДЕЛЬНО проверяем
+            // ниже, до пропуска.
+            bool cursorHere = cursorVisible && blinkOn &&
+                row == cursorRow && col == cursorCol;
+
+            if (ch == ' ' && attribute == TextAttr::DEFAULT_ATTRIBUTE && !cursorHere)
+            {
+                continue;
+            }
+
             int fg = attribute & 0x0F;
             int bg = (attribute >> 4) & 0x0F;
 
-            bool isCursorCell = cursorVisible && blinkOn &&
-                row == cursorRow && col == cursorCol;
-
-            if (isCursorCell)
+            if (cursorHere)
             {
                 std::swap(fg, bg);
             }
@@ -305,6 +317,68 @@ void VideoConsole::rasterize(uint8_t* rgb) const
                     rgb[dst + 2] = color[2];
                 }
             }
+        }
+    }
+}
+
+void VideoConsole::compositeVideoCardLayer(uint8_t* rgb) const
+{
+    if (!videoCard->isActive())
+    {
+        memset(rgb, 0, static_cast<size_t>(PIXEL_WIDTH) * PIXEL_HEIGHT * 3);
+        return;
+    }
+
+    static uint8_t cardFrame[VideoCard::WIDTH * VideoCard::HEIGHT * VideoCard::CHANNELS];
+    videoCard->compositeFrame(cardFrame);
+
+    // Вписываем 320x240 (4:3) в 640x400 (8:5) с сохранением пропорций -
+    // по высоте (лимитирующее измерение, scale ~1.667) картинка
+    // заполняет канву целиком, по ширине остаются чёрные поля
+    // (пилларбокс) слева/справа - см. комментарий класса. Метод -
+    // "ближайший сосед" (без сглаживания), под стать пиксель-арту
+    // VideoCard и уже принятому подходу к масштабированию шрифта.
+    double scale = (PIXEL_WIDTH / static_cast<double>(VideoCard::WIDTH) <
+        PIXEL_HEIGHT / static_cast<double>(VideoCard::HEIGHT))
+        ? PIXEL_WIDTH / static_cast<double>(VideoCard::WIDTH)
+        : PIXEL_HEIGHT / static_cast<double>(VideoCard::HEIGHT);
+
+    int scaledW = static_cast<int>(VideoCard::WIDTH * scale);
+    int scaledH = static_cast<int>(VideoCard::HEIGHT * scale);
+    int offsetX = (PIXEL_WIDTH - scaledW) / 2;
+    int offsetY = (PIXEL_HEIGHT - scaledH) / 2;
+
+    for (int py = 0; py < PIXEL_HEIGHT; py++)
+    {
+        int cardY = py - offsetY;
+
+        if (cardY < 0 || cardY >= scaledH)
+        {
+            memset(&rgb[(py * PIXEL_WIDTH) * 3], 0, static_cast<size_t>(PIXEL_WIDTH) * 3);
+            continue;
+        }
+
+        int srcY = cardY * VideoCard::HEIGHT / scaledH;
+
+        for (int px = 0; px < PIXEL_WIDTH; px++)
+        {
+            int cardX = px - offsetX;
+            int dst = (py * PIXEL_WIDTH + px) * 3;
+
+            if (cardX < 0 || cardX >= scaledW)
+            {
+                rgb[dst] = 0;
+                rgb[dst + 1] = 0;
+                rgb[dst + 2] = 0;
+                continue;
+            }
+
+            int srcX = cardX * VideoCard::WIDTH / scaledW;
+            int src = (srcY * VideoCard::WIDTH + srcX) * VideoCard::CHANNELS;
+
+            rgb[dst] = cardFrame[src];
+            rgb[dst + 1] = cardFrame[src + 1];
+            rgb[dst + 2] = cardFrame[src + 2];
         }
     }
 }
@@ -396,14 +470,20 @@ void VideoConsole::renderThreadMain()
             break;
         }
 
+        // Пока VideoCard активна, её кадр может меняться каждый тик
+        // (спрайты/тайлы/3D двигаются) без единого изменения текста -
+        // frameGeneration тут не помощник, перерисовываем каждую
+        // итерацию, как и при видимом мигающем курсоре.
+        bool videoCardActive = videoCard->isActive();
         bool needRedraw;
 
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            needRedraw = (frameGeneration != lastRasterized) || cursorVisible;
+            needRedraw = (frameGeneration != lastRasterized) || cursorVisible || videoCardActive;
 
             if (needRedraw)
             {
+                compositeVideoCardLayer(staging);
                 rasterize(staging);
                 lastRasterized = frameGeneration;
             }

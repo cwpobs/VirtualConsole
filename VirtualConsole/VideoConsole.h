@@ -13,25 +13,42 @@
 class Keyboard;
 class TextVRAM;
 class TextAttr;
+class VideoCard;
 
-// Видеоконсоль: тот же текстовый режим 80x25 (символ CP866 + fg/bg
-// атрибут), что и обычная консоль (см. TextVRAM/TextAttr), но
-// рисуется пиксельно - битмап-шрифтом (см. Font8x16.h) в собственное
-// графическое окно (Win32 + OpenGL/WGL), а не ANSI-последовательностями
-// в окно консоли Windows. Программы не видят разницы: они по-прежнему
-// пишут в TextVRAM/TextAttr через шину как раньше (см. main.cpp) -
-// VideoConsole лишь ВТОРОЙ, альтернативный рендерер тех же данных, не
+// Видеоконсоль: единственное графическое окно на весь процесс -
+// текстовый режим 80x25 (символ CP866 + fg/bg атрибут, см.
+// TextVRAM/TextAttr) и картинка VideoCard (320x240 + спрайты/тайлы/
+// 3D, см. VideoCard.h) - это два слоя ОДНОЙ композиции, а не два
+// отдельных окна. Программы не видят разницы: TextVRAM/TextAttr и
+// регистры VideoCard пишутся через шину точно как раньше (см.
+// main.cpp) - VideoConsole лишь общий рендерер их обоих, само не
 // устройство шины (нет MMIO/регистров).
 //
-// Архитектура - по образцу VideoCard (см. VideoCard.h): окно, message
-// pump и OpenGL целиком живут в отдельном std::thread, независимом от
-// потока CPU. Между потоками - не общий указатель на TextVRAM/TextAttr
-// (там нет мьютекса, а пишет в них поток CPU), а push-копия: main.cpp
-// вызывает pushFrame() в тех же точках, где раньше вызывал ANSI-
-// redraw() (см. main.cpp, throttling по 150 мс/keyCount), копия под
-// мьютексом ложится в СВОЮ память устройства ("своя память для
-// построения страницы" - см. ASSEMBLY.md, "VideoConsole"), а рендер-
-// поток растеризует её в пиксели независимо, на собственном таймере.
+// Слой VideoCard - фон: если VideoCard::isActive() (между MODE_ON и
+// MODE_OFF), его 320x240 (4:3) кадр вписывается в канву 640x400 (8:5)
+// с сохранением пропорций и центрированием (чёрные поля по бокам) -
+// см. compositeVideoCardLayer(). Нативное разрешение VideoCard/Gpu3D
+// не меняем: оно зашито и в проекцию 3D, и в существующие GAMES/DEMOS.
+//
+// Слой текста - поверх, с ОДНИМ правилом прозрачности: ячейка
+// (' ', TextAttr::DEFAULT_ATTRIBUTE) - "нетронутая" после CLEAR/
+// загрузки - не рисуется вообще, снизу виден слой VideoCard/чёрный
+// фон. Любой другой символ или изменённый атрибут остаётся полностью
+// непрозрачным, как раньше - см. rasterize(). Это же и механизм для
+// HUD поверх графики в играх: обычный крашеный текст поверх активной
+// VideoCard уже просто работает.
+//
+// Окно, message pump и OpenGL живут в отдельном std::thread,
+// независимом от потока CPU. Между потоками - не общие указатели на
+// TextVRAM/TextAttr/VideoCard (там нет мьютекса на стороне
+// TextVRAM/TextAttr, а пишет в них поток CPU), а push-копия текста:
+// main.cpp вызывает pushFrame() в тех же точках, где раньше вызывал
+// ANSI-redraw() (см. main.cpp, throttling по 150 мс/keyCount), копия
+// под мьютексом ложится в СВОЮ память устройства ("своя память для
+// построения страницы" - см. ASSEMBLY.md, "VideoConsole"). VideoCard
+// же сам потокобезопасен (framebufferMutex, isActive()/compositeFrame()
+// можно звать из любого потока) - рендер-поток обращается к нему
+// напрямую, копия не нужна.
 class VideoConsole
 {
 public:
@@ -41,13 +58,14 @@ public:
     static const int CELL_W = 8;
     static const int CELL_H = 16;
 
-    // keyboard - куда класть нажатия, пойманные графическим окном
-    // (WM_CHAR), пока у него фокус ОС - тот же приём, что у VideoCard
-    // (см. VideoCard.h, WindowProc/injectKey). scale - целочисленный
-    // масштаб пикселя окна (1 = 640x400, 2 = 1280x800 и т.д.) - глиф
-    // остаётся резким при увеличении, т.к. рисуется как есть, без
-    // сглаживания (см. renderThreadMain, glPixelZoom).
-    VideoConsole(Keyboard* keyboard, int scale);
+    // keyboard - куда класть нажатия, пойманные окном (WM_CHAR/
+    // WM_KEYDOWN), пока у него фокус ОС. videoCard - источник слоя
+    // графики (см. compositeVideoCardLayer) - не может быть nullptr.
+    // scale - целочисленный масштаб пикселя окна (1 = 640x400,
+    // 2 = 1280x800 и т.д.) - глиф остаётся резким при увеличении, т.к.
+    // рисуется как есть, без сглаживания (см. renderThreadMain,
+    // glPixelZoom).
+    VideoConsole(Keyboard* keyboard, VideoCard* videoCard, int scale);
     ~VideoConsole();
 
     // Открывает окно и стартует рендер-поток - вызывается один раз из
@@ -73,7 +91,16 @@ private:
     void renderThreadMain();
     void rasterize(uint8_t* rgb) const;
 
+    // Слой VideoCard (фон) - вписывает compositeFrame() (320x240) в
+    // rgb (640x400) с сохранением пропорций, центрированием и чёрными
+    // полями; если !videoCard->isActive() - просто заливает rgb
+    // чёрным. Вызывается в renderThreadMain ПЕРЕД rasterize(), которая
+    // рисует текст поверх и местами оставляет этот фон видимым (см.
+    // правило прозрачности в комментарии класса).
+    void compositeVideoCardLayer(uint8_t* rgb) const;
+
     Keyboard* keyboard;
+    VideoCard* videoCard;
     int scale;
 
     std::thread renderThread;

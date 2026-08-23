@@ -66,7 +66,7 @@ int main()
     DebugPort debugPort(&cpu);
     Disk diskC("C", &bus);
     Disk diskD("D", &bus);
-    VideoCard videoCard(&keyboard);
+    VideoCard videoCard;
     Clock clock;
     PngLoader pngLoader(&videoCard, &diskC);
     MapLoader mapLoader(&videoCard, &diskC);
@@ -74,7 +74,7 @@ int main()
     ModLoader modLoader(&soundCard, &diskC);
     Gpu3D gpu3D(&videoCard);
     Assembler assembler;
-    VideoConsole videoConsole(&keyboard, config.videoConsoleScale);
+    VideoConsole videoConsole(&keyboard, &videoCard, config.videoConsoleScale);
 
     if (config.useVideoConsole)
     {

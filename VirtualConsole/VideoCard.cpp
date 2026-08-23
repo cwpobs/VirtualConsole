@@ -1,72 +1,9 @@
 #include "VideoCard.h"
-#include "Keyboard.h"
 
 #include <cstring>
 
-#define NOMINMAX
-#include <Windows.h>
-#include <GL/gl.h>
-
-#pragma comment(lib, "opengl32.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "user32.lib")
-
-namespace
-{
-    const wchar_t* WINDOW_CLASS_NAME = L"VirtualConsoleVideoCard";
-}
-
-LRESULT CALLBACK VideoCard::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    if (msg == WM_CLOSE || msg == WM_DESTROY)
-    {
-        // Пользователь закрыл окно крестиком - не подвешиваем
-        // рендер-поток, он сам заметит WM_QUIT в своём цикле
-        // сообщений и завершится (см. renderThreadMain).
-        PostQuitMessage(0);
-        return 0;
-    }
-
-    if (msg == WM_CHAR)
-    {
-        // Окно видеокарты живёт своим отдельным HWND - если у него
-        // фокус ОС, консольные _kbhit()/_getch() у Keyboard ничего не
-        // получают (это отдельная консоль). Ловим нажатия сами и
-        // кладём их в ту же очередь Keyboard, что и обычный
-        // консольный ввод - тогда неважно, какое окно в фокусе.
-        // TranslateMessage (уже вызывается в цикле сообщений, см.
-        // renderThreadMain) сам превращает Ctrl+буква в управляющий
-        // код 1-26 - Ctrl+Q придёт сюда уже как wParam==17, ровно то
-        // же значение, что даёт _getch() в консоли.
-        VideoCard* self = reinterpret_cast<VideoCard*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-
-        if (self != nullptr && self->keyboard != nullptr)
-        {
-            wchar_t wch = static_cast<wchar_t>(wParam);
-            uint8_t byte;
-
-            if (wch < 128)
-            {
-                byte = static_cast<uint8_t>(wch);
-            }
-            else
-            {
-                char converted = 0;
-                WideCharToMultiByte(866, 0, &wch, 1, &converted, 1, nullptr, nullptr);
-                byte = static_cast<uint8_t>(converted);
-            }
-
-            self->keyboard->injectKey(byte);
-        }
-
-        return 0;
-    }
-
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-VideoCard::VideoCard(Keyboard* keyboard)
-    : keyboard(keyboard), windowOpen(false), stopRequested(false)
+VideoCard::VideoCard()
+    : active(false)
 {
     xLow = xHigh = yLow = yHigh = 0;
     wLow = wHigh = hLow = hHigh = 0;
@@ -118,11 +55,6 @@ VideoCard::VideoCard(Keyboard* keyboard)
     }
     threeDTouched.assign(WIDTH * HEIGHT, 0);
     threeDActive = false;
-}
-
-VideoCard::~VideoCard()
-{
-    modeOff();
 }
 
 uint16_t VideoCard::regX() const { return static_cast<uint16_t>(xLow) | (static_cast<uint16_t>(xHigh) << 8); }
@@ -463,7 +395,7 @@ void VideoCard::setTileMap(int width, int height, const uint8_t* indices)
 
 void VideoCard::compositeTiles(uint8_t* staging) const
 {
-    // Вызывающий (renderThreadMain) уже держит framebufferMutex - см.
+    // Вызывающий (compositeFrame) уже держит framebufferMutex - см.
     // compositeSprites про тот же приём.
     if (mapHeight <= 0 || mapWidth <= 0)
     {
@@ -513,7 +445,7 @@ void VideoCard::setThreeDLayer(const uint8_t* rgb, const uint8_t* touchedMask)
 
 void VideoCard::compositeThreeD(uint8_t* staging) const
 {
-    // Вызывающий (renderThreadMain) уже держит framebufferMutex - см.
+    // Вызывающий (compositeFrame) уже держит framebufferMutex - см.
     // compositeSprites про тот же приём. Пока Gpu3D ни разу не сделал
     // PRESENT, threeDActive==false - слой полностью пропускается,
     // старые демо без 3D не видят разницы.
@@ -549,7 +481,7 @@ void VideoCard::setSpriteBitmap(int index, const uint8_t* rgb)
 
 void VideoCard::compositeSprites(uint8_t* staging) const
 {
-    // Вызывающий (renderThreadMain) уже держит framebufferMutex на
+    // Вызывающий (compositeFrame) уже держит framebufferMutex на
     // время снимка фона - композиция спрайтов идёт в ТОМ ЖЕ снимке,
     // отдельной блокировки тут не нужно (mutex не рекурсивный).
     for (int s = 0; s < SPRITE_COUNT; s++)
@@ -599,147 +531,24 @@ void VideoCard::compositeSprites(uint8_t* staging) const
 
 void VideoCard::modeOn()
 {
-    if (windowOpen)
-    {
-        return;
-    }
-
-    // Поток от предыдущего сеанса мог уже сам завершиться (например,
-    // окно закрыли крестиком - см. WindowProc/renderThreadMain), но
-    // остаться незаджойненным - std::thread обязательно должен быть
-    // либо joined, либо detached до уничтожения, иначе std::terminate.
-    if (renderThread.joinable())
-    {
-        renderThread.join();
-    }
-
-    stopRequested = false;
-    windowOpen = true;
-
-    renderThread = std::thread(&VideoCard::renderThreadMain, this);
+    active = true;
 }
 
 void VideoCard::modeOff()
 {
-    stopRequested = true;
-
-    if (renderThread.joinable())
-    {
-        renderThread.join();
-    }
-
-    windowOpen = false;
+    active = false;
 }
 
-void VideoCard::renderThreadMain()
+bool VideoCard::isActive() const
 {
-    HINSTANCE hInstance = GetModuleHandle(nullptr);
+    return active;
+}
 
-    WNDCLASSEXW wc = {};
-    wc.cbSize = sizeof(wc);
-    wc.style = CS_OWNDC;
-    wc.lpfnWndProc = &VideoCard::WindowProc;
-    wc.hInstance = hInstance;
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.lpszClassName = WINDOW_CLASS_NAME;
-    RegisterClassExW(&wc);   // повторная регистрация при следующем MODE_ON молча игнорируется (ERROR_CLASS_ALREADY_EXISTS)
-
-    const int windowWidth = WIDTH * 2;
-    const int windowHeight = HEIGHT * 2;
-
-    RECT rect = { 0, 0, windowWidth, windowHeight };
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
-
-    HWND hwnd = CreateWindowExW(
-        0, WINDOW_CLASS_NAME, L"VirtualConsole - Video",
-        (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX) | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        rect.right - rect.left, rect.bottom - rect.top,
-        nullptr, nullptr, hInstance, nullptr);
-
-    if (hwnd == nullptr)
-    {
-        windowOpen = false;
-        return;
-    }
-
-    // Чтобы WindowProc (статический метод - у него нет неявного this)
-    // мог достать этот экземпляр VideoCard и положить нажатую клавишу
-    // в keyboard - см. WM_CHAR выше.
-    SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-
-    HDC hdc = GetDC(hwnd);
-
-    PIXELFORMATDESCRIPTOR pfd = {};
-    pfd.nSize = sizeof(pfd);
-    pfd.nVersion = 1;
-    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-    pfd.iPixelType = PFD_TYPE_RGBA;
-    pfd.cColorBits = 24;
-    pfd.iLayerType = PFD_MAIN_PLANE;
-
-    int pixelFormat = ChoosePixelFormat(hdc, &pfd);
-    SetPixelFormat(hdc, pixelFormat, &pfd);
-
-    HGLRC hglrc = wglCreateContext(hdc);
-    wglMakeCurrent(hdc, hglrc);
-
-    glViewport(0, 0, windowWidth, windowHeight);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0, WIDTH, 0, HEIGHT, -1, 1);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-
-    // glDrawPixels рисует строки вверх от raster position - зеркалим
-    // по Y (отрицательный zoom), чтобы строка 0 буфера (верх кадра)
-    // оказалась вверху окна, а не внизу.
-    glPixelZoom(2.0f, -2.0f);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    uint8_t staging[FB_SIZE];
-
-    while (!stopRequested)
-    {
-        MSG msg;
-        bool quitPosted = false;
-
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-        {
-            if (msg.message == WM_QUIT)
-            {
-                quitPosted = true;
-            }
-
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-
-        if (quitPosted)
-        {
-            break;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(framebufferMutex);
-            memcpy(staging, framebuffer, FB_SIZE);
-            compositeTiles(staging);    // тайлы (если карта загружена) поверх фона
-            compositeThreeD(staging);   // 3D-слой (если активен) поверх тайлов
-            compositeSprites(staging);  // спрайты (UI) - всегда поверх всех слоёв
-        }
-
-        glClear(GL_COLOR_BUFFER_BIT);
-        glRasterPos2i(0, HEIGHT);
-        glDrawPixels(WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, staging);
-        SwapBuffers(hdc);
-
-        Sleep(16);   // ~60 FPS - не гоняем поток на пределе ради статичного кадра
-    }
-
-    wglMakeCurrent(nullptr, nullptr);
-    wglDeleteContext(hglrc);
-    ReleaseDC(hwnd, hdc);
-    DestroyWindow(hwnd);
-
-    windowOpen = false;
+void VideoCard::compositeFrame(uint8_t* rgb) const
+{
+    std::lock_guard<std::mutex> lock(framebufferMutex);
+    memcpy(rgb, framebuffer, FB_SIZE);
+    compositeTiles(rgb);    // тайлы (если карта загружена) поверх фона
+    compositeThreeD(rgb);   // 3D-слой (если активен) поверх тайлов
+    compositeSprites(rgb);  // спрайты (UI) - всегда поверх всех слоёв
 }

@@ -5,41 +5,37 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
-#include <thread>
 #include <vector>
 
-#define NOMINMAX       // иначе windows.h определит макросы min/max,
-                        // которые ломают std::min/std::max везде, где
-                        // транзитивно подключён этот заголовок
-#include <Windows.h>   // HWND/WPARAM/LPARAM/LRESULT - для WindowProc ниже
-
-// Видеокарта: растровый режим 320x240 RGB, рисуется в отдельном
-// родном окне (Win32 + OpenGL/WGL), пока консоль остаётся текстовым
-// терминалом. Framebuffer живёт целиком на C++ стороне устройства -
-// НЕ memory-mapped побайтово (320*240*3 = 230400 байт через
-// CPU-цикл писались бы непрактично медленно) - вместо этого
-// компактный командный протокол (регистры + COMMAND-триггер), как у
-// Disk. См. ASSEMBLY.md, раздел "VideoCard".
+// Видеокарта: растровый режим 320x240 RGB + спрайты/тайлы/3D-слой.
+// Framebuffer живёт целиком на C++ стороне устройства - НЕ
+// memory-mapped побайтово (320*240*3 = 230400 байт через CPU-цикл
+// писались бы непрактично медленно) - вместо этого компактный
+// командный протокол (регистры + COMMAND-триггер), как у Disk. См.
+// ASSEMBLY.md, раздел "VideoCard".
 //
-// Рендеринг (окно, message pump, OpenGL) целиком живёт в отдельном
-// std::thread, независимом от CPU-цикла. Это принципиально: tick()
-// устройства вызывается на КАЖДЫЙ доступ к шине (тысячи раз в
-// секунду, см. CPU::busRead/busWrite) - любая тяжёлая работа там
-// повторила бы баг с Keyboard (см. Keyboard.h), только гораздо хуже.
-// VideoCard вообще не переопределяет tick().
-class Keyboard;
-
+// У устройства НЕТ своего окна/потока/OpenGL-контекста - единственный
+// экран на весь процесс держит VideoConsole (см. VideoConsole.h), а
+// VideoCard - просто ещё один слой в его композиции: MODE_ON/MODE_OFF
+// теперь лишь выставляют флаг active (см. isActive()), а не
+// открывают/закрывают отдельное окно. VideoConsole::renderThreadMain
+// на каждом кадре сам зовёт compositeFrame(), если active, и
+// вписывает результат (320x240) в свою канву с сохранением пропорций.
+// Экрана без видеоконсоли (console=text в VmConfig, см. VmConfig.h) у
+// VideoCard нет - осознанное ограничение: легаси-консоль остаётся
+// текстовым резервным выводом, графика ей не нужна.
 class VideoCard : public Device
 {
 public:
 
-    // keyboard - куда класть нажатия, пойманные графическим окном
-    // (WM_CHAR), пока у него фокус ОС - иначе клавиатура "не
-    // работала" бы, стоило кликнуть по графическому окну (консольные
-    // _kbhit()/_getch() у Keyboard получают ввод только когда фокус
-    // на окне консоли). См. WindowProc/injectKey.
-    explicit VideoCard(Keyboard* keyboard);
-    ~VideoCard() override;
+    // Размер холста - публичный, VideoConsole использует его для
+    // расчёта масштаба при вписывании кадра VideoCard в свою канву
+    // (см. compositeFrame/isActive и VideoConsole::renderThreadMain).
+    static const int WIDTH = 320;
+    static const int HEIGHT = 240;
+    static const int CHANNELS = 3;
+
+    VideoCard();
 
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
@@ -71,11 +67,21 @@ public:
     // Первый вызов включает 3D-слой в композиции кадра.
     void setThreeDLayer(const uint8_t* rgb, const uint8_t* touchedMask);
 
+    // true между MODE_ON и MODE_OFF - VideoConsole проверяет это перед
+    // тем, как звать compositeFrame() на каждом кадре (не тратить
+    // время на композицию, пока ни одна программа не включала
+    // видеокарту).
+    bool isActive() const;
+
+    // Композиция готового кадра (фон + тайлы + 3D-слой + спрайты) в
+    // rgb (320*240*3 байт, буфер даёт вызывающий) - то же самое, что
+    // раньше собирал перед glDrawPixels свой собственный рендер-поток
+    // (см. VideoConsole::renderThreadMain). Лочит framebufferMutex
+    // сама - можно звать из любого потока.
+    void compositeFrame(uint8_t* rgb) const;
+
 private:
 
-    static const int WIDTH = 320;
-    static const int HEIGHT = 240;
-    static const int CHANNELS = 3;
     static const int FB_SIZE = WIDTH * HEIGHT * CHANNELS;
 
     // Регистры (адреса относительно начала маппинга - см. main.cpp)
@@ -140,7 +146,8 @@ private:
     uint8_t status;
 
     uint8_t framebuffer[FB_SIZE];
-    std::mutex framebufferMutex;
+    // mutable - compositeFrame() лочит его из const-метода (см. .cpp).
+    mutable std::mutex framebufferMutex;
 
     uint8_t spriteIndex;
     uint8_t spritePixelLow, spritePixelHigh;
@@ -173,16 +180,8 @@ private:
     std::vector<uint8_t> threeDTouched;   // WIDTH*HEIGHT, 0/1
     bool threeDActive;
 
-    Keyboard* keyboard;
-
-    std::thread renderThread;
-    std::atomic<bool> windowOpen;
-    std::atomic<bool> stopRequested;
-
-    // Статический метод (не свободная функция) - чтобы обработчик
-    // сообщений окна мог достать VideoCard* через GWLP_USERDATA и
-    // положить нажатую клавишу в keyboard (см. .cpp).
-    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    // true между MODE_ON и MODE_OFF - см. isActive()/modeOn()/modeOff().
+    std::atomic<bool> active;
 
     uint16_t regX() const;
     uint16_t regY() const;
@@ -203,6 +202,4 @@ private:
     void clampScroll();
     void compositeTiles(uint8_t* staging) const;
     void compositeThreeD(uint8_t* staging) const;
-
-    void renderThreadMain();
 };
