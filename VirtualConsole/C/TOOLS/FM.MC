@@ -25,12 +25,17 @@
 // Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
 // Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
 // работают F3 (View - см. view_selected_file(), открывает выделенный
-// файл в C/TOOLS/VIEW.MC), F5 (Copy), F7 (MkDir - см. request_mkdir(),
-// создаёт папку в текущей папке активной панели по введённому имени),
-// F8 (Del - см. request_delete(), удаляет выделенный файл/ПУСТУЮ папку
-// после подтверждения Y/N) и F10 (Build - см. build_selected_file(),
-// собирает выделенный *.ASM/*.MC через BUILD в Disk), остальные -
-// только подписи (v1, задел на будущее: F4 Edit, F6 Move и т.д.).
+// файл в C/TOOLS/VIEW.MC), F5 (Copy), F6 (Move - см. do_move(), тот же
+// перенос байт, что F5, плюс удаление источника), F7 (MkDir - см.
+// request_mkdir(), создаёт папку в текущей папке активной панели по
+// введённому имени), F8 (Del - см. request_delete(), удаляет
+// выделенный файл/ПУСТУЮ папку после подтверждения Y/N) и F10 (Build -
+// см. build_selected_file(), собирает выделенный *.ASM/*.MC через
+// BUILD в Disk), остальные - только подписи (v1, задел на будущее:
+// F4 Edit и т.д.). Наверху списка появляется пункт ".." (если панель
+// не в корне диска, см. populate_left()/populate_right()) - Enter на
+// нём поднимает на уровень вверх (как Backspace), удалить/перенести/
+// скопировать его нельзя (см. is_dotdot_selected()).
 //
 // Запуск *.RUN (run_program()) - через системный вызов SHELL.ASM
 // (shell_exec_child, см. ASSEMBLY.md/exec_child) - FM.MC только кладёт
@@ -53,6 +58,7 @@ const CLOCK_LOW = 0xF0000FFC;
 
 const FKEY_F3 = 61;   // View
 const FKEY_F5 = 63;   // Copy
+const FKEY_F6 = 64;   // Move
 const FKEY_F7 = 65;   // MkDir
 const FKEY_F8 = 66;   // Del
 const FKEY_F10 = 68;  // Build
@@ -208,6 +214,19 @@ int populate_left() {
     sync_disk_to_panel(0);
 
     leftCount = 0;
+    if (leftPathDepth > 0) {
+        // Синтетический пункт ".." - не настоящий файл LIST_FIRST/NEXT,
+        // просто маркер "подняться на уровень выше" (см. enter_dir()) -
+        // отображается как обычная папка, но is_dotdot_selected()
+        // защищает его от удаления/переноса/просмотра.
+        leftIsDir[0] = 1;
+        leftNames[0] = 46;   // '.'
+        leftNames[1] = 46;   // '.'
+        i = 2;
+        while (i < 12) { leftNames[i] = 0; i = i + 1; }
+        leftCount = 1;
+    }
+
     d_cmd(leftDisk, 1);   // LIST_FIRST
 
     done = 0;
@@ -243,6 +262,16 @@ int populate_right() {
     sync_disk_to_panel(1);
 
     rightCount = 0;
+    if (rightPathDepth > 0) {
+        // См. populate_left() - тот же синтетический пункт "..".
+        rightIsDir[0] = 1;
+        rightNames[0] = 46;   // '.'
+        rightNames[1] = 46;   // '.'
+        i = 2;
+        while (i < 12) { rightNames[i] = 0; i = i + 1; }
+        rightCount = 1;
+    }
+
     d_cmd(rightDisk, 1);   // LIST_FIRST
 
     done = 0;
@@ -414,9 +443,10 @@ int render_right() {
 
 int render_status() {
     // Подсказка в стиле Norton Commander - реально работают F3 (View),
-    // F5 (Copy), F7 (MkDir), F8 (Del) и F10 (Build), остальные - только
-    // подписи (см. комментарий в начале файла). Чёрный текст на белом
-    // фоне на всю ширину строки - классическая полоса подсказок NC.
+    // F5 (Copy), F6 (Move), F7 (MkDir), F8 (Del) и F10 (Build),
+    // остальные - только подписи (см. комментарий в начале файла).
+    // Чёрный текст на белом фоне на всю ширину строки - классическая
+    // полоса подсказок NC.
     int x;
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
@@ -485,6 +515,16 @@ int select_disk_right() {
     rightSel = 0;
     populate_right();
     render_right();
+    return 0;
+}
+
+// ---- пункт ".." (см. populate_left/populate_right) ----
+
+int is_dotdot_selected(int panel, int sel) {
+    int depth;
+    if (sel != 0) { return 0; }
+    if (panel == 0) { depth = leftPathDepth; } else { depth = rightPathDepth; }
+    if (depth > 0) { return 1; }
     return 0;
 }
 
@@ -712,6 +752,8 @@ int request_delete() {
     panel = activeRight;
     if (panel == 0) { if (leftCount == 0) { return 0; } sel = leftSel; }
     else { if (rightCount == 0) { return 0; } sel = rightSel; }
+
+    if (is_dotdot_selected(panel, sel) == 1) { return 0; }   // ".." нельзя удалить
 
     delPanel = panel;
     if (panel == 0) { delDiskId = leftDisk; } else { delDiskId = rightDisk; }
@@ -984,6 +1026,11 @@ int enter_dir() {
         isDir = rightIsDir[sel];
         depth = rightPathDepth;
     }
+
+    if (sel == 0) {
+        if (depth > 0) { go_up_dir(); return 0; }   // выбран ".." - подняться, а не CHDIR
+    }
+
     if (isDir == 0) {
         if (is_run_file(activeRight, sel) == 1) { run_program(); }
         return 0;
@@ -1132,6 +1179,114 @@ int do_copy() {
     return 0;
 }
 
+int do_move() {
+    // F6 - перенос: тот же байтовый цикл копирования, что do_copy()
+    // выше (те же ограничения v1 - папки не переносим, "сам в себя" не
+    // переносим - для переноса это даже важнее: без этой защиты чтение
+    // и DELETE ЕЩЁ НЕ ДОЧИТАННОГО файла его бы испортили), но после
+    // успешного копирования ИСТОЧНИК удаляется (DELETE=9, тот же приём,
+    // что perform_delete()), и обновляются ОБЕ панели - файл пропал из
+    // одной, появился в другой (do_copy() обновляет только приёмник).
+    int srcPanel;
+    int dstPanel;
+    int srcDisk;
+    int dstDisk;
+    int sel;
+    int isDir;
+    int i;
+    int ch;
+    int done;
+    int sameFile;
+    int a;
+
+    if (activeRight == 0) { srcPanel = 0; dstPanel = 1; sel = leftSel; } else { srcPanel = 1; dstPanel = 0; sel = rightSel; }
+    srcDisk = leftDisk; if (srcPanel == 1) { srcDisk = rightDisk; }
+    dstDisk = leftDisk; if (dstPanel == 1) { dstDisk = rightDisk; }
+
+    if (activeRight == 0) {
+        if (leftCount == 0) { return 0; }
+        isDir = leftIsDir[sel];
+    } else {
+        if (rightCount == 0) { return 0; }
+        isDir = rightIsDir[sel];
+    }
+    if (isDir == 1) { return 0; }   // папки не переносим в v1 (".." тоже isDir==1 - защищена тем же guard'ом)
+
+    sameFile = 0;
+    if (srcDisk == dstDisk) {
+        if (leftPathDepth == rightPathDepth) {
+            sameFile = 1;
+            i = 0;
+            while (i < leftPathDepth) {
+                a = 0;
+                while (a < 12) {
+                    if (leftPathNames[i * 12 + a] != rightPathNames[i * 12 + a]) { sameFile = 0; }
+                    a = a + 1;
+                }
+                i = i + 1;
+            }
+        }
+    }
+    if (sameFile == 1) { return 0; }
+
+    sync_disk_to_panel(srcPanel);
+    i = 0;
+    while (i < 12) {
+        if (activeRight == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        d_set_name_char(srcDisk, i, ch);
+        i = i + 1;
+    }
+
+    d_cmd(srcDisk, 3);   // OPEN_READ
+    if (d_status(srcDisk) == 2) { return 0; }   // источник не найден
+
+    sync_disk_to_panel(dstPanel);
+    i = 0;
+    while (i < 12) {
+        if (activeRight == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        d_set_name_char(dstDisk, i, ch);
+        i = i + 1;
+    }
+    d_cmd(dstDisk, 5);   // OPEN_WRITE
+
+    done = 0;
+    while (done == 0) {
+        d_cmd(srcDisk, 4);   // READ_BYTE
+        if (d_status(srcDisk) == 1) {
+            done = 1;
+        } else {
+            ch = d_data(srcDisk);
+            d_set_data(dstDisk, ch);
+            d_cmd(dstDisk, 6);   // WRITE_BYTE
+        }
+    }
+
+    d_cmd(srcDisk, 7);   // CLOSE
+    d_cmd(dstDisk, 7);
+
+    // Копия готова - теперь удалить источник. ВАЖНО: если srcDisk и
+    // dstDisk - один и тот же физический диск (перенос между двумя
+    // папками ОДНОГО диска), currentDir на нём сейчас стоит в папке
+    // ПРИЁМНИКА (его туда поставил sync_disk_to_panel(dstPanel) перед
+    // OPEN_WRITE) - без повторной синхронизации на srcPanel DELETE
+    // удалил бы файл не там (в папке назначения, а не источника).
+    sync_disk_to_panel(srcPanel);
+    i = 0;
+    while (i < 12) {
+        if (activeRight == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        d_set_name_char(srcDisk, i, ch);
+        i = i + 1;
+    }
+    d_cmd(srcDisk, 9);   // DELETE
+
+    populate_left();
+    render_left();
+    populate_right();
+    render_right();
+
+    return 0;
+}
+
 int main() {
     int key;
     int running;
@@ -1206,6 +1361,7 @@ int main() {
 
                 if (key == FKEY_F3) { view_selected_file(); }   // F3
                 if (key == FKEY_F5) { do_copy(); }   // F5
+                if (key == FKEY_F6) { do_move(); }   // F6
                 if (key == FKEY_F7) { request_mkdir(); }   // F7
                 if (key == FKEY_F8) { request_delete(); }   // F8
                 if (key == FKEY_F10) { build_selected_file(); }   // F10
