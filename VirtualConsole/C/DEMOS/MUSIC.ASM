@@ -1,6 +1,11 @@
 ; ============================================================
-; MUSIC.ASM - проигрывает трекерную музыку (space_debris.mod) через
+; MUSIC.ASM - проигрывает трекерную музыку (SPACE_~1.MOD) через
 ; ModLoader + SoundCard. Запускается из шелла командой "exec music.asm".
+;
+; Имя файла - "SPACE_~1.MOD" (DOS-стиль 8.3 с "~1", как исходное
+; "space_debris.mod" обрезалось бы в DOS/FM.MC - см. ASSEMBLY.md,
+; "ModLoader"/"Disk": NAME-регистр диска всегда 8.3, длинное имя туда
+; не помещалось бы и портило листинг/копирование в FM.MC).
 ;
 ; ModLoader разбирает .mod-файл (формат ProTracker - см. ASSEMBLY.md,
 ; "ModLoader") и кладёт его в SoundCard, которая дальше играет песню
@@ -16,42 +21,34 @@
 
     EI
 
-    ; ---- ModLoader: LOAD "space_debris.mod" ----
+    ; ---- ModLoader: LOAD "SPACE_~1.MOD" ----
 
-    LDI A, 115   ; s
+    LDI A, 83    ; S
     STA 0xF0001020
-    LDI A, 112   ; p
+    LDI A, 80    ; P
     STA 0xF0001021
-    LDI A, 97    ; a
+    LDI A, 65    ; A
     STA 0xF0001022
-    LDI A, 99    ; c
+    LDI A, 67    ; C
     STA 0xF0001023
-    LDI A, 101   ; e
+    LDI A, 69    ; E
     STA 0xF0001024
     LDI A, 95    ; _
     STA 0xF0001025
-    LDI A, 100   ; d
+    LDI A, 126   ; ~
     STA 0xF0001026
-    LDI A, 101   ; e
+    LDI A, 49    ; 1
     STA 0xF0001027
-    LDI A, 98    ; b
-    STA 0xF0001028
-    LDI A, 114   ; r
-    STA 0xF0001029
-    LDI A, 105   ; i
-    STA 0xF000102A
-    LDI A, 115   ; s
-    STA 0xF000102B
     LDI A, 46    ; .
-    STA 0xF000102C
-    LDI A, 109   ; m
-    STA 0xF000102D
-    LDI A, 111   ; o
-    STA 0xF000102E
-    LDI A, 100   ; d
-    STA 0xF000102F
+    STA 0xF0001028
+    LDI A, 77    ; M
+    STA 0xF0001029
+    LDI A, 79    ; O
+    STA 0xF000102A
+    LDI A, 68    ; D
+    STA 0xF000102B
     LDI A, 0
-    STA 0xF0001030      ; и так далее NAME16-31 = 0
+    STA 0xF000102C      ; и так далее NAME12-31 = 0
 
     LDI A, 1
     STA 0xF0001040      ; ModLoader COMMAND = LOAD

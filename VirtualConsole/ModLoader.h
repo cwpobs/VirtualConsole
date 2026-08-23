@@ -30,9 +30,10 @@ private:
     static const uint32_t REG_NAME_FIRST = 0;
     static const uint32_t REG_NAME_LAST = 31;   // 32 байта - не 12, как у
                                                  // Disk/PngLoader/MapLoader:
-                                                 // .mod-имена (например
-                                                 // "space_debris.mod") не
-                                                 // укладываются в 8.3
+                                                 // .mod-имена не обязаны
+                                                 // укладываться в 8.3
+                                                 // (см. ASSEMBLY.md,
+                                                 // "ModLoader")
     static const uint32_t REG_COMMAND = 32;
     static const uint32_t REG_STATUS = 33;
 

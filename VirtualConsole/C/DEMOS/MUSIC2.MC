@@ -1,4 +1,4 @@
-// MUSIC2.MC - проигрывает трекерную музыку (space_debris.mod) через
+// MUSIC2.MC - проигрывает трекерную музыку (SPACE_~1.MOD) через
 // новые команды Мини-C (mod_load()/sound_play()/sound_stop() - см.
 // ASSEMBLY.md, "Мини-C") И ОДНОВРЕМЕННО рисует визуализацию в
 // графическом режиме VideoCard - 4 столбика-эквалайзера, по одному на
@@ -71,7 +71,7 @@ int main() {
     int key;
     int running;
 
-    if (mod_load("space_debris.mod") != 0) {
+    if (mod_load("SPACE_~1.MOD") != 0) {
         return 1;   // файл не найден/неподдерживаемый формат - тихо выходим
     }
     sound_play();

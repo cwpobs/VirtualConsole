@@ -2474,11 +2474,16 @@ channels, old 15-sample Soundtracker modules, etc.) give `STATUS=2`,
 they don't crash.
 
 The file name is **32 bytes**, not 12 like `Disk`/`PngLoader`/
-`MapLoader`: `.mod` file names (e.g. `space_debris.mod`, 16
-characters) don't fit the 8.3 convention the other loaders follow.
-`ModLoader` doesn't go through `Disk` (it reads the file itself), so
-the 12-byte limit elsewhere is just those devices' own choice, not a
-general rule of the bus.
+`MapLoader`: the `.mod` format itself isn't tied to the 8.3 convention
+the other loaders follow - a name longer than 12 bytes is no problem
+for `ModLoader`. `ModLoader` doesn't go through `Disk` (it reads the
+file itself), so the 12-byte limit elsewhere is just those devices' own
+choice, not a general rule of the bus. The actual `.mod` shipped in
+this repo, `C/DEMOS/SPACE_~1.MOD`, is nonetheless named in DOS 8.3
+style with `~1` - the way a long `space_debris.mod` would get
+truncated under real DOS - because that same name also lives on disk
+"C" (see `Disk`) and has to fit the 12-byte `NAME` there, or
+`FM.MC`/`SHELL.ASM` couldn't list/copy/rename it properly.
 
 | Offset | Register | Description |
 |----------|---------|----------|
@@ -2495,13 +2500,13 @@ current song, resets the sequencer to the start - you need to
 explicitly send `SoundCard.PLAY` afterward to hear it, `LOAD` doesn't
 start playback itself).
 
-Example - load `space_debris.mod` and play it:
+Example - load `SPACE_~1.MOD` and play it:
 
-    LDI A, 115  ; 's'
+    LDI A, 83   ; 'S'
     STA 0xF0001020
-    LDI A, 112  ; 'p'
+    LDI A, 80   ; 'P'
     STA 0xF0001021
-    ; ... the rest of the file name's letters in NAME2-15, unused ones = 0 ...
+    ; ... the rest of the file name's letters in NAME2-11, unused ones = 0 ...
 
     LDI A, 1
     STA 0xF0001040      ; COMMAND = LOAD
@@ -2515,7 +2520,7 @@ Example - load `space_debris.mod` and play it:
     STA 0xF0001066      ; SoundCard COMMAND = PLAY
 
 A full working example - `C/DEMOS/MUSIC.ASM` (`cd demos`, then
-`exec music.asm`), song - `C/DEMOS/space_debris.mod`.
+`exec music.asm`), song - `C/DEMOS/SPACE_~1.MOD`.
 
 
 ---
@@ -3097,7 +3102,7 @@ from `NAME`.
 
 ## Sound and music: mod_load()/sound_*()
 
-    if (mod_load("space_debris.mod") != 0) { return 1; }   // STATUS: 0=ok,1=not found,2=bad format,3=corrupted
+    if (mod_load("SPACE_~1.MOD") != 0) { return 1; }   // STATUS: 0=ok,1=not found,2=bad format,3=corrupted
     sound_play();
     sound_stop();
     sound_pause();
@@ -3259,7 +3264,7 @@ works), and `Clock` for the pause between game ticks. Controls -
 
 ## Example: MUSIC2.MC
 
-`C/DEMOS/MUSIC2.MC` plays `space_debris.mod` (`mod_load()` +
+`C/DEMOS/MUSIC2.MC` plays `SPACE_~1.MOD` (`mod_load()` +
 `sound_play()`) and, at the same time, draws a live 4-bar equalizer in
 graphics mode (`VideoCard`, `poke(VIDEO_COMMAND, 1)` for MODE_ON) - one
 bar per ProTracker channel, its height read straight from the new

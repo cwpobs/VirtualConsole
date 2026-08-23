@@ -100,7 +100,9 @@ address range, the interrupt model, and the full Mini-C language guide
   (name-your-own-price; commercial and non-commercial use and
   modification allowed, reselling/redistributing the pack itself is
   not, no generative-AI/NFT use; credit appreciated but not required).
-- `C/DEMOS/space_debris.mod` - "Space Debris", composed by
+- `C/DEMOS/SPACE_~1.MOD` (originally "space_debris.mod", renamed to fit
+  the VM's disk 8.3 filename limit - see `ASSEMBLY.md`, "ModLoader") -
+  "Space Debris", composed by
   Markus "Captain" Kaarlonen in 1991, first place at Anarchy Easter
   Party 1991 (Sweden). No formal license is published for this
   module; see the [composer's own page](https://markuskaarlonen.com/space-debris)
