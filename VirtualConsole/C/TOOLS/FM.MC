@@ -601,6 +601,19 @@ int is_run_file(int panel, int sel) {
 
 // ---- сборка *.ASM/*.MC (F10) ----
 
+int to_upper_char(int ch) {
+    // Приводит одну ASCII-букву к верхнему регистру (97-122 'a'-'z' ->
+    // 65-90 'A'-'Z'), остальное - как есть. Нужен is_buildable_file()
+    // ниже - имена файлов на диске не обязаны быть в верхнем регистре
+    // (клавиатура пропускает строчные буквы как есть, F2/F9 их не
+    // приводят к верхнему регистру), а раньше проверка расширения
+    // сравнивала коды символов только с заглавными буквами - файл
+    // вроде "hello.mc" молча не проходил её, и F10 вообще не доходил
+    // до диска (см. build_selected_file()).
+    if (ch >= 97) { if (ch <= 122) { return ch - 32; } }
+    return ch;
+}
+
 int is_buildable_file(int panel, int sel) {
     // Тот же приём, что is_run_file() выше, но проверяет ".ASM" (4
     // символа) ИЛИ ".MC" (3 символа) - оба расширения Disk::build()
@@ -639,6 +652,10 @@ int is_buildable_file(int panel, int sel) {
             c3 = rightNames[sel * 12 + len - 2];
             c4 = rightNames[sel * 12 + len - 1];
         }
+        c1 = to_upper_char(c1);
+        c2 = to_upper_char(c2);
+        c3 = to_upper_char(c3);
+        c4 = to_upper_char(c4);
         if (c1 == 46) {                    // '.'
             if (c2 == 65) {                // 'A'
                 if (c3 == 83) {            // 'S'
@@ -658,6 +675,9 @@ int is_buildable_file(int panel, int sel) {
             c3 = rightNames[sel * 12 + len - 2];
             c4 = rightNames[sel * 12 + len - 1];
         }
+        c2 = to_upper_char(c2);
+        c3 = to_upper_char(c3);
+        c4 = to_upper_char(c4);
         if (c2 == 46) {                // '.'
             if (c3 == 77) {            // 'M'
                 if (c4 == 67) { return 1; }   // 'C'
@@ -673,14 +693,21 @@ int build_selected_file() {
     // в отличие от run_program()/view_selected_file(), не запускает
     // ничего (не exec_child, обычная команда устройства) - просто
     // кладёт NAME на диск панели и ждёт результата синхронно, как
-    // "build ИМЯ" в шелле (см. ASSEMBLY.md, "Disk"). Тихо ничего не
-    // делает при ошибке компиляции/сборки - как и сам шелл, отдельного
-    // сообщения об ошибке не показывает.
+    // "build ИМЯ" в шелле (см. ASSEMBLY.md, "Disk"). После BUILD
+    // читает STATUS и печатает короткий итог поверх строки подсказки
+    // ("Build OK"/"Build FAILED: <ошибка>") - тот же READ_ERROR_BYTE
+    // (22)/lastBuildError, что уже печатает "BUILD OK"/"BUILD FAILED"
+    // шелл (см. SHELL.ASM, cmd_build_c/cmd_build_d) - иначе неудачная
+    // сборка (например синтаксическая ошибка) была бы неотличима от
+    // "F10 вообще ничего не делает".
     int panel;
     int diskId;
     int sel;
     int i;
     int ch;
+    int st;
+    int x;
+    int done;
 
     panel = activeRight;
     if (panel == 0) { diskId = leftDisk; sel = leftSel; } else { diskId = rightDisk; sel = rightSel; }
@@ -698,6 +725,27 @@ int build_selected_file() {
     }
 
     d_cmd(diskId, 14);   // BUILD
+    st = d_status(diskId);
+
+    print_str(0, MAX_FILES + 2, "                                                                                ");
+    if (st == 0) {
+        print_str(0, MAX_FILES + 2, "Build OK");
+    } else {
+        print_str(0, MAX_FILES + 2, "Build FAILED: ");
+        x = 14;
+        done = 0;
+        while (done == 0) {
+            d_cmd(diskId, 22);   // READ_ERROR_BYTE
+            if (d_status(diskId) == 1) {
+                done = 1;
+            } else {
+                if (x < 80) {
+                    print_char(x, MAX_FILES + 2, d_data(diskId));
+                    x = x + 1;
+                }
+            }
+        }
+    }
 
     // Новый ИМЯ.RUN появился рядом с исходником - обновить список.
     if (panel == 0) { populate_left(); render_left(); } else { populate_right(); render_right(); }
