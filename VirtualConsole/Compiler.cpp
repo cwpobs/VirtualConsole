@@ -22,13 +22,14 @@
 // ---------------- Лексер ----------------
 
 // Прелюдия устройств - готовые const/мапированные массивы для регистров
-// Keyboard/Clock/VideoCard/PngLoader/MapLoader (см. ASSEMBLY.md), чтобы
-// пользовательским .mc-программам не нужно было объявлять их руками -
-// подмешивается перед пользовательским кодом в Compiler::lex() ниже.
-// Адреса выверены по ASSEMBLY.md (разделы Keyboard/VideoCard/PngLoader/
-// MapLoader) и по C/DEMOS/TILEDEMO.ASM. Компилятор не проверяет повторное
-// объявление const/массива (см. collectDeclarations) - если пользователь
-// объявит то же имя сам, его объявление просто перезапишет прелюдию, без
+// Keyboard/Clock/VideoCard/ConsoleLayer/PngLoader/MapLoader (см.
+// ASSEMBLY.md), чтобы пользовательским .mc-программам не нужно было
+// объявлять их руками - подмешивается перед пользовательским кодом в
+// Compiler::lex() ниже. Адреса выверены по ASSEMBLY.md (разделы
+// Keyboard/VideoCard/ConsoleLayer/PngLoader/MapLoader) и по
+// C/DEMOS/TILEDEMO.ASM. Компилятор не проверяет повторное объявление
+// const/массива (см. collectDeclarations) - если пользователь объявит
+// то же имя сам, его объявление просто перезапишет прелюдию, без
 // ошибки.
 static const std::string kDevicePrelude =
     "const KEYBOARD_DATA = 0xF0000005;\n"
@@ -65,6 +66,7 @@ static const std::string kDevicePrelude =
     "const VIDEOCARD_SCROLL_X_HIGH = 0xF0000FF9;\n"
     "const VIDEOCARD_SCROLL_Y_LOW = 0xF0000FFA;\n"
     "const VIDEOCARD_SCROLL_Y_HIGH = 0xF0000FFB;\n"
+    "const CONSOLE_VISIBLE = 0xF0001042;\n"
     "const PNGLOADER_NAME0 = 0xF0000FFE;\n"
     "const PNGLOADER_SRC_X_LOW = 0xF000100A;\n"
     "const PNGLOADER_SRC_X_HIGH = 0xF000100B;\n"

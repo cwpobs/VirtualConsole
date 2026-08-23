@@ -23,6 +23,7 @@
 #include "Assembler.h"
 #include "VideoConsole.h"
 #include "VmConfig.h"
+#include "ConsoleLayer.h"
 
 int main()
 {
@@ -66,7 +67,8 @@ int main()
     DebugPort debugPort(&cpu);
     Disk diskC("C", &bus);
     Disk diskD("D", &bus);
-    VideoCard videoCard;
+    ConsoleLayer consoleLayer;
+    VideoCard videoCard(&consoleLayer);
     Clock clock;
     PngLoader pngLoader(&videoCard, &diskC);
     MapLoader mapLoader(&videoCard, &diskC);
@@ -74,7 +76,7 @@ int main()
     ModLoader modLoader(&soundCard, &diskC);
     Gpu3D gpu3D(&videoCard);
     Assembler assembler;
-    VideoConsole videoConsole(&keyboard, &videoCard, config.videoConsoleScale);
+    VideoConsole videoConsole(&keyboard, &videoCard, &consoleLayer, config.videoConsoleScale);
 
     if (config.useVideoConsole)
     {
@@ -99,9 +101,11 @@ int main()
     bus.mapDevice(&mapLoader, 0xF0001012, 0xF000101F); // загрузчик текстовой карты тайлов
     bus.mapDevice(&modLoader, 0xF0001020, 0xF0001041); // загрузчик .mod-файлов
     bus.mapDevice(&gpu3D, 0xF0001045, 0xF0001065);     // 3D-ускоритель (вершины/треугольники/PRESENT)
-    // 0xF0001042-0xF0001044 - неиспользуемая дыра (старое место SoundCard,
-    // см. ниже) - блок SoundCard целиком перенесён ПОСЛЕ Gpu3D, чтобы не
-    // сдвигать его и не переписывать жёстко зашитые адреса в CUBE3D.ASM.
+    // Старое место SoundCard (см. ниже, блок SoundCard целиком перенесён
+    // ПОСЛЕ Gpu3D, чтобы не сдвигать его и не переписывать жёстко
+    // зашитые адреса в CUBE3D.ASM) - 0xF0001042 занят под ConsoleLayer,
+    // 0xF0001043-0xF0001044 всё ещё не используются.
+    bus.mapDevice(&consoleLayer, 0xF0001042, 0xF0001042); // видимость текстового слоя поверх VideoCard (0/1)
     bus.mapDevice(&soundCard, 0xF0001066, 0xF000106E); // звуковая карта (PLAY/STOP/VOLUME + визуализация: громкость каналов/ROW/ORDER_POS)
 
 

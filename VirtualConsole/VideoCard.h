@@ -24,6 +24,8 @@
 // Экрана без видеоконсоли (console=text в VmConfig, см. VmConfig.h) у
 // VideoCard нет - осознанное ограничение: легаси-консоль остаётся
 // текстовым резервным выводом, графика ей не нужна.
+class ConsoleLayer;
+
 class VideoCard : public Device
 {
 public:
@@ -35,7 +37,11 @@ public:
     static const int HEIGHT = 240;
     static const int CHANNELS = 3;
 
-    VideoCard();
+    // consoleLayer - см. ConsoleLayer.h: MODE_ON автоматически прячет
+    // текстовый слой консоли (не мешает разглядеть графику), MODE_OFF
+    // возвращает его обратно - если программа не решила иначе по ходу
+    // работы через сам ConsoleLayer (poke(CONSOLE_VISIBLE, ...)).
+    explicit VideoCard(ConsoleLayer* consoleLayer);
 
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
@@ -182,6 +188,8 @@ private:
 
     // true между MODE_ON и MODE_OFF - см. isActive()/modeOn()/modeOff().
     std::atomic<bool> active;
+
+    ConsoleLayer* consoleLayer;
 
     uint16_t regX() const;
     uint16_t regY() const;

@@ -14,6 +14,7 @@ class Keyboard;
 class TextVRAM;
 class TextAttr;
 class VideoCard;
+class ConsoleLayer;
 
 // Видеоконсоль: единственное графическое окно на весь процесс -
 // текстовый режим 80x25 (символ CP866 + fg/bg атрибут, см.
@@ -38,6 +39,12 @@ class VideoCard;
 // HUD поверх графики в играх: обычный крашеный текст поверх активной
 // VideoCard уже просто работает.
 //
+// Рисовать текстовый слой вообще или нет - решает ConsoleLayer (см.
+// ConsoleLayer.h): VideoCard сама прячет его на MODE_ON и возвращает
+// на MODE_OFF, а программа может включить его обратно по ходу работы
+// через MMIO (poke(CONSOLE_VISIBLE, 1) в мини-C) - "комбинированный
+// режим", когда текст и графика видны одновременно.
+//
 // Окно, message pump и OpenGL живут в отдельном std::thread,
 // независимом от потока CPU. Между потоками - не общие указатели на
 // TextVRAM/TextAttr/VideoCard (там нет мьютекса на стороне
@@ -60,12 +67,13 @@ public:
 
     // keyboard - куда класть нажатия, пойманные окном (WM_CHAR/
     // WM_KEYDOWN), пока у него фокус ОС. videoCard - источник слоя
-    // графики (см. compositeVideoCardLayer) - не может быть nullptr.
-    // scale - целочисленный масштаб пикселя окна (1 = 640x400,
-    // 2 = 1280x800 и т.д.) - глиф остаётся резким при увеличении, т.к.
-    // рисуется как есть, без сглаживания (см. renderThreadMain,
-    // glPixelZoom).
-    VideoConsole(Keyboard* keyboard, VideoCard* videoCard, int scale);
+    // графики (см. compositeVideoCardLayer). consoleLayer - видим ли
+    // текстовый слой вообще (см. ConsoleLayer.h). Ни один из
+    // указателей не может быть nullptr. scale - целочисленный масштаб
+    // пикселя окна (1 = 640x400, 2 = 1280x800 и т.д.) - глиф остаётся
+    // резким при увеличении, т.к. рисуется как есть, без сглаживания
+    // (см. renderThreadMain, glPixelZoom).
+    VideoConsole(Keyboard* keyboard, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale);
     ~VideoConsole();
 
     // Открывает окно и стартует рендер-поток - вызывается один раз из
@@ -101,6 +109,7 @@ private:
 
     Keyboard* keyboard;
     VideoCard* videoCard;
+    ConsoleLayer* consoleLayer;
     int scale;
 
     std::thread renderThread;

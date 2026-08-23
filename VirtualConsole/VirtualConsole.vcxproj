@@ -157,6 +157,7 @@
     <ClCompile Include="Bus.cpp" />
     <ClCompile Include="Clock.cpp" />
     <ClCompile Include="Compiler.cpp" />
+    <ClCompile Include="ConsoleLayer.cpp" />
     <ClCompile Include="CPU.cpp" />
     <ClCompile Include="DebugPort.cpp" />
     <ClCompile Include="Disk.cpp" />
@@ -181,6 +182,7 @@
     <ClInclude Include="Bus.h" />
     <ClInclude Include="Clock.h" />
     <ClInclude Include="Compiler.h" />
+    <ClInclude Include="ConsoleLayer.h" />
     <ClInclude Include="CPU.h" />
     <ClInclude Include="DebugPort.h" />
     <ClInclude Include="Device.h" />

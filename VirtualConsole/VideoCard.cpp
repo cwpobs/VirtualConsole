@@ -1,9 +1,10 @@
 #include "VideoCard.h"
+#include "ConsoleLayer.h"
 
 #include <cstring>
 
-VideoCard::VideoCard()
-    : active(false)
+VideoCard::VideoCard(ConsoleLayer* consoleLayer)
+    : active(false), consoleLayer(consoleLayer)
 {
     xLow = xHigh = yLow = yHigh = 0;
     wLow = wHigh = hLow = hHigh = 0;
@@ -531,12 +532,20 @@ void VideoCard::compositeSprites(uint8_t* staging) const
 
 void VideoCard::modeOn()
 {
-    active = true;
+    // Прячем консоль автоматически только на переходе выкл->вкл
+    // (exchange возвращает СТАРОЕ значение) - повторный MODE_ON, пока
+    // уже активна, не должен сбрасывать то, что программа сама
+    // включила через ConsoleLayer по ходу работы (см. ConsoleLayer.h).
+    if (!active.exchange(true))
+    {
+        consoleLayer->setVisible(false);
+    }
 }
 
 void VideoCard::modeOff()
 {
     active = false;
+    consoleLayer->setVisible(true);
 }
 
 bool VideoCard::isActive() const

@@ -4,6 +4,7 @@
 #include "TextAttr.h"
 #include "Font8x16.h"
 #include "VideoCard.h"
+#include "ConsoleLayer.h"
 
 #include <cstring>
 #include <utility>
@@ -200,8 +201,8 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-VideoConsole::VideoConsole(Keyboard* keyboard, VideoCard* videoCard, int scale)
-    : keyboard(keyboard), videoCard(videoCard), scale(scale), stopRequested(false),
+VideoConsole::VideoConsole(Keyboard* keyboard, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale)
+    : keyboard(keyboard), videoCard(videoCard), consoleLayer(consoleLayer), scale(scale), stopRequested(false),
     cursorRow(0), cursorCol(0), cursorVisible(false), frameGeneration(0)
 {
     for (int i = 0; i < COLS * ROWS; i++)
@@ -448,6 +449,7 @@ void VideoConsole::renderThreadMain()
 
     static uint8_t staging[PIXEL_WIDTH * PIXEL_HEIGHT * 3];
     uint64_t lastRasterized = static_cast<uint64_t>(-1);
+    bool lastShowText = true;
 
     while (!stopRequested)
     {
@@ -473,19 +475,31 @@ void VideoConsole::renderThreadMain()
         // Пока VideoCard активна, её кадр может меняться каждый тик
         // (спрайты/тайлы/3D двигаются) без единого изменения текста -
         // frameGeneration тут не помощник, перерисовываем каждую
-        // итерацию, как и при видимом мигающем курсоре.
+        // итерацию, как и при видимом мигающем курсоре. showText -
+        // видимость текстового слоя (см. ConsoleLayer.h) - сравниваем
+        // с прошлым кадром отдельно, чтобы сам факт включения/
+        // выключения консоли тоже вызывал перерисовку, даже если
+        // ничего больше не изменилось.
         bool videoCardActive = videoCard->isActive();
+        bool showText = consoleLayer->isVisible();
         bool needRedraw;
 
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            needRedraw = (frameGeneration != lastRasterized) || cursorVisible || videoCardActive;
+            needRedraw = (frameGeneration != lastRasterized) || cursorVisible ||
+                videoCardActive || (showText != lastShowText);
 
             if (needRedraw)
             {
                 compositeVideoCardLayer(staging);
-                rasterize(staging);
+
+                if (showText)
+                {
+                    rasterize(staging);
+                }
+
                 lastRasterized = frameGeneration;
+                lastShowText = showText;
             }
         }
 
