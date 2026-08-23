@@ -46,6 +46,7 @@ Devices attached to the bus (details on each one are in section 9):
 | TextAttr | `0xF000080C-0xF0000FDD` | 2002 B | character color 80x25 (fg/bg) |
 | VideoCard | `0xF0000FDE-0xF0000FFB` | 30 B | 320x240 graphics, sprites, tiles |
 | Clock | `0xF0000FFC-0xF0000FFD` | 2 B | real-time clock (ms) |
+| ConsoleLayer | `0xF0001042` | 1 B | visibility of the text layer over VideoCard |
 | PngLoader | `0xF0000FFE-0xF0001011` | 20 B | PNG loading (sprites/tiles) |
 | MapLoader | `0xF0001012-0xF000101F` | 14 B | text tile-map loading |
 | ModLoader | `0xF0001020-0xF0001041` | 34 B | `.mod` music loading (ProTracker) |
@@ -60,10 +61,16 @@ project measured interpreter throughput around ~6 million `step()`
 calls/sec on the dev machine — this isn't a spec, just an observation
 useful for sizing your own tests.
 
-The keyboard and console output are real and host-backed: input comes
-through the real console's `_getch()`, output goes to a regular
-terminal with ANSI escape sequences; input/output encoding is CP866
-(see `main.cpp`).
+By default the screen and keyboard are not a Windows console window
+at all, but the VM's own graphical window, the **video console**
+(`VideoConsole`): a CP866 8x16 bitmap font baked into the code (no
+font files on disk), and the very same window that `VideoCard` draws
+into (see its section below) — text and graphics share one screen
+instead of two separate windows. Selected by the `console` setting in
+`config.txt` (`video` by default, `text` — the legacy fallback: a
+plain Windows console window with ANSI output and `_getch()` input,
+CP866 in/out, see `main.cpp`/`VmConfig.cpp`); in text mode `VideoCard`
+has no screen of its own at all — graphics are unavailable there.
 
 
 ---
@@ -1859,6 +1866,22 @@ otherwise the color "lags behind" the text (this is exactly what
 The whole grid's default color at startup is `0x07` (light gray on
 black, DOS classic).
 
+**Transparent background (video console only, see "VideoConsole"
+below)**: high-nibble value `8` (`TRANSPARENT_BG`) doesn't mean a dark
+gray background - it means "don't draw a background at all" - the
+`VideoCard` layer (or whatever was already on screen under that cell)
+stays visible, only the character glyph itself is drawn in its color.
+No program or tool in this project uses background values `8-15` as
+an actual color (background is always `0`/`1`/`7` everywhere), so
+value `8` was safely repurposed for this special meaning - as a
+CHARACTER color (low nibble) `8` still works as plain dark gray, only
+the high nibble carries the special meaning. This rule doesn't apply
+in the legacy text console (`console=text`) - there's no `VideoCard`
+layer to reveal, so background `8` renders as an ordinary dark-gray
+ANSI color. Example - `C/DEMOS/SNOW3D.MC` (`place_snowflake()`):
+`set_color(col, row, fg, BG_TRANSPARENT)` draws a "snowflake" without
+a black box around it, over the graphics.
+
 Example: coloring the whole row `row` bright cyan on black (`0x0E`) -
 the `goto_attr_row_start` routine in `boot.asm` (like
 `goto_row_start`, but based on `TextAttr`) computes the needed
@@ -1879,6 +1902,96 @@ Ready-made usage example - the border around the banner in
 
 ---
 
+## VideoConsole
+
+The single graphical window for the whole process (Win32 + OpenGL/WGL,
+its own thread, doesn't block the CPU loop - same principle as
+`VideoCard` below). Not a bus device - no registers/MMIO, programs
+work exactly as if there were no video console at all (they write to
+`Text VRAM`/`TextAttr`/`VideoCard` as usual). Enabled by default
+(`console=video` in `config.txt`); in the legacy text mode
+(`console=text`) it's replaced by a plain Windows console window with
+ANSI output instead - see "Devices - summary" at the top of this
+document.
+
+Two layers of one picture, not two windows:
+
+- **Text** - an 80x25 grid, each cell drawn with a CP866 8x16 bitmap
+  font baked into the code (no font files on disk). Window size =
+  640x400 times a scale factor (`video_scale` in `config.txt`, default
+  2 → a 1280x800 window) - an integer scale, so the glyph stays crisp
+  with no smoothing.
+- **`VideoCard` graphics** - the background: if `VideoCard` is active
+  (between `MODE_ON`/`MODE_OFF`, see its section below), its 320x240
+  (4:3) frame is fitted into the 640x400 (8:5) canvas via
+  nearest-neighbor scaling, preserving aspect ratio and centered -
+  black bars on the sides (~53px at the base scale), since the aspect
+  ratios differ. `VideoCard`/`Gpu3D`'s native resolution is unchanged
+  by this - it's baked into the 3D projection and into existing
+  demos/games alike.
+
+Text-layer transparency rules (see also "ConsoleLayer" and
+"TRANSPARENT_BG" in the "TextAttr" section above) - wherever the text
+is transparent, the `VideoCard` layer (or whatever was already drawn)
+shows through:
+
+- a cell `(space, default attribute 0x07)` - "untouched" after
+  `CLEAR`/loading - isn't drawn at all, fully transparent;
+- a cell with background `TRANSPARENT_BG` (`8`, see "TextAttr" above)
+  - only the character itself is drawn in its color, the background
+    is left alone - this is the mechanism for HUDs/effects over
+    graphics (example - the "snowflakes" in `C/DEMOS/SNOW3D.MC`, see
+    "ConsoleLayer" below).
+
+Keyboard input - the same window catches both `WM_CHAR` (regular
+characters, Enter/Backspace/Tab/Esc/Ctrl+letter) and
+`WM_KEYDOWN`/`WM_SYSKEYDOWN` (arrows/Home/End/PgUp/PgDn/Delete/F1-F10/
+Alt+F1/Alt+F2) - the latter never produce `WM_CHAR` at all, so without
+separate handling they'd never reach the program. Keys are translated
+into the same DOS scan codes the real console returns via `_getch()`
+(`KEYBOARD_DATA`), including the two-byte sequence (a leading byte `0`
+for F-keys / `0xE0` for the rest, then the code itself) - a program
+reading `KEYBOARD_DATA` can't tell where the key actually came from.
+
+## ConsoleLayer
+
+A single toggle bit - whether the video console's text layer is
+visible over `VideoCard`'s graphics. Writing `0` hides it, any other
+value shows it; reading returns the current state (0/1). Visible by
+default (right after the VM starts).
+
+| Offset | Register | Description |
+|----------|---------|----------|
+| 0 | CONSOLE_VISIBLE (read/write) | 0 = hidden, 1 (or any nonzero) = visible |
+
+Address: `0xF0001042` (see "Built-in device register constants
+(prelude)" in the "Mini-C" section - it already declares the
+`CONSOLE_VISIBLE` constant for you).
+
+Two independent sources write to it:
+
+- **`VideoCard`** (see its section below) - `MODE_ON` automatically
+  hides the console (but only on the off→on transition - a repeated
+  `MODE_ON` during an already-running session doesn't undo what the
+  program turned on itself), `MODE_OFF` always brings it back, so a
+  graphical program doesn't leave the screen without a console after
+  it exits.
+- **The program itself** - "combined mode": turn the console back on
+  while graphics are already active, and print text (`print_char`/
+  `set_color`/`clear_screen`/`poke()` already write to `Text VRAM`/
+  `TextAttr` at any time regardless - `CONSOLE_VISIBLE` only decides
+  whether what's already there gets shown).
+
+Example - `C/DEMOS/SNOW3D.MC`: `MODE_ON` hides the console
+automatically, the demo immediately turns it back on
+(`poke(CONSOLE_VISIBLE, 1)`) and keeps printing colorful "snowflakes"
+(with `TRANSPARENT_BG`, see "TextAttr" above) over the scrolling tile
+map/sprite/spinning 3D cube - a live example of text and graphics at
+the same time in one window.
+
+
+---
+
 ## VideoCard
 
 A 320x240 bitmap video mode, RGB (3 bytes per pixel). Unlike
@@ -1888,15 +2001,19 @@ from the CPU would be impractically slow). Instead there's a compact
 command protocol (registers + a `COMMAND` trigger), like `Disk`: the
 whole framebuffer lives inside the device on the C++ side.
 
-It draws not into the console but into a separate native window
-(Win32 + OpenGL/WGL) - the console keeps working as a normal text
-terminal the whole time. The window and its message pump/render loop
-live on a separate thread, completely independent of the CPU loop -
-no rendering happens inside the device's `tick()` (`VideoCard`
-doesn't even override `tick()`), since `tick()` is called on EVERY
-bus access (see `CPU::busRead`/`busWrite`) - doing heavy work there
-would repeat the old `Keyboard` bug (see "Keyboard" above), only much
-worse.
+The device has no window/thread/OpenGL context of its own - the only
+screen for the whole process is owned by `VideoConsole` (see its
+section above), and `VideoCard` is just another layer in its
+composition: `MODE_ON`/`MODE_OFF` merely set an "active" flag (and
+also toggle `ConsoleLayer`, see its section above) - `VideoConsole`
+fits the ready frame (320x240) into its own canvas on every redraw
+whenever that flag is set. The heavy composition work still doesn't
+happen inside the device's `tick()` (`VideoCard` doesn't override
+`tick()` at all) - `tick()` is called on EVERY bus access (see
+`CPU::busRead`/`busWrite`), and doing anything expensive there would
+repeat the old `Keyboard` bug (see "Keyboard" above), only much worse.
+In the legacy text console mode (`console=text`) `VideoCard` has no
+screen at all - graphics are unavailable there.
 
 Coordinates 0-319/0-239 don't fit in one byte (max 255) - they're
 passed as LOW+HIGH bytes (16-bit), the same way `Disk` does for
@@ -1924,15 +2041,15 @@ follows immediately after.
 
 Commands (`COMMAND`):
 
-- **1 (MODE_ON)** - opens the window (640x480, 2x scale from the
-  320x240 buffer) and starts the render thread if it isn't running
-  yet. Doesn't block the calling program.
-- **2 (MODE_OFF)** - stops the render thread and closes the window.
-  The in-memory framebuffer isn't cleared. The user closing the
-  window (the X button) also puts the device into this state on its
-  own - an explicit `MODE_OFF` before the program exits is still
-  recommended, so the thread isn't left hanging if the window is
-  still open.
+- **1 (MODE_ON)** - sets the "active" flag - `VideoConsole` starts
+  fitting the 320x240 frame into its own canvas on every redraw (see
+  its section above). Automatically hides the console's text layer via
+  `ConsoleLayer` (only on the off→on transition - see "ConsoleLayer"
+  above). Doesn't block the calling program.
+- **2 (MODE_OFF)** - clears the "active" flag and brings the console's
+  text layer back (`ConsoleLayer`, unconditionally). The in-memory
+  framebuffer isn't cleared. An explicit `MODE_OFF` before the program
+  exits is recommended, so the console isn't left hidden.
 - **3 (CLEAR)** - fills the whole framebuffer with color `R,G,B`
   (ignores X/Y/W/H).
 - **4 (SET_PIXEL)** - colors a single pixel `(X, Y)` with `R,G,B`.
@@ -2828,21 +2945,27 @@ wherever the name appears, the compiler substitutes the number.
 Before your own source is compiled, the compiler silently prepends a
 fixed block of `const`/mapped-array declarations for the registers most
 graphics/tile programs need - `Keyboard`, `Clock`, `VideoCard`
-(background, hardware sprites, tile scroll), `PngLoader`, `MapLoader`
-(see their sections above for what each register does). You don't
-declare these yourself - they're just already there, named with a
-device prefix so registers that share a name across devices (`COMMAND`,
-`STATUS`) don't collide:
+(background, hardware sprites, tile scroll), `ConsoleLayer`,
+`PngLoader`, `MapLoader` (see their sections above for what each
+register does). You don't declare these yourself - they're just
+already there, named with a device prefix so registers that share a
+name across devices (`COMMAND`, `STATUS`) don't collide:
 
     KEYBOARD_DATA, KEYBOARD_CONTROL
     CLOCK_LOW, CLOCK_HIGH
     VIDEOCARD_X_LOW .. VIDEOCARD_STATUS                 (background)
     VIDEOCARD_SPRITE_INDEX .. VIDEOCARD_SPRITE_STATUS   (hardware sprites)
     VIDEOCARD_SCROLL_X_LOW .. VIDEOCARD_SCROLL_Y_HIGH   (tile scroll)
+    CONSOLE_VISIBLE
     PNGLOADER_NAME0, PNGLOADER_SRC_X_LOW .. PNGLOADER_TILE_INDEX
     MAPLOADER_NAME0, MAPLOADER_COMMAND, MAPLOADER_STATUS
     EXEC_CHILD_DISK
     CMD_ARGS_LEN
+
+Gpu3D is an exception - its registers are NOT in the prelude (see the
+`C/DEMOS/SNOW3D.MC` example, which declares them by hand as plain
+`const`s) - the addresses are stable, and adding them to the prelude
+the same way as the rest would be easy, it just hasn't been done yet.
 
 Two ready-made mapped arrays over the `NAME0-11` buffers come prepended
 alongside them - `pngLoaderName`/`mapLoaderName` (`int ...[12] = ...;`),
@@ -3327,10 +3450,11 @@ the links in the last column).
 **Built-in device register constants**
 
 Already declared for you in every program - `KEYBOARD_*`, `CLOCK_*`,
-`VIDEOCARD_*` (background/sprites/scroll), `PNGLOADER_*`, `MAPLOADER_*`,
-`EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus ready mapped arrays
-`pngLoaderName`/`mapLoaderName`/`cmdArgs`. See "Built-in device register
-constants (prelude)" above for the full list.
+`VIDEOCARD_*` (background/sprites/scroll), `CONSOLE_VISIBLE`,
+`PNGLOADER_*`, `MAPLOADER_*`, `EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus
+ready mapped arrays `pngLoaderName`/`mapLoaderName`/`cmdArgs`. See
+"Built-in device register constants (prelude)" above for the full
+list.
 
 **Screen (Text VRAM/TextAttr)**
 
