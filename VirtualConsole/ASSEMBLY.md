@@ -2636,9 +2636,10 @@ instruction set in section 3.
 
 ## Types and variables
 
-The only type is `int`, unsigned 8-bit (like the CPU registers).
+The main type is `int`, unsigned 8-bit (like the CPU registers).
 Overflow silently wraps around, as it does everywhere in this
-assembler.
+assembler. There's also `long`, a 16-bit scalar with a deliberately
+narrow set of supported operations - see "The `long` type" below.
 
 Variables are **global only** - there's no such thing as a real local
 variable with a stack frame (the CPU has no "SP+offset" addressing).
@@ -2651,12 +2652,68 @@ Fixed-size arrays - top level only:
 
     int arr[16];
 
-The index is 8-bit (0-255), `arr[i]` works for both reads and writes.
-Implemented with the same tricks as `cmdbuf`/`NAME` in `SHELL.ASM`:
-`LDHL` to the array's base address + `INCHL` in a loop the needed
-number of times (a separate routine, `__mc_hladd`, which the compiler
-appends to the end of the program by itself if arrays were used at
-all).
+The index is normally 8-bit (0-255) - `arr[i]` works for both reads
+and writes. Implemented with the same tricks as `cmdbuf`/`NAME` in
+`SHELL.ASM`: `LDHL` to the array's base address + `INCHL` in a loop the
+needed number of times (a separate routine, `__mc_hladd`, which the
+compiler appends to the end of the program by itself if arrays were
+used at all). Indexing by a `long` variable instead (see "The `long`
+type" below) lifts this to 65535 elements - `arr[16]` still only
+reserves 16 bytes, so the array size itself has never been limited to
+255, only how far a plain `int` index could reach into it.
+
+### The `long` type
+
+    long i;
+    i = 0;
+    while (i < 2000) {
+        bigArr[i] = something;
+        i = i + 1;
+    }
+
+`long` is a 16-bit unsigned scalar (0-65535), added specifically so
+array indices and loop counters can go past the 255-element ceiling of
+a plain `int` index, without giving the CPU's 8-bit ALU any real
+16-bit arithmetic to do. Under the hood a `long NAME;` reserves two
+bytes - `NAME` (low) and a hidden `NAME__hi` (high, a separate label -
+the assembler has no "label+1" operand arithmetic) - the same split
+`ADC`/`SBC` carry-chain trick already used by `__mc_screen_offset` for
+`y*80+x` (see "Mapped arrays" above).
+
+On purpose, only a narrow set of forms is supported - anything else is
+a compile error (`Мини-C: строка N: 'NAME' - long (16 бит), нельзя
+использовать напрямую как обычное значение...`) rather than a silently
+truncated or wrong result:
+
+- `long NAME;` - declaration (global only, like `int`; no `long`
+  function parameters or return values in v1).
+- `NAME = <intExpr>;` - assigns an `int`-range expression, zero-extended
+  (high byte set to 0).
+- `NAME = NAME + <intExpr>;` / `NAME = NAME - <intExpr>;` - the only
+  supported arithmetic: increment/decrement by a plain `int` value,
+  carried between the two bytes via `ADC`/`SBC`. Any other combination
+  (`long + long`, `*`, `/`, `%`, bitwise ops, `long` on the right of
+  `+`/`-`) is a compile error.
+- Comparisons in `if`/`while` - `NAME < intExpr`, and `NAME < otherLong`
+  (`<=`, `>`, `>=`, `==`, `!=` too) - compares high bytes first, low
+  bytes only on a tie, same two-step chain a human would do by hand.
+- `arr[NAME]` - using a bare `long` variable as an array index, see
+  "Mapped arrays" above. Only a bare identifier works as a `long`
+  index - a compound expression like `arr[i + 1]` where `i` is `long`
+  is a compile error, not silent truncation.
+
+Using a `long` variable directly as an ordinary 8-bit value (as a
+plain expression, function argument, `print_char`, etc.) is also a
+compile error - there's no implicit narrowing, since silently dropping
+the high byte would be exactly the kind of bug this type exists to
+prevent.
+
+No demo/tool in this project currently uses `long` for its own data
+(`EDIT.MC`'s in-memory buffer, for example, still uses the older
+one-array-per-line scheme - see "Example: VIEW.MC / DISKIO.MC" below)
+- it exists so that future code needing a bigger array (a longer text
+buffer, a bigger level, etc.) doesn't have to invent its own ad-hoc
+16-bit workaround.
 
 ### Mapped arrays
 
@@ -3041,7 +3098,8 @@ and `C/DEV/SRC/LIBDEMO.MC` (includes it) for a working example.
   `print_str`/`mod_load`/`str_copy`, each copying it into a fixed
   destination at compile time, never as a runtime value you can pass
   around.
-- Pointers, `struct`, 16/32-bit types, `switch`.
+- Pointers, `struct`, `switch`, any 16-bit arithmetic beyond what
+  `long` supports (see "The `long` type"), no 32-bit type.
 - Recursion (see "Functions" above).
 - Compound assignment operators (`+=` etc.) and `++`/`--` - write
   `i = i + 1;` instead.
@@ -3135,6 +3193,89 @@ there via `Disk::lastExecDir`, regardless of which folder `FM.MC`'s
 panels happen to be browsing when `F3` is pressed - no copying `.RUN`
 files around, no fixed "put it at the root" convention to remember.
 
+## Built-in tools: FM.MC / EDIT.MC / VIEW.MC keybindings
+
+Three ready-made Mini-C programs live in `C/TOOLS` and are meant to be
+built once and used from the shell like any other OS tool - `build
+fm.mc` / `build edit.mc` / `build view.mc`, then run as `fm` / `edit
+NAME` / `view NAME`.
+
+### FM.MC - file manager
+
+A two-panel Norton-Commander-style file manager (see `C/TOOLS/FM.MC`'s
+own header comment for the full design rationale - independent
+per-panel disk/folder via `sync_disk_to_panel()`, launching other
+programs via `exec_child()`, etc.). Each panel browses a disk (C or D)
+independently, including both panels on the same physical disk at
+different folders.
+
+| Key | Action | Details |
+|---|---|---|
+| `Tab` | switch the active panel | |
+| `Up`/`Down` | move the selection | |
+| `Enter` | enter a folder, or run the selected `*.RUN` | via `exec_child()`, "Running a child program" |
+| `Backspace` | go up one folder | |
+| `F2` | Rename - prompts for a new name, prefilled with the current one | `request_rename()`/`perform_rename()` |
+| `F3` | View - opens the selected file in `VIEW.MC` | `view_selected_file()` |
+| `F4` | Edit - opens the selected file in `EDIT.MC` (full-screen editor) | `edit_selected_file()` |
+| `F5` | Copy the selected file | |
+| `F6` | Move (copy + delete the source) | `do_move()` |
+| `F7` | MkDir - creates a folder in the active panel's current folder | `request_mkdir()`/`perform_mkdir()` |
+| `F8` | Delete the selected file/empty folder, after a Y/N confirmation | `request_delete()` |
+| `F9` | New file - creates an empty file in the active panel's current folder and immediately opens it in `EDIT.MC` | `request_newfile()`/`perform_newfile()` |
+| `F10` | Build - compiles/assembles the selected `*.MC`/`*.ASM` via the `BUILD` disk command, prints `Build OK`/`Build FAILED: <error>` on the status line | `build_selected_file()`; case-insensitive extension check, matches `Disk::readErrorByte()` |
+| `Alt+F1` / `Alt+F2` | switch the left/right panel's disk (C/D) | `select_disk_left()`/`select_disk_right()` |
+| `Ctrl+Q` | quit | |
+
+A `..` entry appears at the top of the listing whenever the panel
+isn't at the disk root; `Enter` on it goes up a folder, same as
+`Backspace` - it can't be deleted/moved/copied/built
+(`is_dotdot_selected()`).
+
+### EDIT.MC - full-screen text editor
+
+The whole file is held in memory - one array per line
+(`line0[80]..line47[80]`, `MAX_LINES=48`/`MAX_COLS=80`), accessed only
+through `get_char(row,col)`/`set_char(row,col,v)`, because Mini-C has
+no arrays-of-arrays and a plain `int` array tops out at 255 elements
+(see "Types and variables" above - `EDIT.MC` predates the `long` type
+and hasn't been rewritten to use it). A file longer than `MAX_LINES`
+lines, or with a line longer than `MAX_COLS`, opens **truncated**
+(status bar shows `TRUNCATED`) rather than silently losing data -
+saving a truncated buffer requires an extra Y/N confirmation, since it
+permanently discards whatever didn't fit.
+
+| Key | Action |
+|---|---|
+| arrows | move the cursor |
+| `Home`/`End` | start/end of the current line |
+| `PgUp`/`PgDn` | scroll one screen up/down |
+| `Enter` | split the line at the cursor |
+| `Backspace`/`Delete` | delete a character (merges with the neighboring line at a line boundary) |
+| `Ctrl+S` | save |
+| `Esc` | quit - with unsaved changes, asks `Y`/`N`/`Esc` (save-and-quit / quit-without-saving / cancel) |
+
+If the named file doesn't already exist, `EDIT.MC` opens a new empty
+buffer instead of failing (unlike `VIEW.MC`, which refuses in that
+case). Launched from `FM.MC` via `F4`/`F9`, or directly: `exec edit.mc
+NAME` / `edit NAME` after building once.
+
+### VIEW.MC - paged text-file viewer
+
+Doesn't hold the file in memory - re-opens it and re-counts newlines
+from the start on every page flip instead, since a real text file
+wouldn't fit in a 255-element array. Refuses to open a file that
+doesn't exist (unlike `EDIT.MC`).
+
+| Key | Action |
+|---|---|
+| `Up`/`Down` | previous/next page (24 lines each; row 25 is a status line) |
+| `Esc` | back to whoever launched it |
+
+Launched from `FM.MC` via `F3`, or directly: `exec view.mc NAME` /
+`view NAME` after building once. See "Example: VIEW.MC / DISKIO.MC"
+above for the underlying `DISKIO.MC` library it's built on.
+
 ## Cheat sheet
 
 A compact syntax summary - without explanations (those are above, via
@@ -3148,6 +3289,8 @@ the links in the last column).
 | `int x = 5;` | a variable with an initial value (inside a function only) | "Types and variables" |
 | `int arr[16];` | a fixed-size array, index 0-255 | "Types and variables" |
 | `int arr[16] = 0xF0000007;` | a mapped array - a window into existing memory at an address | "Mapped arrays" |
+| `long i;` | a 16-bit scalar (0-65535) - only `=`/`+`/`-` with an `int`, comparisons, and as an array index | "The `long` type" |
+| `arr[i]` (`i` is `long`) | array index up to 65535, instead of the usual 255 ceiling | "The `long` type" |
 
 **Functions**
 
@@ -3246,7 +3389,8 @@ Pulls in a library file from disk C, `DEV/LIB`, at compile time - see
 - Strings as a type (only as a literal inside `print_str`/`mod_load`/
   `str_copy`, each copying it into a fixed destination at compile time -
   never a runtime value you can pass around).
-- Pointers, `struct`, 16/32-bit types, `switch`.
+- Pointers, `struct`, `switch`, any 16-bit arithmetic beyond what
+  `long` supports (see "The `long` type"), no 32-bit type.
 - Recursion.
 - `+=`/`-=`/... and `++`/`--` - write `i = i + 1;` instead.
 
