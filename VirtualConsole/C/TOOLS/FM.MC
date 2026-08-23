@@ -27,14 +27,16 @@
 // работают F2 (Rename - см. request_rename()/perform_rename(),
 // переименовывает выделенный файл/папку по введённому имени,
 // предзаполненному текущим), F3 (View - см. view_selected_file(),
-// открывает выделенный файл в C/TOOLS/VIEW.MC), F5 (Copy), F6 (Move -
-// см. do_move(), тот же перенос байт, что F5, плюс удаление
-// источника), F7 (MkDir - см. request_mkdir(), создаёт папку в
-// текущей папке активной панели по введённому имени), F8 (Del - см.
-// request_delete(), удаляет выделенный файл/ПУСТУЮ папку после
-// подтверждения Y/N) и F10 (Build - см. build_selected_file(),
+// открывает выделенный файл в C/TOOLS/VIEW.MC), F4 (Edit - см.
+// edit_selected_file(), открывает выделенный файл в C/TOOLS/EDIT.MC -
+// полноэкранный редактор текста, весь файл в памяти, сохранение по
+// Ctrl+S), F5 (Copy), F6 (Move - см. do_move(), тот же перенос байт,
+// что F5, плюс удаление источника), F7 (MkDir - см. request_mkdir(),
+// создаёт папку в текущей папке активной панели по введённому имени),
+// F8 (Del - см. request_delete(), удаляет выделенный файл/ПУСТУЮ папку
+// после подтверждения Y/N) и F10 (Build - см. build_selected_file(),
 // собирает выделенный *.ASM/*.MC через BUILD в Disk), остальные -
-// только подписи (v1, задел на будущее: F4 Edit и т.д.). Наверху
+// только подписи (v1, задел на будущее). Наверху
 // списка появляется пункт ".." (если панель
 // не в корне диска, см. populate_left()/populate_right()) - Enter на
 // нём поднимает на уровень вверх (как Backspace), удалить/перенести/
@@ -61,6 +63,7 @@ const CLOCK_LOW = 0xF0000FFC;
 
 const FKEY_F2 = 60;   // Rename
 const FKEY_F3 = 61;   // View
+const FKEY_F4 = 62;   // Edit
 const FKEY_F5 = 63;   // Copy
 const FKEY_F6 = 64;   // Move
 const FKEY_F7 = 65;   // MkDir
@@ -893,7 +896,7 @@ int draw_mkdir_box() {
 
 int draw_rename_box() {
     draw_input_frame();
-    print_str(DELCONF_X + 2, DELCONF_Y + 1, "Rename to:");
+    print_str(DELCONF_X + 2, DELCONF_Y + 1, "Enter new name:");
     draw_input_text();
     return 0;
 }
@@ -1122,6 +1125,59 @@ int view_selected_file() {
     d_set_name_char(diskId, 1, 73);    // I
     d_set_name_char(diskId, 2, 69);    // E
     d_set_name_char(diskId, 3, 87);    // W
+    d_set_name_char(diskId, 4, 46);    // .
+    d_set_name_char(diskId, 5, 82);    // R
+    d_set_name_char(diskId, 6, 85);    // U
+    d_set_name_char(diskId, 7, 78);    // N
+    d_set_name_char(diskId, 8, 0);
+    d_set_name_char(diskId, 9, 0);
+    d_set_name_char(diskId, 10, 0);
+    d_set_name_char(diskId, 11, 0);
+
+    poke(EXEC_CHILD_DISK, diskId);
+    exec_child();
+
+    clear_screen();
+    render_left();
+    render_right();
+    render_status();
+
+    return 0;
+}
+
+int edit_selected_file() {
+    // F4 - открывает выделенный файл в C/TOOLS/EDIT.MC (полноэкранный
+    // редактор) - та же схема, что view_selected_file() выше (NAME на
+    // диске держит "EDIT.RUN", имя редактируемого файла идёт через
+    // cmdArgs), EDIT.RUN ищется тем же резервным механизмом
+    // Disk::loadChildRun(), собирается один раз в той же папке, что и
+    // сама FM.MC.
+    int panel;
+    int diskId;
+    int sel;
+    int i;
+    int ch;
+
+    panel = activeRight;
+    if (panel == 0) { diskId = leftDisk; sel = leftSel; } else { diskId = rightDisk; sel = rightSel; }
+
+    if (panel == 0) { if (leftCount == 0) { return 0; } } else { if (rightCount == 0) { return 0; } }
+    if (panel == 0) { if (leftIsDir[sel] == 1) { return 0; } } else { if (rightIsDir[sel] == 1) { return 0; } }
+
+    sync_disk_to_panel(panel);
+
+    i = 0;
+    while (i < 12) {
+        if (panel == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        cmdArgs[i] = ch;
+        i = i + 1;
+    }
+    poke(CMD_ARGS_LEN, 12);
+
+    d_set_name_char(diskId, 0, 69);    // E
+    d_set_name_char(diskId, 1, 68);    // D
+    d_set_name_char(diskId, 2, 73);    // I
+    d_set_name_char(diskId, 3, 84);    // T
     d_set_name_char(diskId, 4, 46);    // .
     d_set_name_char(diskId, 5, 82);    // R
     d_set_name_char(diskId, 6, 85);    // U
@@ -1501,6 +1557,7 @@ int main() {
 
                 if (key == FKEY_F2) { request_rename(); }   // F2
                 if (key == FKEY_F3) { view_selected_file(); }   // F3
+                if (key == FKEY_F4) { edit_selected_file(); }   // F4
                 if (key == FKEY_F5) { do_copy(); }   // F5
                 if (key == FKEY_F6) { do_move(); }   // F6
                 if (key == FKEY_F7) { request_mkdir(); }   // F7

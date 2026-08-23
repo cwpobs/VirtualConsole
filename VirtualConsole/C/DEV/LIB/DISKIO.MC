@@ -20,6 +20,8 @@ int diskioDName[12] = 0xF00007F9;
 // Команды Disk, общие для обоих дисков (см. ASSEMBLY.md, "Disk").
 const DISKIO_OPEN_READ = 3;
 const DISKIO_READ_BYTE = 4;
+const DISKIO_OPEN_WRITE = 5;
+const DISKIO_WRITE_BYTE = 6;
 const DISKIO_CLOSE = 7;
 
 int diskio_cmd(int diskId, int cmd) {
@@ -36,6 +38,12 @@ int diskio_status(int diskId) {
 int diskio_data(int diskId) {
     if (diskId == 0) { return peek(DISKIO_C_DATA); }
     return peek(DISKIO_D_DATA);
+}
+
+int diskio_set_data(int diskId, int value) {
+    if (diskId == 0) { poke(DISKIO_C_DATA, value); return 0; }
+    poke(DISKIO_D_DATA, value);
+    return 0;
 }
 
 int diskio_name_char(int diskId, int idx) {
