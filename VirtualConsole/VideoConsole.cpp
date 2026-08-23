@@ -56,6 +56,26 @@ namespace
         }
     }
 
+    // Ведущий байт двухбайтовой extended-последовательности _getch() -
+    // 0 для F1-F10, 0xE0 (224) для остальных (стрелки/Home/End/PgUp/
+    // PgDn/Delete) - реальная консоль всегда шлёт его ПЕРЕД самим кодом
+    // клавиши (см. Keyboard::tick(), которое ретранслирует _getch() как
+    // есть). Без этого лидирующего байта потребители вроде
+    // C/TOOLS/EDIT.MC (см. его pendingExtended, EDIT.MC:98-105) не
+    // могут отличить настоящую печатную букву от спецклавиши - код
+    // KEY_UP=72 численно совпадает с 'H' и т.п. C/TOOLS/FM.MC лидирующий
+    // байт просто безвредно игнорирует (см. FM.MC:56-60), поэтому один
+    // и тот же приём безопасен для обоих потребителей.
+    uint8_t extendedKeyPrefix(WPARAM vk)
+    {
+        if (vk >= VK_F1 && vk <= VK_F10)
+        {
+            return 0;
+        }
+
+        return 0xE0;
+    }
+
     const int PIXEL_WIDTH = VideoConsole::COLS * VideoConsole::CELL_W;   // 640
     const int PIXEL_HEIGHT = VideoConsole::ROWS * VideoConsole::CELL_H;  // 400
 
@@ -111,6 +131,10 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
 
             if (self != nullptr && self->keyboard != nullptr)
             {
+                // Двухбайтовая последовательность (префикс, потом код) -
+                // см. extendedKeyPrefix выше; без префикса EDIT.MC не
+                // отличает стрелку от буквы с тем же числовым кодом.
+                self->keyboard->injectKey(extendedKeyPrefix(wParam));
                 self->keyboard->injectKey(static_cast<uint8_t>(code));
             }
 
