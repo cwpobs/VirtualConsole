@@ -84,7 +84,7 @@ static const std::string kDevicePrelude =
     "int cmdArgs[16] = 0x00010006;\n";
 
 static const char* kKeywords[] = {
-    "int", "if", "else", "while", "for", "return", "const",
+    "int", "long", "if", "else", "while", "for", "return", "const",
     "poke", "peek",
     "print_char", "print_str", "set_color", "clear_screen",
     "exec_child",
@@ -301,36 +301,58 @@ Compiler::NodePtr Compiler::parseTopLevelDecl()
         return n;
     }
 
-    expect("int");
+    bool isLong = false;
+    if (match("long"))
+    {
+        isLong = true;
+    }
+    else
+    {
+        expect("int");
+    }
     std::string name = expectIdent().text;
 
-    if (check("("))
+    if (isLong)
     {
-        return parseFuncDecl(name);
-    }
-
-    if (match("["))
-    {
-        auto n = node(NodeKind::ArrayDecl);
-        n->text = name;
-        NodePtr sizeExpr = parseExpr();
-        n->children.push_back(sizeExpr);
-        expect("]");
-        if (match("="))
+        // `long` - только скалярная переменная (см. Compiler.h,
+        // longVars) - ни функций, ни массивов в v1.
+        if (check("(") || check("["))
         {
-            // Маппированный массив - "= адрес" вместо обычного DB-
-            // хранилища привязывает arr[i] к готовому MMIO-адресу
-            // (например, Text VRAM) - см. Compiler.h и ASSEMBLY.md,
-            // "Мини-C". Адрес - константа времени компиляции, как у
-            // poke/peek.
-            n->children.push_back(parseExpr());
+            error("'long' поддерживает только простые переменные - "
+                  "функции и массивы должны быть 'int'");
         }
-        expect(";");
-        return n;
+    }
+    else
+    {
+        if (check("("))
+        {
+            return parseFuncDecl(name);
+        }
+
+        if (match("["))
+        {
+            auto n = node(NodeKind::ArrayDecl);
+            n->text = name;
+            NodePtr sizeExpr = parseExpr();
+            n->children.push_back(sizeExpr);
+            expect("]");
+            if (match("="))
+            {
+                // Маппированный массив - "= адрес" вместо обычного DB-
+                // хранилища привязывает arr[i] к готовому MMIO-адресу
+                // (например, Text VRAM) - см. Compiler.h и ASSEMBLY.md,
+                // "Мини-C". Адрес - константа времени компиляции, как у
+                // poke/peek.
+                n->children.push_back(parseExpr());
+            }
+            expect(";");
+            return n;
+        }
     }
 
     auto n = node(NodeKind::VarDecl);
     n->text = name;
+    n->isLong = isLong;
     if (match("="))
     {
         n->children.push_back(parseExpr());
@@ -373,9 +395,18 @@ Compiler::NodePtr Compiler::parseBlock()
 
 Compiler::NodePtr Compiler::parseVarDeclStatement()
 {
-    expect("int");
+    bool isLong = false;
+    if (match("long"))
+    {
+        isLong = true;
+    }
+    else
+    {
+        expect("int");
+    }
     auto n = node(NodeKind::VarDecl);
     n->text = expectIdent().text;
+    n->isLong = isLong;
     if (match("="))
     {
         n->children.push_back(parseExpr());
@@ -395,6 +426,7 @@ Compiler::NodePtr Compiler::parseExprStatement()
 Compiler::NodePtr Compiler::parseStatement()
 {
     if (check("int")) return parseVarDeclStatement();
+    if (check("long")) return parseVarDeclStatement();
     if (check("{")) return parseBlock();
 
     if (match("if"))
@@ -933,6 +965,7 @@ void Compiler::collectVarDecls(const NodePtr& n)
             if (name == n->text) { seen = true; break; }
         }
         if (!seen) globalVars.push_back(n->text);
+        if (n->isLong) { longVars.insert(n->text); }
     }
 
     for (const auto& child : n->children)
@@ -992,6 +1025,16 @@ void Compiler::genComparisonToA(const NodePtr& expr)
     // Результат сравнения материализуется как 0/1 в A - см.
     // Compiler.h, комментарий про "простой, единообразный" подход.
     const std::string& op = expr->text;
+
+    bool leftLong = expr->children[0]->kind == NodeKind::Ident &&
+        longVars.count(expr->children[0]->text) > 0;
+    bool rightLong = expr->children[1]->kind == NodeKind::Ident &&
+        longVars.count(expr->children[1]->text) > 0;
+    if (leftLong || rightLong)
+    {
+        genLongComparisonToA(expr);
+        return;
+    }
 
     genExprToA(expr->children[1]);
     *codeOut << "    PUSH A\n";
@@ -1059,8 +1102,155 @@ void Compiler::genAddressOf(const NodePtr& indexNode)
     {
         *codeOut << "    LDHL " << indexNode->text << "\n";
     }
-    genExprToA(indexNode->children[0]);
-    *codeOut << "    CALL __mc_hladd\n";
+
+    const NodePtr& idx = indexNode->children[0];
+    if (idx->kind == NodeKind::Ident && longVars.count(idx->text))
+    {
+        // long-индекс (см. Compiler.h) - грузим РЕАЛЬНЫЙ старший байт
+        // смещения в B вместо жёстких "LDI B, 0" внутри __mc_hladd -
+        // снимает потолок в 255 элементов массива (ADDHL и так уже
+        // принимает 16-битное смещение - см. CPU.h/ASSEMBLY.md).
+        *codeOut << "    LDA " << idx->text << "__hi\n";
+        *codeOut << "    PUSH A\n";
+        *codeOut << "    LDA " << idx->text << "\n";
+        *codeOut << "    PUSH A\n";
+        *codeOut << "    POP C\n";
+        *codeOut << "    POP B\n";
+        *codeOut << "    ADDHL B, C\n";
+    }
+    else
+    {
+        // любое другое выражение (в т.ч. использование long не голым
+        // идентификатором, например "arr[i + 1]") - обычный путь;
+        // если внутри всё же встретится long-идентификатор,
+        // genExprToA(Ident) сам кинет понятную ошибку (см. выше) -
+        // сложные long-выражения как индекс не поддержаны в v1.
+        genExprToA(idx);
+        *codeOut << "    CALL __mc_hladd\n";
+    }
+}
+
+// ---- `long` (16-бит скаляр) - см. Compiler.h, longVars ----
+
+void Compiler::genLongAssign(const std::string& name, const NodePtr& rhs, int line)
+{
+    (void)line;
+
+    // Единственная поддерживаемая v1-арифметика на `long` -
+    // "NAME = NAME + <intExpr>;" / "NAME = NAME - <intExpr>;"
+    // (инкремент/декремент счётчика цикла или индекса) - перенос
+    // между байтами через ADC/SBC, тот же приём, что уже использует
+    // __mc_screen_offset для y*80+x.
+    if (rhs->kind == NodeKind::BinOp && (rhs->text == "+" || rhs->text == "-"))
+    {
+        const NodePtr& left = rhs->children[0];
+        const NodePtr& right = rhs->children[1];
+        if (left->kind == NodeKind::Ident && left->text == name)
+        {
+            genExprToA(right);          // A = X (обычное int-выражение, 0-255)
+            *codeOut << "    PUSH A\n";
+            *codeOut << "    LDA " << name << "\n";
+            *codeOut << "    POP B\n";
+            if (rhs->text == "+")
+            {
+                *codeOut << "    ADD B\n";   // A = NAME_lo + X, CARRY выставлен
+            }
+            else
+            {
+                *codeOut << "    SUB B\n";   // A = NAME_lo - X, CARRY = заём
+            }
+            *codeOut << "    STA " << name << "\n";
+            *codeOut << "    LDA " << name << "__hi\n";
+            *codeOut << "    LDI B, 0\n";
+            if (rhs->text == "+")
+            {
+                *codeOut << "    ADC B\n";   // + перенос
+            }
+            else
+            {
+                *codeOut << "    SBC B\n";   // - заём
+            }
+            *codeOut << "    STA " << name << "__hi\n";
+            return;
+        }
+    }
+
+    // Иначе - обычное int-выражение, "расширение нулём" (если внутри
+    // встретится long-идентификатор - genExprToA(Ident) сам кинет
+    // понятную ошибку, см. выше - long+long/`*`/`/`/`%`/побитовые не
+    // поддержаны в v1).
+    genExprToA(rhs);
+    *codeOut << "    STA " << name << "\n";
+    *codeOut << "    LDI A, 0\n";
+    *codeOut << "    STA " << name << "__hi\n";
+}
+
+void Compiler::genLongOperandToScratch(const NodePtr& operand, const std::string& hiCell, const std::string& loCell)
+{
+    if (operand->kind == NodeKind::Ident && longVars.count(operand->text))
+    {
+        *codeOut << "    LDA " << operand->text << "__hi\n";
+        *codeOut << "    STA " << hiCell << "\n";
+        *codeOut << "    LDA " << operand->text << "\n";
+        *codeOut << "    STA " << loCell << "\n";
+    }
+    else
+    {
+        // обычное int-выражение (0-255) - расширение нулём
+        genExprToA(operand);
+        *codeOut << "    STA " << loCell << "\n";
+        *codeOut << "    LDI A, 0\n";
+        *codeOut << "    STA " << hiCell << "\n";
+    }
+}
+
+void Compiler::genLongComparisonToA(const NodePtr& expr)
+{
+    // Сравнение "long OP intExpr" или "long OP long" - сначала
+    // старшие байты, при равенстве - младшие (классическая
+    // двухбайтовая цепочка). Результат материализуется как 0/1 в A -
+    // тот же контракт, что у genComparisonToA().
+    usesLongCompare = true;
+    const std::string& op = expr->text;
+
+    genLongOperandToScratch(expr->children[0], "__mc_lcmp_a_hi", "__mc_lcmp_a_lo");
+    genLongOperandToScratch(expr->children[1], "__mc_lcmp_b_hi", "__mc_lcmp_b_lo");
+
+    std::string ltLabel = newLabel("lcmp_lt");
+    std::string gtLabel = newLabel("lcmp_gt");
+    std::string eqLabel = newLabel("lcmp_eq");
+    std::string doneLabel = newLabel("lcmp_done");
+
+    *codeOut << "    LDA __mc_lcmp_b_hi\n";
+    *codeOut << "    PUSH A\n";
+    *codeOut << "    LDA __mc_lcmp_a_hi\n";
+    *codeOut << "    POP B\n";
+    *codeOut << "    CMP B\n";
+    *codeOut << "    JC " << ltLabel << "\n";
+    *codeOut << "    JNZ " << gtLabel << "\n";
+
+    *codeOut << "    LDA __mc_lcmp_b_lo\n";
+    *codeOut << "    PUSH A\n";
+    *codeOut << "    LDA __mc_lcmp_a_lo\n";
+    *codeOut << "    POP B\n";
+    *codeOut << "    CMP B\n";
+    *codeOut << "    JC " << ltLabel << "\n";
+    *codeOut << "    JZ " << eqLabel << "\n";
+    *codeOut << "    JMP " << gtLabel << "\n";
+
+    bool trueOnLt = (op == "<" || op == "<=" || op == "!=");
+    bool trueOnEq = (op == "==" || op == "<=" || op == ">=");
+    bool trueOnGt = (op == ">" || op == ">=" || op == "!=");
+
+    *codeOut << ltLabel << ":\n";
+    *codeOut << "    LDI A, " << (trueOnLt ? 1 : 0) << "\n";
+    *codeOut << "    JMP " << doneLabel << "\n";
+    *codeOut << eqLabel << ":\n";
+    *codeOut << "    LDI A, " << (trueOnEq ? 1 : 0) << "\n";
+    *codeOut << "    JMP " << doneLabel << "\n";
+    *codeOut << gtLabel << ":\n";
+    *codeOut << "    LDI A, " << (trueOnGt ? 1 : 0) << "\n";
+    *codeOut << doneLabel << ":\n";
 }
 
 void Compiler::genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr)
@@ -1285,6 +1475,14 @@ void Compiler::genExprToA(const NodePtr& expr)
 
     case NodeKind::Assign:
     {
+        if (longVars.count(expr->text))
+        {
+            genLongAssign(expr->text, expr->children[0], expr->line);
+            // `long` в v1 - не параметр функции (см. Compiler.h) -
+            // mangleParam-путь ниже сюда не относится.
+            *codeOut << "    LDI A, 0\n";   // Assign как выражение по-прежнему должен что-то оставить в A
+            return;
+        }
         genExprToA(expr->children[0]);
         if (!currentFunction.empty())
         {
@@ -1324,6 +1522,20 @@ void Compiler::genExprToA(const NodePtr& expr)
     case NodeKind::Ident:
     {
         std::string name = expr->text;
+        if (longVars.count(name))
+        {
+            // `long` - 16 бит, не влезает в A (8 бит) - нельзя молча
+            // обрезать до младшего байта. Поддержаны только
+            // 'NAME = <int>;', 'NAME = NAME +/- <int>;', сравнения в
+            // условиях и 'arr[NAME]' как индекс - см. Compiler.h.
+            throw std::runtime_error(
+                "Мини-C: строка " + std::to_string(expr->line) +
+                ": '" + name + "' - long (16 бит), нельзя использовать "
+                "напрямую как обычное значение - поддержаны только "
+                "'" + name + " = <int>;', '" + name + " = " + name +
+                " +/- <int>;', сравнения в if/while и '" + name +
+                "' как индекс массива");
+        }
         auto constIt = constants.find(name);
         if (constIt != constants.end())
         {
@@ -1623,8 +1835,15 @@ void Compiler::genStatement(const NodePtr& stmt)
     case NodeKind::VarDecl:
         if (!stmt->children.empty())
         {
-            genExprToA(stmt->children[0]);
-            *codeOut << "    STA " << stmt->text << "\n";
+            if (stmt->isLong)
+            {
+                genLongAssign(stmt->text, stmt->children[0], stmt->line);
+            }
+            else
+            {
+                genExprToA(stmt->children[0]);
+                *codeOut << "    STA " << stmt->text << "\n";
+            }
         }
         return;
 
@@ -1720,7 +1939,9 @@ std::string Compiler::compile(const std::string& source, const std::vector<std::
     arraySizes.clear();
     arrayBaseAddr.clear();
     globalVars.clear();
+    longVars.clear();
     usesScreenHelper = false;
+    usesLongCompare = false;
 
     lex(source, libSources);
     NodePtr program = parseProgram();
@@ -1830,6 +2051,21 @@ std::string Compiler::compile(const std::string& source, const std::vector<std::
     for (const auto& name : globalVars)
     {
         data << name << ": DB 0\n";
+        if (longVars.count(name))
+        {
+            data << name << "__hi: DB 0\n";   // старший байт `long` - см. Compiler.h
+        }
+    }
+
+    if (usesLongCompare)
+    {
+        // Scratch-ячейки для genLongComparisonToA() - оба операнда
+        // long-сравнения нужно держать одновременно (4 байта), а
+        // регистров A/B/C/D на это не хватает.
+        data << "__mc_lcmp_a_hi: DB 0\n";
+        data << "__mc_lcmp_a_lo: DB 0\n";
+        data << "__mc_lcmp_b_hi: DB 0\n";
+        data << "__mc_lcmp_b_lo: DB 0\n";
     }
 
     for (const auto& decl : program->children)

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -77,6 +78,7 @@ private:
         long long value = 0;           // для Number
         std::vector<std::shared_ptr<Node>> children;
         int line = 0;
+        bool isLong = false;           // VarDecl, объявленный как `long` (16-бит) - см. longVars ниже
     };
 
     using NodePtr = std::shared_ptr<Node>;
@@ -121,6 +123,21 @@ private:
     std::map<std::string, long long> arrayBaseAddr;   // маппированные массивы (`int arr[N] = адрес;`) - alias на внешнюю память (MMIO), без собственной DB-ячейки
     std::vector<std::string> globalVars;   // все `int x;` - и верхнего уровня, и внутри функций (переменных без глобальной DB-ячейки в этом языке не бывает)
 
+    // `long NAME;` - 16-битная скалярная переменная (см. ASSEMBLY.md,
+    // "Мини-C", раздел про `long`). Хранится как ДВЕ ячейки - `NAME`
+    // (младший байт) и `NAME__hi` (старший, отдельная скрытая метка -
+    // у ассемблера нет арифметики "метка+1" в операндах, см.
+    // Assembler.cpp). v1: только объявление, `NAME = <intExpr>;`
+    // (расширение нулём), `NAME = NAME +/- <intExpr>;` (перенос через
+    // ADC/SBC), сравнения в условиях и `arr[NAME]` как индекс массива
+    // шире 255 элементов - см. genLongAssign/genLongComparisonToA/
+    // genAddressOf. Любая другая форма (long+long, `*`, `/`, `%`,
+    // побитовые, `long`-параметры/возврат) - осознанно не
+    // поддерживается, компилятор кидает понятную ошибку вместо тихой
+    // порчи данных.
+    std::set<std::string> longVars;
+    bool usesLongCompare = false;   // нужны ли scratch-ячейки __mc_lcmp_* (эмитятся один раз, если хоть раз использовано long-сравнение)
+
     void collectDeclarations(const NodePtr& program);
     void collectVarDecls(const NodePtr& n);
     long long foldConst(const NodePtr& expr) const;   // для poke/peek адресов и const ИМЯ = выражение
@@ -142,6 +159,12 @@ private:
     void genCondition(const NodePtr& expr, const std::string& falseLabel);
     void genComparisonToA(const NodePtr& expr);
     void genAddressOf(const NodePtr& indexNode);   // вычисляет HL = массив+индекс
+
+    // ---- `long` (16-бит скаляр) - см. longVars выше ----
+
+    void genLongAssign(const std::string& name, const NodePtr& rhs, int line);
+    void genLongComparisonToA(const NodePtr& expr);
+    void genLongOperandToScratch(const NodePtr& operand, const std::string& hiCell, const std::string& loCell);
 
     // ---- Экранные встроенные функции (print_char/print_str/set_color/
     // clear_screen - см. ASSEMBLY.md, "Мини-C") ----
