@@ -26,6 +26,12 @@ public:
     // себе flush не делает.
     void render(const TextAttr* attr, std::ostream& out) const;
 
+    // Сырой байт символа по индексу ячейки (0..SIZE-1), без похода
+    // через ANSI-render() - нужен VideoConsole, чтобы скопировать кадр
+    // в свою память (см. VideoConsole::pushFrame). Аналог
+    // TextAttr::attributeAt.
+    uint8_t charAt(int index) const;
+
 private:
 
     uint8_t data[SIZE];

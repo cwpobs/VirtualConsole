@@ -160,6 +160,7 @@
     <ClCompile Include="CPU.cpp" />
     <ClCompile Include="DebugPort.cpp" />
     <ClCompile Include="Disk.cpp" />
+    <ClCompile Include="Font8x16.cpp" />
     <ClCompile Include="Keyboard.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Gpu3D.cpp" />
@@ -172,6 +173,8 @@
     <ClCompile Include="TextVRAM.cpp" />
     <ClCompile Include="Timer.cpp" />
     <ClCompile Include="VideoCard.cpp" />
+    <ClCompile Include="VideoConsole.cpp" />
+    <ClCompile Include="VmConfig.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h" />
@@ -182,6 +185,7 @@
     <ClInclude Include="DebugPort.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="Disk.h" />
+    <ClInclude Include="Font8x16.h" />
     <ClInclude Include="Keyboard.h" />
     <ClInclude Include="Gpu3D.h" />
     <ClInclude Include="MapLoader.h" />
@@ -194,6 +198,8 @@
     <ClInclude Include="TextVRAM.h" />
     <ClInclude Include="Timer.h" />
     <ClInclude Include="VideoCard.h" />
+    <ClInclude Include="VideoConsole.h" />
+    <ClInclude Include="VmConfig.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="ASSEMBLY.md" />

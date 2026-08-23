@@ -1,0 +1,323 @@
+#include "VideoConsole.h"
+#include "Keyboard.h"
+#include "TextVRAM.h"
+#include "TextAttr.h"
+#include "Font8x16.h"
+
+#include <cstring>
+#include <utility>
+
+#define NOMINMAX
+#include <Windows.h>
+#include <GL/gl.h>
+
+#pragma comment(lib, "opengl32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
+
+namespace
+{
+    const wchar_t* WINDOW_CLASS_NAME = L"VirtualConsoleVideoConsole";
+
+    const int PIXEL_WIDTH = VideoConsole::COLS * VideoConsole::CELL_W;   // 640
+    const int PIXEL_HEIGHT = VideoConsole::ROWS * VideoConsole::CELL_H;  // 400
+
+    // Классический 16-цветный EGA/CGA-набор - тот же порядок, что
+    // документирован у TextAttr (см. TextAttr.h: "младший нибл -
+    // цвет символа (0-15) ... классический PC-формат", 0x07 =
+    // светло-серый на чёрном).
+    const uint8_t PALETTE[16][3] =
+    {
+        {   0,   0,   0 }, // 0 чёрный
+        {   0,   0, 170 }, // 1 синий
+        {   0, 170,   0 }, // 2 зелёный
+        {   0, 170, 170 }, // 3 голубой
+        { 170,   0,   0 }, // 4 красный
+        { 170,   0, 170 }, // 5 малиновый
+        { 170,  85,   0 }, // 6 коричневый
+        { 170, 170, 170 }, // 7 светло-серый (по умолчанию)
+        {  85,  85,  85 }, // 8 тёмно-серый
+        {  85,  85, 255 }, // 9 светло-синий
+        {  85, 255,  85 }, // 10 светло-зелёный
+        {  85, 255, 255 }, // 11 светло-голубой
+        { 255,  85,  85 }, // 12 светло-красный
+        { 255,  85, 255 }, // 13 светло-малиновый
+        { 255, 255,  85 }, // 14 жёлтый
+        { 255, 255, 255 }, // 15 белый
+    };
+}
+
+LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_CLOSE || msg == WM_DESTROY)
+    {
+        // Как у VideoCard - не подвешиваем рендер-поток, он сам
+        // заметит WM_QUIT в своём цикле сообщений и завершится (см.
+        // renderThreadMain).
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    if (msg == WM_CHAR)
+    {
+        // Окно видеоконсоли живёт своим отдельным HWND - если у него
+        // фокус ОС, консольные _kbhit()/_getch() у Keyboard ничего не
+        // получают. Ловим нажатия сами и кладём их в ту же очередь
+        // Keyboard, что и обычный консольный ввод/VideoCard - тот же
+        // приём, что VideoCard.cpp, WindowProc.
+        VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+        if (self != nullptr && self->keyboard != nullptr)
+        {
+            wchar_t wch = static_cast<wchar_t>(wParam);
+            uint8_t byte;
+
+            if (wch < 128)
+            {
+                byte = static_cast<uint8_t>(wch);
+            }
+            else
+            {
+                char converted = 0;
+                WideCharToMultiByte(866, 0, &wch, 1, &converted, 1, nullptr, nullptr);
+                byte = static_cast<uint8_t>(converted);
+            }
+
+            self->keyboard->injectKey(byte);
+        }
+
+        return 0;
+    }
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+VideoConsole::VideoConsole(Keyboard* keyboard, int scale)
+    : keyboard(keyboard), scale(scale), stopRequested(false),
+    cursorRow(0), cursorCol(0), cursorVisible(false), frameGeneration(0)
+{
+    for (int i = 0; i < COLS * ROWS; i++)
+    {
+        chars[i] = ' ';
+        attrs[i] = TextAttr::DEFAULT_ATTRIBUTE;
+    }
+}
+
+VideoConsole::~VideoConsole()
+{
+    stopRequested = true;
+
+    if (renderThread.joinable())
+    {
+        renderThread.join();
+    }
+}
+
+void VideoConsole::start()
+{
+    if (renderThread.joinable())
+    {
+        return; // уже запущена
+    }
+
+    stopRequested = false;
+    renderThread = std::thread(&VideoConsole::renderThreadMain, this);
+}
+
+void VideoConsole::pushFrame(const TextVRAM& vram, const TextAttr& attr,
+    int cursorRowIn, int cursorColIn, bool cursorVisibleIn)
+{
+    std::lock_guard<std::mutex> lock(frameMutex);
+
+    for (int i = 0; i < COLS * ROWS; i++)
+    {
+        chars[i] = vram.charAt(i);
+        attrs[i] = attr.attributeAt(i);
+    }
+
+    cursorRow = cursorRowIn;
+    cursorCol = cursorColIn;
+    cursorVisible = cursorVisibleIn;
+
+    frameGeneration++;
+}
+
+void VideoConsole::rasterize(uint8_t* rgb) const
+{
+    // Вызывающий (renderThreadMain) уже держит frameMutex - см.
+    // компоновку у VideoCard::compositeSprites про тот же приём.
+    //
+    // Мигание курсора - по системным часам самого рендер-потока, а не
+    // по данным из pushFrame - курсору не нужен отдельный "толчок"
+    // кадра, чтобы мигать, пока программа ничего не печатает.
+    bool blinkOn = ((GetTickCount64() / 500) % 2) == 0;
+
+    for (int row = 0; row < ROWS; row++)
+    {
+        for (int col = 0; col < COLS; col++)
+        {
+            int cell = row * COLS + col;
+            uint8_t ch = chars[cell];
+            uint8_t attribute = attrs[cell];
+
+            int fg = attribute & 0x0F;
+            int bg = (attribute >> 4) & 0x0F;
+
+            bool isCursorCell = cursorVisible && blinkOn &&
+                row == cursorRow && col == cursorCol;
+
+            if (isCursorCell)
+            {
+                std::swap(fg, bg);
+            }
+
+            const uint8_t* fgColor = PALETTE[fg];
+            const uint8_t* bgColor = PALETTE[bg];
+
+            const uint8_t* glyph = &FONT_8X16[static_cast<int>(ch) * CELL_H];
+
+            int baseX = col * CELL_W;
+            int baseY = row * CELL_H;
+
+            for (int gy = 0; gy < CELL_H; gy++)
+            {
+                uint8_t bits = glyph[gy];
+                int py = baseY + gy;
+
+                for (int gx = 0; gx < CELL_W; gx++)
+                {
+                    int px = baseX + gx;
+                    bool on = (bits & (0x80 >> gx)) != 0;
+                    const uint8_t* color = on ? fgColor : bgColor;
+
+                    int dst = (py * PIXEL_WIDTH + px) * 3;
+                    rgb[dst] = color[0];
+                    rgb[dst + 1] = color[1];
+                    rgb[dst + 2] = color[2];
+                }
+            }
+        }
+    }
+}
+
+void VideoConsole::renderThreadMain()
+{
+    HINSTANCE hInstance = GetModuleHandle(nullptr);
+
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_OWNDC;
+    wc.lpfnWndProc = &VideoConsole::WindowProc;
+    wc.hInstance = hInstance;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.lpszClassName = WINDOW_CLASS_NAME;
+    RegisterClassExW(&wc);   // повторная регистрация молча игнорируется (ERROR_CLASS_ALREADY_EXISTS)
+
+    const int windowWidth = PIXEL_WIDTH * scale;
+    const int windowHeight = PIXEL_HEIGHT * scale;
+
+    RECT rect = { 0, 0, windowWidth, windowHeight };
+    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
+
+    HWND hwnd = CreateWindowExW(
+        0, WINDOW_CLASS_NAME, L"VirtualConsole - Video Console",
+        (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX) | WS_VISIBLE,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        rect.right - rect.left, rect.bottom - rect.top,
+        nullptr, nullptr, hInstance, nullptr);
+
+    if (hwnd == nullptr)
+    {
+        return;
+    }
+
+    // Чтобы WindowProc (статический метод) мог достать этот экземпляр
+    // и положить нажатую клавишу в keyboard - см. WM_CHAR выше.
+    SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+
+    HDC hdc = GetDC(hwnd);
+
+    PIXELFORMATDESCRIPTOR pfd = {};
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 24;
+    pfd.iLayerType = PFD_MAIN_PLANE;
+
+    int pixelFormat = ChoosePixelFormat(hdc, &pfd);
+    SetPixelFormat(hdc, pixelFormat, &pfd);
+
+    HGLRC hglrc = wglCreateContext(hdc);
+    wglMakeCurrent(hdc, hglrc);
+
+    glViewport(0, 0, windowWidth, windowHeight);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, PIXEL_WIDTH, 0, PIXEL_HEIGHT, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // glDrawPixels рисует строки вверх от raster position - зеркалим
+    // по Y (отрицательный zoom), как VideoCard.cpp, renderThreadMain.
+    glPixelZoom(static_cast<float>(scale), -static_cast<float>(scale));
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    static uint8_t staging[PIXEL_WIDTH * PIXEL_HEIGHT * 3];
+    uint64_t lastRasterized = static_cast<uint64_t>(-1);
+
+    while (!stopRequested)
+    {
+        MSG msg;
+        bool quitPosted = false;
+
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WM_QUIT)
+            {
+                quitPosted = true;
+            }
+
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
+        if (quitPosted)
+        {
+            break;
+        }
+
+        bool needRedraw;
+
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            needRedraw = (frameGeneration != lastRasterized) || cursorVisible;
+
+            if (needRedraw)
+            {
+                rasterize(staging);
+                lastRasterized = frameGeneration;
+            }
+        }
+
+        if (needRedraw)
+        {
+            glClear(GL_COLOR_BUFFER_BIT);
+            glRasterPos2i(0, PIXEL_HEIGHT);
+            glDrawPixels(PIXEL_WIDTH, PIXEL_HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, staging);
+            SwapBuffers(hdc);
+        }
+
+        // ~60 FPS - пока курсор видим, needRedraw выше true каждую
+        // итерацию (нужно для мигания), иначе растеризация
+        // пропускается, если содержимое не менялось с прошлого кадра
+        // (frameGeneration не изменился) - статичный экран не грузит
+        // поток впустую.
+        Sleep(16);
+    }
+
+    wglMakeCurrent(nullptr, nullptr);
+    wglDeleteContext(hglrc);
+    ReleaseDC(hwnd, hdc);
+    DestroyWindow(hwnd);
+}

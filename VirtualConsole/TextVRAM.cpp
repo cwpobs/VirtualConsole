@@ -96,6 +96,11 @@ void TextVRAM::write(uint32_t address, uint8_t value)
     data[address] = value;
 }
 
+uint8_t TextVRAM::charAt(int index) const
+{
+    return data[index];
+}
+
 void TextVRAM::clear()
 {
     for (int i = 0; i < SIZE; i++)

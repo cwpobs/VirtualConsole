@@ -21,9 +21,13 @@
 #include "Gpu3D.h"
 #include "Bus.h"
 #include "Assembler.h"
+#include "VideoConsole.h"
+#include "VmConfig.h"
 
 int main()
 {
+    VmConfig config = VmConfig::load("config.txt");
+
     // Консоль Windows по умолчанию не понимает UTF-8, из-за
     // этого кириллица в выводе превращается в кракозябры
     SetConsoleOutputCP(CP_UTF8);
@@ -37,11 +41,16 @@ int main()
     SetConsoleCP(866);
 
     // Включаем поддержку ANSI-последовательностей (нужно для очистки
-    // экрана при живой отрисовке VRAM)
-    HANDLE consoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD consoleMode = 0;
-    GetConsoleMode(consoleOut, &consoleMode);
-    SetConsoleMode(consoleOut, consoleMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    // экрана при живой отрисовке VRAM) - только для текстовой
+    // консоли; видеоконсоль в ANSI-вывод вообще ничего не пишет (см.
+    // VmConfig, ключ console).
+    if (!config.useVideoConsole)
+    {
+        HANDLE consoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD consoleMode = 0;
+        GetConsoleMode(consoleOut, &consoleMode);
+        SetConsoleMode(consoleOut, consoleMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
 
     // ========================================
     // Создаём компоненты компьютера
@@ -65,6 +74,12 @@ int main()
     ModLoader modLoader(&soundCard, &diskC);
     Gpu3D gpu3D(&videoCard);
     Assembler assembler;
+    VideoConsole videoConsole(&keyboard, config.videoConsoleScale);
+
+    if (config.useVideoConsole)
+    {
+        videoConsole.start();
+    }
 
     // 4 МБ RAM с адреса 0, MMIO - далеко наверху (с 0xF0000000),
     // чтобы RAM можно было расширять в будущем, не трогая MMIO.
@@ -155,14 +170,33 @@ int main()
     // Очищаем экран один раз (убрать мусор от шелла) и прячем курсор -
     // дальше render() каждый раз перезаписывает все 2000 ячеек целиком
     // (включая пробелы), поэтому повторная очистка не нужна и только
-    // вызывает мерцание
-    std::cout << "\x1b[2J\x1b[?25l";
-    std::cout.flush();
+    // вызывает мерцание. Актуально только для ANSI-пути - видеоконсоль
+    // рисует в собственное окно и ничего в OS-консоль не пишет.
+    if (!config.useVideoConsole)
+    {
+        std::cout << "\x1b[2J\x1b[?25l";
+        std::cout.flush();
+    }
 
-    // Отрисовать экран и поставить настоящий курсор консоли в позицию,
-    // соответствующую cpu.HL (в границах видеопамяти)
+    const uint32_t vramBase = 0xF0000007;
+
+    // Отрисовать экран и поставить курсор в позицию, соответствующую
+    // cpu.HL (в границах видеопамяти) - на текстовой консоли настоящим
+    // курсором терминала, на видеоконсоли - нарисованным мигающим
+    // блоком (см. VideoConsole::rasterize)
     auto redraw = [&]()
     {
+        bool cursorInBounds = cpu.HL >= vramBase && cpu.HL < vramBase + TextVRAM::SIZE;
+        uint32_t offset = cursorInBounds ? (cpu.HL - vramBase) : 0;
+        int cursorRow = static_cast<int>(offset / TextVRAM::WIDTH);
+        int cursorCol = static_cast<int>(offset % TextVRAM::WIDTH);
+
+        if (config.useVideoConsole)
+        {
+            videoConsole.pushFrame(vram, attr, cursorRow, cursorCol, cursorInBounds);
+            return;
+        }
+
         // Весь кадр сначала собирается в памяти и уходит на экран
         // ОДНИМ write - иначе десятки-сотни отдельных << на std::cout
         // (по паре байт на символ кириллицы/псевдографики, плюс ANSI-
@@ -179,16 +213,9 @@ int main()
         frame << "\x1b[?25l\x1b[H";
         vram.render(&attr, frame);
 
-        const uint32_t vramBase = 0xF0000007;
-
-        if (cpu.HL >= vramBase && cpu.HL < vramBase + TextVRAM::SIZE)
+        if (cursorInBounds)
         {
-            uint32_t offset = cpu.HL - vramBase;
-
-            int row = offset / TextVRAM::WIDTH;
-            int col = offset % TextVRAM::WIDTH;
-
-            frame << "\x1b[" << (row + 1) << ";" << (col + 1) << "H";
+            frame << "\x1b[" << (cursorRow + 1) << ";" << (cursorCol + 1) << "H";
         }
 
         frame << "\x1b[?25h";
