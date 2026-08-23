@@ -34,8 +34,11 @@
 // что F5, плюс удаление источника), F7 (MkDir - см. request_mkdir(),
 // создаёт папку в текущей папке активной панели по введённому имени),
 // F8 (Del - см. request_delete(), удаляет выделенный файл/ПУСТУЮ папку
-// после подтверждения Y/N) и F10 (Build - см. build_selected_file(),
-// собирает выделенный *.ASM/*.MC через BUILD в Disk), остальные -
+// после подтверждения Y/N), F9 (New - см. request_newfile()/
+// perform_newfile(), создаёт пустой файл в текущей папке активной
+// панели по введённому имени и сразу открывает его в C/TOOLS/EDIT.MC)
+// и F10 (Build - см. build_selected_file(), собирает выделенный
+// *.ASM/*.MC через BUILD в Disk), остальные -
 // только подписи (v1, задел на будущее). Наверху
 // списка появляется пункт ".." (если панель
 // не в корне диска, см. populate_left()/populate_right()) - Enter на
@@ -68,6 +71,7 @@ const FKEY_F5 = 63;   // Copy
 const FKEY_F6 = 64;   // Move
 const FKEY_F7 = 65;   // MkDir
 const FKEY_F8 = 66;   // Del
+const FKEY_F9 = 67;   // New file
 const FKEY_F10 = 68;  // Build
 const KEY_UP = 72;    // стрелка вверх (extended-код _getch())
 const KEY_DOWN = 80;  // стрелка вниз
@@ -127,12 +131,13 @@ int delDiskId;
 int delSel;
 int delName[12];
 
-// ---- ввод текста - общий диалог для F7 (создать папку) и F2
-// (переименовать), см. request_mkdir()/perform_mkdir()/
-// request_rename()/perform_rename() ----
+// ---- ввод текста - общий диалог для F7 (создать папку), F2
+// (переименовать) и F9 (создать файл), см. request_mkdir()/
+// perform_mkdir()/request_rename()/perform_rename()/
+// request_newfile()/perform_newfile() ----
 int inputPending;   // 0 = нет диалога, 1 = ждём ввод имени (печатаемые символы/Backspace/Enter/Esc)
-int inputMode;       // 0 = mkdir (F7), 1 = rename (F2) - что делать по Enter
-int mkdirName[12];   // текст поля ввода - и НОВОЕ имя папки, и НОВОЕ имя при переименовании
+int inputMode;       // 0 = mkdir (F7), 1 = rename (F2), 2 = новый файл (F9) - что делать по Enter
+int mkdirName[12];   // текст поля ввода - новое имя папки/файла или новое имя при переименовании
 int mkdirLen;
 
 // ---- переименование (F2, см. request_rename()/perform_rename()) ----
@@ -140,6 +145,10 @@ int renamePanel;
 int renameDiskId;
 int renameSel;
 int renameOldName[12];   // имя ДО переименования - mkdirName тем временем держит НОВОЕ
+
+// ---- новый файл (F9, см. request_newfile()/perform_newfile()) ----
+int newFilePanel;
+int newFileDiskId;
 
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
@@ -467,7 +476,7 @@ int render_status() {
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
 
-    print_str(0, MAX_FILES + 3, "F1Help F2Rename F3View F4Edit F5Copy F6Move F7MkDir F8Del F9PgDn F10Build");
+    print_str(0, MAX_FILES + 3, "F1Help F2Rename F3View F4Edit F5Copy F6Move F7MkDir F8Del F9New F10Build");
     x = 0;
     while (x < 80) {
         set_color(x, MAX_FILES + 3, 0, 7);
@@ -894,6 +903,23 @@ int draw_mkdir_box() {
     return 0;
 }
 
+int redraw_input_box() {
+    // Диалог ввода общий (см. mkdirName/mkdirLen/inputMode выше), но
+    // подпись разная по режиму - при перерисовке ПОСЛЕ первого показа
+    // (Backspace/печатный символ) нужно звать ТОТ ЖЕ draw_*_box(), что
+    // и открыл диалог, иначе подпись "перескакивает" на чужую.
+    if (inputMode == 0) { draw_mkdir_box(); }
+    else { if (inputMode == 1) { draw_rename_box(); } else { draw_newfile_box(); } }
+    return 0;
+}
+
+int draw_newfile_box() {
+    draw_input_frame();
+    print_str(DELCONF_X + 2, DELCONF_Y + 1, "New file name:");
+    draw_input_text();
+    return 0;
+}
+
 int draw_rename_box() {
     draw_input_frame();
     print_str(DELCONF_X + 2, DELCONF_Y + 1, "Enter new name:");
@@ -971,6 +997,29 @@ int request_rename() {
     return 0;
 }
 
+int request_newfile() {
+    // F9 - создать новый файл в текущей папке активной панели и сразу
+    // открыть его в C/TOOLS/EDIT.MC (см. perform_newfile()) - в
+    // отличие от F2/F7, не зависит от того, что сейчас выделено
+    // (можно создать файл и в пустой папке).
+    int i;
+
+    if (confirmPending == 1) { return 0; }   // диалог удаления уже открыт
+
+    newFilePanel = activeRight;
+    if (newFilePanel == 0) { newFileDiskId = leftDisk; } else { newFileDiskId = rightDisk; }
+
+    mkdirLen = 0;
+    i = 0;
+    while (i < 12) { mkdirName[i] = 0; i = i + 1; }   // хвост от предыдущего ввода не должен утечь в NAME
+
+    inputMode = 2;
+    inputPending = 1;
+    draw_newfile_box();
+
+    return 0;
+}
+
 int perform_mkdir() {
     int diskId;
     int i;
@@ -1035,6 +1084,50 @@ int perform_rename() {
     if (renamePanel == 0) { populate_left(); } else { populate_right(); }
 
     redraw_panels();
+
+    return 0;
+}
+
+int perform_newfile() {
+    // Создаёт пустой файл (OPEN_WRITE создаёт/обрезает, CLOSE
+    // фиксирует - тот же приём, что "create" в SHELL.ASM) и сразу
+    // открывает его в C/TOOLS/EDIT.MC - та же схема запуска, что
+    // edit_selected_file() (NAME на диске держит "EDIT.RUN", имя
+    // редактируемого файла идёт через cmdArgs).
+    int i;
+
+    sync_disk_to_panel(newFilePanel);
+
+    i = 0;
+    while (i < 12) { d_set_name_char(newFileDiskId, i, mkdirName[i]); i = i + 1; }
+    d_cmd(newFileDiskId, 5);   // OPEN_WRITE
+    d_cmd(newFileDiskId, 7);   // CLOSE
+
+    i = 0;
+    while (i < 12) { cmdArgs[i] = mkdirName[i]; i = i + 1; }
+    poke(CMD_ARGS_LEN, 12);
+
+    d_set_name_char(newFileDiskId, 0, 69);    // E
+    d_set_name_char(newFileDiskId, 1, 68);    // D
+    d_set_name_char(newFileDiskId, 2, 73);    // I
+    d_set_name_char(newFileDiskId, 3, 84);    // T
+    d_set_name_char(newFileDiskId, 4, 46);    // .
+    d_set_name_char(newFileDiskId, 5, 82);    // R
+    d_set_name_char(newFileDiskId, 6, 85);    // U
+    d_set_name_char(newFileDiskId, 7, 78);    // N
+    d_set_name_char(newFileDiskId, 8, 0);
+    d_set_name_char(newFileDiskId, 9, 0);
+    d_set_name_char(newFileDiskId, 10, 0);
+    d_set_name_char(newFileDiskId, 11, 0);
+
+    poke(EXEC_CHILD_DISK, newFileDiskId);
+    exec_child();
+
+    clear_screen();
+    if (newFilePanel == 0) { populate_left(); } else { populate_right(); }
+    render_left();
+    render_right();
+    render_status();
 
     return 0;
 }
@@ -1526,12 +1619,13 @@ int main() {
                 if (key == 13) {
                     if (mkdirLen > 0) {
                         inputPending = 0;
-                        if (inputMode == 0) { perform_mkdir(); } else { perform_rename(); }
+                        if (inputMode == 0) { perform_mkdir(); }
+                        else { if (inputMode == 1) { perform_rename(); } else { perform_newfile(); } }
                     }
                 }   // Enter
                 if (key == 27) { inputPending = 0; redraw_panels(); }                          // Esc
                 if (key == 8) {
-                    if (mkdirLen > 0) { mkdirLen = mkdirLen - 1; mkdirName[mkdirLen] = 0; draw_mkdir_box(); }
+                    if (mkdirLen > 0) { mkdirLen = mkdirLen - 1; mkdirName[mkdirLen] = 0; redraw_input_box(); }
                 }   // Backspace
                 if (key >= 32) {
                     if (key <= 126) {
@@ -1539,7 +1633,7 @@ int main() {
                             if (mkdirLen < 12) {
                                 mkdirName[mkdirLen] = key;
                                 mkdirLen = mkdirLen + 1;
-                                draw_mkdir_box();
+                                redraw_input_box();
                             }
                         }
                     }
@@ -1562,6 +1656,7 @@ int main() {
                 if (key == FKEY_F6) { do_move(); }   // F6
                 if (key == FKEY_F7) { request_mkdir(); }   // F7
                 if (key == FKEY_F8) { request_delete(); }   // F8
+                if (key == FKEY_F9) { request_newfile(); }   // F9
                 if (key == FKEY_F10) { build_selected_file(); }   // F10
 
                 if (key == ALT_F1) { select_disk_left(); }
