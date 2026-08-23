@@ -293,6 +293,14 @@ void VideoConsole::rasterize(uint8_t* rgb) const
                 std::swap(fg, bg);
             }
 
+            // TRANSPARENT_BG (см. TextAttr.h) - фон этой ячейки не
+            // рисуем вообще, только сам глиф нужным цветом символа;
+            // под фоном остаётся то, что там уже было (слой VideoCard
+            // или чёрный) - вот и "прозрачный цвет фона". У символа
+            // без единого закрашенного пикселя (пробел) это даёт
+            // полностью невидимую ячейку - отдельного случая не нужно.
+            bool bgTransparent = (bg == TextAttr::TRANSPARENT_BG);
+
             const uint8_t* fgColor = PALETTE[fg];
             const uint8_t* bgColor = PALETTE[bg];
 
@@ -308,8 +316,14 @@ void VideoConsole::rasterize(uint8_t* rgb) const
 
                 for (int gx = 0; gx < CELL_W; gx++)
                 {
-                    int px = baseX + gx;
                     bool on = (bits & (0x80 >> gx)) != 0;
+
+                    if (!on && bgTransparent)
+                    {
+                        continue;
+                    }
+
+                    int px = baseX + gx;
                     const uint8_t* color = on ? fgColor : bgColor;
 
                     int dst = (py * PIXEL_WIDTH + px) * 3;
