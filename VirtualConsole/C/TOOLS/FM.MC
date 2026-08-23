@@ -24,15 +24,18 @@
 // exec_child() ниже), Backspace - подняться на уровень выше,
 // Alt+F1/Alt+F2 - сменить диск левой/правой панели, Ctrl+Q - выход.
 // Внизу экрана - подсказка F1-F10 в стиле Norton Commander - реально
-// работают F3 (View - см. view_selected_file(), открывает выделенный
-// файл в C/TOOLS/VIEW.MC), F5 (Copy), F6 (Move - см. do_move(), тот же
-// перенос байт, что F5, плюс удаление источника), F7 (MkDir - см.
-// request_mkdir(), создаёт папку в текущей папке активной панели по
-// введённому имени), F8 (Del - см. request_delete(), удаляет
-// выделенный файл/ПУСТУЮ папку после подтверждения Y/N) и F10 (Build -
-// см. build_selected_file(), собирает выделенный *.ASM/*.MC через
-// BUILD в Disk), остальные - только подписи (v1, задел на будущее:
-// F4 Edit и т.д.). Наверху списка появляется пункт ".." (если панель
+// работают F2 (Rename - см. request_rename()/perform_rename(),
+// переименовывает выделенный файл/папку по введённому имени,
+// предзаполненному текущим), F3 (View - см. view_selected_file(),
+// открывает выделенный файл в C/TOOLS/VIEW.MC), F5 (Copy), F6 (Move -
+// см. do_move(), тот же перенос байт, что F5, плюс удаление
+// источника), F7 (MkDir - см. request_mkdir(), создаёт папку в
+// текущей папке активной панели по введённому имени), F8 (Del - см.
+// request_delete(), удаляет выделенный файл/ПУСТУЮ папку после
+// подтверждения Y/N) и F10 (Build - см. build_selected_file(),
+// собирает выделенный *.ASM/*.MC через BUILD в Disk), остальные -
+// только подписи (v1, задел на будущее: F4 Edit и т.д.). Наверху
+// списка появляется пункт ".." (если панель
 // не в корне диска, см. populate_left()/populate_right()) - Enter на
 // нём поднимает на уровень вверх (как Backspace), удалить/перенести/
 // скопировать его нельзя (см. is_dotdot_selected()).
@@ -56,6 +59,7 @@
 const KEY_DATA = 0xF0000005;
 const CLOCK_LOW = 0xF0000FFC;
 
+const FKEY_F2 = 60;   // Rename
 const FKEY_F3 = 61;   // View
 const FKEY_F5 = 63;   // Copy
 const FKEY_F6 = 64;   // Move
@@ -120,10 +124,19 @@ int delDiskId;
 int delSel;
 int delName[12];
 
-// ---- ввод имени новой папки (F7, см. request_mkdir()/perform_mkdir()) ----
+// ---- ввод текста - общий диалог для F7 (создать папку) и F2
+// (переименовать), см. request_mkdir()/perform_mkdir()/
+// request_rename()/perform_rename() ----
 int inputPending;   // 0 = нет диалога, 1 = ждём ввод имени (печатаемые символы/Backspace/Enter/Esc)
-int mkdirName[12];
+int inputMode;       // 0 = mkdir (F7), 1 = rename (F2) - что делать по Enter
+int mkdirName[12];   // текст поля ввода - и НОВОЕ имя папки, и НОВОЕ имя при переименовании
 int mkdirLen;
+
+// ---- переименование (F2, см. request_rename()/perform_rename()) ----
+int renamePanel;
+int renameDiskId;
+int renameSel;
+int renameOldName[12];   // имя ДО переименования - mkdirName тем временем держит НОВОЕ
 
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
@@ -451,7 +464,7 @@ int render_status() {
 
     print_str(0, MAX_FILES + 2, "Tab-panel  ^/v-move  Enter-dir  Backspace-up  Alt+F1/F2-drive  Ctrl+Q-exit");
 
-    print_str(0, MAX_FILES + 3, "F1Help F2Menu F3View F4Edit F5Copy F6Move F7MkDir F8Del F9PgDn F10Build");
+    print_str(0, MAX_FILES + 3, "F1Help F2Rename F3View F4Edit F5Copy F6Move F7MkDir F8Del F9PgDn F10Build");
     x = 0;
     while (x < 80) {
         set_color(x, MAX_FILES + 3, 0, 7);
@@ -816,11 +829,13 @@ int redraw_panels() {
 // DELCONF_X/Y/W/H), что и диалог удаления - они никогда не показаны
 // одновременно.
 
-int draw_mkdir_box() {
+int draw_input_frame() {
+    // Общая рамка+фон для любого диалога ввода текста (F7/F2) - сама
+    // надпись-заголовок и введённый текст рисует вызывающий код после
+    // (print_str умеет только строковый ЛИТЕРАЛ, не переменную - общий
+    // текст между F7/F2 не вынести, поэтому общая только рамка).
     int x;
     int y;
-    int i;
-    int ch;
 
     print_char(DELCONF_X, DELCONF_Y, 201);                      // ╔
     print_char(DELCONF_X + DELCONF_W - 1, DELCONF_Y, 187);       // ╗
@@ -849,7 +864,14 @@ int draw_mkdir_box() {
         y = y + 1;
     }
 
-    print_str(DELCONF_X + 2, DELCONF_Y + 1, "New folder name:");
+    return 0;
+}
+
+int draw_input_text() {
+    // Печатает текущий mkdirName/mkdirLen + курсор - общая часть для
+    // draw_mkdir_box()/draw_rename_box(), вызывается ПОСЛЕ заголовка.
+    int i;
+    int ch;
 
     i = 0;
     while (i < 12) {
@@ -862,6 +884,20 @@ int draw_mkdir_box() {
     return 0;
 }
 
+int draw_mkdir_box() {
+    draw_input_frame();
+    print_str(DELCONF_X + 2, DELCONF_Y + 1, "New folder name:");
+    draw_input_text();
+    return 0;
+}
+
+int draw_rename_box() {
+    draw_input_frame();
+    print_str(DELCONF_X + 2, DELCONF_Y + 1, "Rename to:");
+    draw_input_text();
+    return 0;
+}
+
 int request_mkdir() {
     int i;
 
@@ -871,8 +907,63 @@ int request_mkdir() {
     i = 0;
     while (i < 12) { mkdirName[i] = 0; i = i + 1; }   // хвост от предыдущего ввода не должен утечь в NAME
 
+    inputMode = 0;
     inputPending = 1;
     draw_mkdir_box();
+
+    return 0;
+}
+
+int request_rename() {
+    int panel;
+    int sel;
+    int i;
+    int len;
+    int ch;
+    int done;
+
+    if (confirmPending == 1) { return 0; }   // диалог удаления уже открыт
+
+    panel = activeRight;
+    if (panel == 0) { if (leftCount == 0) { return 0; } sel = leftSel; }
+    else { if (rightCount == 0) { return 0; } sel = rightSel; }
+
+    if (is_dotdot_selected(panel, sel) == 1) { return 0; }   // ".." нельзя переименовать
+
+    renamePanel = panel;
+    if (panel == 0) { renameDiskId = leftDisk; } else { renameDiskId = rightDisk; }
+    renameSel = sel;
+
+    i = 0;
+    while (i < 12) {
+        if (panel == 0) { ch = leftNames[sel * 12 + i]; } else { ch = rightNames[sel * 12 + i]; }
+        renameOldName[i] = ch;
+        i = i + 1;
+    }
+
+    // Предзаполняем поле ввода текущим именем (без хвостового '/' у
+    // папок, без нулевого хвоста) - как в Norton Commander, можно
+    // просто подправить, а не перепечатывать заново.
+    len = 0;
+    done = 0;
+    while (done == 0) {
+        ch = renameOldName[len];
+        if (ch == 0) { done = 1; } else { len = len + 1; if (len >= 12) { done = 1; } }
+    }
+    if (len > 0) {
+        if (renameOldName[len - 1] == 47) { len = len - 1; }   // хвостовой '/' у папок
+    }
+
+    i = 0;
+    while (i < 12) {
+        if (i < len) { mkdirName[i] = renameOldName[i]; } else { mkdirName[i] = 0; }
+        i = i + 1;
+    }
+    mkdirLen = len;
+
+    inputMode = 1;
+    inputPending = 1;
+    draw_rename_box();
 
     return 0;
 }
@@ -895,6 +986,50 @@ int perform_mkdir() {
     d_cmd(diskId, 19);   // MKDIR
 
     if (activeRight == 0) { populate_left(); } else { populate_right(); }
+
+    redraw_panels();
+
+    return 0;
+}
+
+int perform_rename() {
+    // Две команды подряд (NAME не может держать два имени сразу, см.
+    // шапку Disk.cpp) - REMEMBER_RENAME_FROM запоминает старое имя,
+    // затем RENAME читает его и переименовывает в уже перезаписанный
+    // NAME (новое имя из mkdirName).
+    int i;
+    int len;
+    int done;
+    int ch;
+
+    sync_disk_to_panel(renamePanel);
+
+    len = 0;
+    done = 0;
+    while (done == 0) {
+        ch = renameOldName[len];
+        if (ch == 0) { done = 1; } else { len = len + 1; if (len >= 12) { done = 1; } }
+    }
+    if (len > 0) {
+        if (renameOldName[len - 1] == 47) { len = len - 1; }   // хвостовой '/' у папок
+    }
+
+    i = 0;
+    while (i < 12) {
+        if (i < len) { ch = renameOldName[i]; } else { ch = 0; }
+        d_set_name_char(renameDiskId, i, ch);
+        i = i + 1;
+    }
+    d_cmd(renameDiskId, 20);   // REMEMBER_RENAME_FROM
+
+    i = 0;
+    while (i < 12) {
+        d_set_name_char(renameDiskId, i, mkdirName[i]);
+        i = i + 1;
+    }
+    d_cmd(renameDiskId, 21);   // RENAME
+
+    if (renamePanel == 0) { populate_left(); } else { populate_right(); }
 
     redraw_panels();
 
@@ -1332,7 +1467,12 @@ int main() {
                 // тоже игнорируются; печатаемые символы (кроме '/' -
                 // зарезервирован под маркер папки в списках, см.
                 // populate_left/right) копятся в mkdirName.
-                if (key == 13) { if (mkdirLen > 0) { inputPending = 0; perform_mkdir(); } }   // Enter
+                if (key == 13) {
+                    if (mkdirLen > 0) {
+                        inputPending = 0;
+                        if (inputMode == 0) { perform_mkdir(); } else { perform_rename(); }
+                    }
+                }   // Enter
                 if (key == 27) { inputPending = 0; redraw_panels(); }                          // Esc
                 if (key == 8) {
                     if (mkdirLen > 0) { mkdirLen = mkdirLen - 1; mkdirName[mkdirLen] = 0; draw_mkdir_box(); }
@@ -1359,6 +1499,7 @@ int main() {
                 if (key == 13) { enter_dir(); }     // Enter
                 if (key == 8)  { go_up_dir(); }     // Backspace
 
+                if (key == FKEY_F2) { request_rename(); }   // F2
                 if (key == FKEY_F3) { view_selected_file(); }   // F3
                 if (key == FKEY_F5) { do_copy(); }   // F5
                 if (key == FKEY_F6) { do_move(); }   // F6

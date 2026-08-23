@@ -119,6 +119,13 @@ private:
     uint8_t dataByte;
     uint32_t fileSize;
 
+    // Переименование (REMEMBER_RENAME_FROM=20, RENAME=21, см.
+    // ASSEMBLY.md, "Disk") - NAME хранит только ОДНО имя одновременно,
+    // а переименованию нужны два (старое и новое) - REMEMBER_RENAME_FROM
+    // копирует сюда текущий NAME (старое имя) ДО того, как программа
+    // перезапишет NAME новым именем и пошлёт RENAME.
+    uint8_t renameFrom[12];
+
     std::filesystem::directory_iterator dirIt;
     std::ifstream readStream;
     std::ofstream writeStream;
@@ -140,6 +147,8 @@ private:
     void loadProgram(uint32_t targetAddress);
     void deleteFile();
     void makeDir();
+    void rememberRenameFrom();
+    void renameFile();
     void changeDir();
     void changeDirUp();
     void loadRaw(uint32_t targetAddress);

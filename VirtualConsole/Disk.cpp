@@ -94,6 +94,8 @@ void Disk::write(uint32_t address, uint8_t value)
         case 17: loadChildRun(EXEC_CHILD_DEPTH4_ADDRESS); break;
         case 18: loadChildRun(EXEC_CHILD_DEPTH5_ADDRESS); break;
         case 19: makeDir(); break;
+        case 20: rememberRenameFrom(); break;
+        case 21: renameFile(); break;
         default: break;
         }
 
@@ -343,6 +345,35 @@ void Disk::makeDir()
     bool created = std::filesystem::create_directory(basePath / currentDir / nameAsString(), ec);
 
     status = (!ec && created) ? 0 : 2;
+}
+
+void Disk::rememberRenameFrom()
+{
+    // REMEMBER_RENAME_FROM (20) - просто запоминает текущий NAME (F2 в
+    // FM.MC уже написал туда СТАРОЕ имя перед этой командой) - RENAME
+    // (21) читает его отсюда, когда NAME уже перезаписан НОВЫМ именем.
+    for (int i = 0; i < 12; i++)
+    {
+        renameFrom[i] = name[i];
+    }
+    status = 0;
+}
+
+void Disk::renameFile()
+{
+    // RENAME (21) - переименовывает renameFrom (старое имя, см.
+    // rememberRenameFrom() выше) в текущий NAME (новое имя), оба - в
+    // ТЕКУЩЕЙ папке.
+    std::string oldName;
+    for (int i = 0; i < 12 && renameFrom[i] != 0; i++)
+    {
+        oldName += static_cast<char>(renameFrom[i]);
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(basePath / currentDir / oldName, basePath / currentDir / nameAsString(), ec);
+
+    status = ec ? 2 : 0;
 }
 
 void Disk::changeDir()
