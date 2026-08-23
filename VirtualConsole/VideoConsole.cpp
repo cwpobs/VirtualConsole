@@ -19,6 +19,43 @@ namespace
 {
     const wchar_t* WINDOW_CLASS_NAME = L"VirtualConsoleVideoConsole";
 
+    // DOS extended-скан-коды - те же числа, что вторым байтом отдал бы
+    // _getch() реальной консоли (см. Keyboard::tick()), и что уже зашиты
+    // константами в C/TOOLS/FM.MC (KEY_UP/KEY_DOWN/FKEY_F2..FKEY_F10) и
+    // C/TOOLS/EDIT.MC (KEY_LEFT/KEY_RIGHT/KEY_HOME/...). WM_CHAR/
+    // TranslateMessage эти клавиши вообще не транслирует (только
+    // печатаемые символы и десяток управляющих кодов) - без этой
+    // таблицы стрелки/F-клавиши в окне VideoConsole не доходили бы до
+    // Keyboard, хотя обычный текстовый ввод (через WM_CHAR ниже)
+    // работал бы нормально - именно этим объяснялось "клавиатура не
+    // реагирует в FM, но в шелле работает".
+    int extendedKeyCode(WPARAM vk)
+    {
+        switch (vk)
+        {
+        case VK_UP: return 72;
+        case VK_DOWN: return 80;
+        case VK_LEFT: return 75;
+        case VK_RIGHT: return 77;
+        case VK_HOME: return 71;
+        case VK_END: return 79;
+        case VK_PRIOR: return 73;   // PgUp
+        case VK_NEXT: return 81;    // PgDn
+        case VK_DELETE: return 83;
+        case VK_F1: return 59;
+        case VK_F2: return 60;
+        case VK_F3: return 61;
+        case VK_F4: return 62;
+        case VK_F5: return 63;
+        case VK_F6: return 64;
+        case VK_F7: return 65;
+        case VK_F8: return 66;
+        case VK_F9: return 67;
+        case VK_F10: return 68;
+        default: return -1;
+        }
+    }
+
     const int PIXEL_WIDTH = VideoConsole::COLS * VideoConsole::CELL_W;   // 640
     const int PIXEL_HEIGHT = VideoConsole::ROWS * VideoConsole::CELL_H;  // 400
 
@@ -56,6 +93,54 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         // renderThreadMain).
         PostQuitMessage(0);
         return 0;
+    }
+
+    if (msg == WM_KEYDOWN)
+    {
+        // Стрелки/Home/End/PgUp/PgDn/Delete/F1-F10 (без Alt) - см.
+        // extendedKeyCode выше. Остальные клавиши тут не трогаем -
+        // печатаемые символы и Enter/Backspace/Tab/Esc/Ctrl+буква
+        // по-прежнему идут через WM_CHAR ниже (TranslateMessage сам
+        // решает, для чего его генерировать), двойной инжекции не
+        // будет - WM_CHAR для этих кодов клавиш не порождается вообще.
+        int code = extendedKeyCode(wParam);
+
+        if (code >= 0)
+        {
+            VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+            if (self != nullptr && self->keyboard != nullptr)
+            {
+                self->keyboard->injectKey(static_cast<uint8_t>(code));
+            }
+
+            return 0;
+        }
+    }
+
+    if (msg == WM_SYSKEYDOWN)
+    {
+        // Alt+F1/Alt+F2 (смена диска панели в FM.MC, см. ALT_F1/
+        // ALT_F2) - Windows шлёт F-клавиши с зажатым Alt именно этим
+        // сообщением, не WM_KEYDOWN. Остальные Alt-комбинации (Alt+F4
+        // и т.п.) не трогаем - падают в DefWindowProc, системные
+        // акселераторы не ломаем.
+        int code = -1;
+
+        if (wParam == VK_F1) { code = 104; }
+        else if (wParam == VK_F2) { code = 105; }
+
+        if (code >= 0)
+        {
+            VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+            if (self != nullptr && self->keyboard != nullptr)
+            {
+                self->keyboard->injectKey(static_cast<uint8_t>(code));
+            }
+
+            return 0;
+        }
     }
 
     if (msg == WM_CHAR)
