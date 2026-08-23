@@ -26,18 +26,27 @@ project.
     control back when it exits).
 - **Two virtual disks** that are just plain folders on your machine
   (`C/`, `D/`).
-- **Text mode** - 80x25, 16 colors, CP866/box-drawing characters -
-  plus a separate **320x240 bitmap mode** with sprites and tiles
-  ([`VideoCard.cpp`](VirtualConsole/VideoCard.cpp)).
+- **Video console** - a single graphical window for the whole process
+  ([`VideoConsole.cpp`](VirtualConsole/VideoConsole.cpp)): text mode
+  80x25 (16 colors, CP866/box-drawing characters, a bitmap font baked
+  into the code) and a 320x240 bitmap mode with sprites/tiles
+  ([`VideoCard.cpp`](VirtualConsole/VideoCard.cpp)) - two layers of
+  one picture, not two windows: text can be shown right over the
+  graphics with a transparent background ("combined mode"). There's
+  also a legacy plain text mode (a Windows console window) - switch to
+  it in `config.txt`.
 - **A small 3D accelerator** - vertices/triangles
   ([`Gpu3D.cpp`](VirtualConsole/Gpu3D.cpp)).
 - **Sound** - a ProTracker `.mod` player
   ([`ModLoader.cpp`](VirtualConsole/ModLoader.cpp) /
   [`SoundCard.cpp`](VirtualConsole/SoundCard.cpp)).
 - **Ready-made programs**: a Snake game, a spinning 3D cube demo, a
-  tile-scrolling demo, a music player, and a two-panel Norton
-  Commander-style file manager ([`FM.MC`](VirtualConsole/C/TOOLS/FM.MC))
-  that can launch other programs with Enter.
+  tile-scrolling demo, an everything-at-once demo (tiles + a sprite +
+  a 3D cube + text over the graphics at the same time -
+  [`SNOW3D.MC`](VirtualConsole/C/DEMOS/SNOW3D.MC)), a music player, and
+  a two-panel Norton Commander-style file manager
+  ([`FM.MC`](VirtualConsole/C/TOOLS/FM.MC)) that can launch other
+  programs with Enter.
 
 ## Quick start
 
