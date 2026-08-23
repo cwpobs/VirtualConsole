@@ -53,6 +53,14 @@ const BAR_LEN = 58;   // ширина шкалы под громкость ка�
 int modName[32] = 0xF0001020;      // NAME0-31 у ModLoader
 int channelVol[4] = 0xF0001069;    // CHANNEL0-3_VOLUME у SoundCard (read-only)
 
+// Состояние предыдущего кадра - для delta-перерисовки (см. draw_channel()/
+// main() ниже про то, почему это важно, а не просто "красиво").
+int lastFilled[4];   // длина полоски канала на прошлом кадре, 0-BAR_LEN
+int lastVol[4];       // напечатанное число громкости канала на прошлом кадре
+int lastStatus;        // STATUS SoundCard на прошлом кадре
+int lastOrder;         // ORDER_POS на прошлом кадре
+int lastRow;           // ROW на прошлом кадре
+
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
     while (peek(CLOCK_LOW) < ms) {
@@ -165,6 +173,11 @@ int draw_static() {
     color_text(20, 2, 6, 7);
     color_text(34, 2, 4, 7);
 
+    // Цвет полей Order/Row не меняется - красим один раз здесь, а не в
+    // основном цикле (см. main()/"почему delta-перерисовка" ниже).
+    color_text(27, 2, 3, 15);
+    color_text(39, 2, 3, 15);
+
     print_str(2, 5, "CH1"); color_text(2, 5, 3, 12);
     print_str(2, 6, "CH2"); color_text(2, 6, 3, 10);
     print_str(2, 7, "CH3"); color_text(2, 7, 3, 9);
@@ -173,6 +186,31 @@ int draw_static() {
     print_str(2, 11, "Ctrl+Q - exit     P - pause / resume");
     color_text(2, 11, 37, 8);
 
+    // Метры каналов рисуются "пустыми" сразу здесь - основной цикл
+    // (draw_channel()) потом только ДОРИСОВЫВАЕТ разницу с прошлым
+    // кадром, начиная с lastFilled[ch]=0 (см. main()), а не всю полоску
+    // целиком каждый раз.
+    draw_empty_bar(5);
+    draw_empty_bar(6);
+    draw_empty_bar(7);
+    draw_empty_bar(8);
+
+    print_number3(BAR_X + BAR_LEN + 2, 5, 0); color_text(BAR_X + BAR_LEN + 2, 5, 3, 15);
+    print_number3(BAR_X + BAR_LEN + 2, 6, 0); color_text(BAR_X + BAR_LEN + 2, 6, 3, 15);
+    print_number3(BAR_X + BAR_LEN + 2, 7, 0); color_text(BAR_X + BAR_LEN + 2, 7, 3, 15);
+    print_number3(BAR_X + BAR_LEN + 2, 8, 0); color_text(BAR_X + BAR_LEN + 2, 8, 3, 15);
+
+    return 0;
+}
+
+int draw_empty_bar(int row) {
+    int x;
+    x = 0;
+    while (x < BAR_LEN) {
+        print_char(BAR_X + x, row, 176);   // ░
+        set_color(BAR_X + x, row, 8, 0);
+        x = x + 1;
+    }
     return 0;
 }
 
@@ -188,9 +226,14 @@ int print_arg_name(int x, int y, int len) {
 }
 
 int draw_status(int code) {
-    // Фиксированное поле шириной 8 символов (col 10..17, строка 2) -
-    // паддинг пробелами, иначе более короткое слово оставляет "хвост"
-    // от предыдущего (например "PAUSED " после "PLAYING ").
+    // Печатает, только если статус реально изменился с прошлого кадра
+    // (lastStatus) - см. main()/"почему delta-перерисовка" ниже. Поле
+    // фиксированной ширины 8 символов (col 10..17, строка 2) - паддинг
+    // пробелами, иначе более короткое слово оставляет "хвост" от
+    // предыдущего (например "PAUSED " после "PLAYING ").
+    if (code == lastStatus) { return 0; }
+    lastStatus = code;
+
     if (code == 1) { print_str(10, 2, "PLAYING "); return 0; }
     if (code == 2) { print_str(10, 2, "PAUSED  "); return 0; }
     if (code == 3) { print_str(10, 2, "NO SONG "); return 0; }
@@ -198,26 +241,61 @@ int draw_status(int code) {
     return 0;
 }
 
-int draw_channel(int row, int vol, int color) {
+// Перерисовывает метр канала ch (0-3) КАК РАЗНИЦУ с прошлым кадром -
+// трогает только те символы полоски, что реально сменили закрашенность
+// (lastFilled[ch] -> filled), и число громкости только если оно
+// изменилось (lastVol[ch]). Раньше функция полностью перерисовывала
+// всю 58-символьную полоску КАЖДЫЙ кадр (~116 обращений к шине на
+// канал, ×4 канала, 30 раз в секунду) - интерпретируемый Мини-C цикл
+// такой тяжести на каждый кадр держал CPU-поток настолько занятым
+// (и с ним - VideoConsole/TextVRAM/TextAttr, единственные устройства с
+// которыми конкурирует SoundCard за реальное процессорное время на
+// хосте), что независимый аудио-поток SoundCard не успевал вовремя
+// подготовить буфер - слышны были пропуски (короткие сэмплы вроде
+// ударных "терялись") и рваный микс между каналами. Delta-перерисовка
+// трогает в среднем единицы символов за кадр вместо ~500 - тот же
+// диагноз и то же направление фикса, что раньше уже было с throttling
+// консоли в main.cpp (см. ASSEMBLY.md/README про архитектуру), только
+// на стороне пользовательской Мини-C программы, а не хоста.
+int draw_channel(int row, int vol, int color, int ch) {
     int filled;
     int x;
+    int prevFilled;
 
-    filled = vol * BAR_LEN / 64;
+    // filled = vol*BAR_LEN/64, но int в мини-C - 8 бит (0-255, см.
+    // ASSEMBLY.md) и MUL реально переполняется молча выше 255 (та же
+    // причина, по которой __mc_screen_offset считает y*80 циклом ADD, а
+    // не одним MUL - см. ASSEMBLY.md, "Маппированные массивы"):
+    // vol*BAR_LEN доходит до 64*58=3712, это переполнение дало бы
+    // случайную длину полоски. BAR_LEN/64 = 58/64 = 29/32 - тот же
+    // результат считается как vol - vol*3/32 (дополнение до целого):
+    // vol*3 максимум 192, безопасно помещается в байт.
+    filled = vol - (vol * 3) / 32;
+    prevFilled = lastFilled[ch];
 
-    x = 0;
-    while (x < BAR_LEN) {
-        if (x < filled) {
-            print_char(BAR_X + x, row, 219);   // █
-            set_color(BAR_X + x, row, color, 0);
+    if (filled != prevFilled) {
+        if (filled > prevFilled) {
+            x = prevFilled;
+            while (x < filled) {
+                print_char(BAR_X + x, row, 219);   // █
+                set_color(BAR_X + x, row, color, 0);
+                x = x + 1;
+            }
         } else {
-            print_char(BAR_X + x, row, 176);   // ░
-            set_color(BAR_X + x, row, 8, 0);
+            x = filled;
+            while (x < prevFilled) {
+                print_char(BAR_X + x, row, 176);   // ░
+                set_color(BAR_X + x, row, 8, 0);
+                x = x + 1;
+            }
         }
-        x = x + 1;
+        lastFilled[ch] = filled;
     }
 
-    print_number3(BAR_X + BAR_LEN + 2, row, vol);
-    color_text(BAR_X + BAR_LEN + 2, row, 3, 15);
+    if (vol != lastVol[ch]) {
+        print_number3(BAR_X + BAR_LEN + 2, row, vol);   // цвет уже белый - см. draw_static()
+        lastVol[ch] = vol;
+    }
 
     return 0;
 }
@@ -235,6 +313,18 @@ int main() {
     int status;
     int running;
     int key;
+    int order;
+    int row;
+
+    lastFilled[0] = 0; lastFilled[1] = 0; lastFilled[2] = 0; lastFilled[3] = 0;
+    lastVol[0] = 0; lastVol[1] = 0; lastVol[2] = 0; lastVol[3] = 0;
+    // int в мини-C - 8 бит (0-255, см. ASSEMBLY.md) - сентинелы ниже
+    // подобраны заведомо вне реального диапазона каждого регистра
+    // (STATUS 0-3, ORDER_POS 0-127, ROW 0-63), но внутри 0-255, чтобы
+    // гарантировать первую отрисовку без переполнения литерала.
+    lastStatus = 4;
+    lastOrder = 255;
+    lastRow = 255;
 
     argLen = peek(CMD_ARGS_LEN);
     if (argLen > 16) { argLen = 16; }   // ширина cmdArgs - см. заголовок файла
@@ -273,15 +363,16 @@ int main() {
         }
 
         draw_status(peek(SOUNDCARD_STATUS));
-        print_number3(27, 2, peek(SOUNDCARD_ORDER_POS));
-        print_number3(39, 2, peek(SOUNDCARD_ROW));
-        color_text(27, 2, 3, 15);
-        color_text(39, 2, 3, 15);
 
-        draw_channel(5, channelVol[0], 12);
-        draw_channel(6, channelVol[1], 10);
-        draw_channel(7, channelVol[2], 9);
-        draw_channel(8, channelVol[3], 14);
+        order = peek(SOUNDCARD_ORDER_POS);
+        if (order != lastOrder) { print_number3(27, 2, order); lastOrder = order; }
+        row = peek(SOUNDCARD_ROW);
+        if (row != lastRow) { print_number3(39, 2, row); lastRow = row; }
+
+        draw_channel(5, channelVol[0], 12, 0);
+        draw_channel(6, channelVol[1], 10, 1);
+        draw_channel(7, channelVol[2], 9, 2);
+        draw_channel(8, channelVol[3], 14, 3);
 
         wait_ms(33);   // ~30 кадров/сек, тот же приём, что MUSIC2.MC
     }
