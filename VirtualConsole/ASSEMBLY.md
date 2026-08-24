@@ -1302,7 +1302,9 @@ Current address space map:
 | 0xF0000FFE - 0xF0001011 | PngLoader (decodes PNG into sprites/tiles) |
 | 0xF0001012 - 0xF000101F | MapLoader (text tile map) |
 | 0xF0001020 - 0xF0001041 | ModLoader (parses `.mod` files) |
-| 0xF0001042 - 0xF0001044 | unused gap (old SoundCard location - see below) |
+| 0xF0001042 | ConsoleLayer (text-layer visibility over VideoCard) |
+| 0xF0001043 | ModLoaderDiskSelect (explicit disk choice for ModLoader - see "ModLoader") |
+| 0xF0001044 | unused gap (old SoundCard location - see below) |
 | 0xF0001045 - 0xF0001065 | Gpu3D (vertices/triangles/PRESENT) |
 | 0xF0001066 - 0xF000106E | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME, visualization) |
 
@@ -2377,7 +2379,10 @@ visualization registers below were added, and growing it in place
 would have meant shifting `Gpu3D` and rewriting every hardcoded
 address in `CUBE3D.ASM`. Moving the whole block into fresh, unused
 space right after `Gpu3D` avoided that entirely - addresses on this
-bus were never required to be contiguous.
+bus were never required to be contiguous. Of that gap, `0xF0001042`
+has since been claimed by `ConsoleLayer`, and `0xF0001043` by
+`ModLoaderDiskSelect` (see "ModLoader", DISK_SELECT) - only
+`0xF0001044` is still free.
 
 ### Visualization registers (CHANNEL\*\_VOLUME/ROW/ORDER_POS)
 
@@ -2487,11 +2492,27 @@ truncated under real DOS - because that same name also lives on disk
 
 | Offset | Register | Description |
 |----------|---------|----------|
-| 0-31 | NAME0-31 | name of the `.mod` file on disk "C" |
+| 0-31 | NAME0-31 | name of the `.mod` file (see DISK_SELECT below for which disk) |
 | 32 | COMMAND (write = trigger) | 1 = LOAD |
 | 33 | STATUS (read-only) | 0=ok, 1=file not found, 2=unsupported format (not M.K./4 channels/31 samples), 3=corrupted/too-short file |
 
 Addresses: `0xF0001020` (NAME0) - `0xF0001041` (STATUS).
+
+### DISK_SELECT - explicit disk choice (`0xF0001043`)
+
+A separate one-byte device, `ModLoaderDiskSelect` (not part of
+`ModLoader`'s own contiguous range - see the "old SoundCard spot"
+sidebar below for why it has to be physically separate): `0` = resolve
+as before, via `Disk::lastExecDisk` (the disk the currently running
+program was actually launched from - the default value, no behavior
+change for code that never writes this register), `1` = force disk C,
+`2` = force disk D. Added for the playlist, where the same running
+program (`C/TOOLS/PLAYER.MC`) needs to load tracks from either disk
+within a SINGLE run - `lastExecDisk` alone can't do that, it's fixed for
+the whole run of the program. Written BEFORE `COMMAND=LOAD` and stays in
+effect until the next `LOAD` overwrites it - see
+`C/TOOLS/PLAYER.MC::load_mod_from_playlist()` for a full working
+example, and the "Playlist (PLAY.LST)" section below.
 
 Command **1 (LOAD)** reads the file `NAME`, parses it (header, 31
 sample descriptors, order table, patterns, sample PCM data) and, in
@@ -2761,7 +2782,10 @@ instruction set in section 3.
 The main type is `int`, unsigned 8-bit (like the CPU registers).
 Overflow silently wraps around, as it does everywhere in this
 assembler. There's also `long`, a 16-bit scalar with a deliberately
-narrow set of supported operations - see "The `long` type" below.
+narrow set of supported operations (see "The `long` type" below), and
+`string`, a two-dimensional, fixed-shape "array of strings" (see "The
+`string` type" below) for cases like the playlist, where a plain
+`int arr[N]` runs into its 255-element index ceiling.
 
 Variables are **global only** - there's no such thing as a real local
 variable with a stack frame (the CPU has no "SP+offset" addressing).
@@ -2836,6 +2860,57 @@ one-array-per-line scheme - see "Example: VIEW.MC / DISKIO.MC" below)
 - it exists so that future code needing a bigger array (a longer text
 buffer, a bigger level, etc.) doesn't have to invent its own ad-hoc
 16-bit workaround.
+
+### The `string` type
+
+    string playlist[16][36];
+    playlist[2][0] = 65;
+    ch = playlist[2][0];
+    print_string(4, 5, playlist, 2);
+
+`string NAME[COUNT][WIDTH];` - COUNT strings of WIDTH bytes each
+(plain `int` bytes, always its own storage - unlike `int arr[N] =
+address;`, strings have no mapped variant, there's nothing for them to
+window into in MMIO). Solves the same problem `long` already solves for
+one-dimensional arrays - just for TWO-dimensional indexing. A plain
+`arr[i]` computes its address as `base + i` via `__mc_hladd`, which
+hard-zeroes the high byte of the resulting offset (see above, `long` as
+an index) - so `i` can never exceed 255: not a soft cap on array size,
+a hard limit on what `__mc_hladd` is even capable of computing. Because
+of this, an "array of strings" (say, up to 16 playlist paths at 36
+bytes each - `16*36=576`) wouldn't fit in any single `int arr[N]` at
+all - only as a scatter of N parallel arrays of the same shape plus an
+`if` cascade picking the right one by a runtime index (the existing
+example of exactly this trick, for SCREEN rows - `row0[32]`...
+`row13[32]` in `C/DEV/SRC/SNAKE.MC`, `set_cell(x,y,ch)`).
+
+`string` instead computes the offset `row*WIDTH+col` with the same
+trick `__mc_screen_offset` already uses for `y*80+x` (see "Screen
+built-in functions" below) - NOT an 8-bit `MUL` (would overflow at
+modest COUNT/WIDTH already), but an `ADD`/`ADC` loop accumulating a
+real 16-bit byte pair, then one `ADDHL` at the end (internal helper
+`__mc_str_offset`, a parameterized clone of `__mc_screen_offset` - the
+WIDTH comes from the declaration of the SPECIFIC string array being
+indexed, rather than being hardcoded like the screen's 80).
+`playlist[i][j]` - both read and write - works for any `i` (up to 255)
+and `j` (up to 255) within the declared COUNT/WIDTH; going past the
+declared bounds isn't checked at runtime, same as ordinary arrays.
+
+`print_string(x, y, NAME, index)` - a built-in function, prints the
+string `NAME[index]` starting at `(x, y)`, stopping at the first zero
+byte or after WIDTH characters, whichever comes first - a runtime
+analog of `print_str`, but for content computed at runtime (read from a
+file, typed by the user, etc.) rather than a string literal known at
+compile time. `NAME` is resolved at codegen time (like `str_copy()`'s
+first argument), `index` is an ordinary runtime `int` expression.
+
+Deliberately NOT added: concatenation, string comparison, a mapped
+variant (`= address`) - none of it is needed by the one existing
+consumer (`C/TOOLS/PLAYER.MC`'s playlist - see "Playlist (PLAY.LST)"
+below), and would have been speculative completeness without real use.
+Working example - `C/TOOLS/PLAYER.MC`: `playlist[16][36]`, filled by
+`load_playlist()` (reads `PLAY.LST` via `DISKIO.MC`), shown by
+`run_playlist_menu()`/`render_playlist()` via `print_string()`.
 
 ### Mapped arrays
 
@@ -3009,6 +3084,7 @@ assembles by hand from arrays:
     clear_screen();               // clears both text and color (Text VRAM + TextAttr CLEAR)
     print_char(x, y, ch);         // prints character ch (0-255, CP866 - section 9) into cell (x, y)
     print_str(x, y, "text");      // prints a string literal starting at (x, y), no line wrapping
+    print_string(x, y, arr, i);   // prints the STRING arr[i] (see "The `string` type") - runtime analog of print_str
     set_color(x, y, fg, bg);      // color of cell (x, y): fg/bg - 0-15 (see "TextAttr", section 9)
 
 `x` (0-79), `y` (0-24), `ch`/`fg`/`bg` are ordinary `int` expressions
@@ -3221,11 +3297,12 @@ and `C/DEV/SRC/LIBDEMO.MC` (includes it) for a working example.
 
 ## What's deliberately missing in v1
 
-- Strings as a full type (you can't store a string in a variable,
-  compare it, concatenate it) - only as a literal directly inside
-  `print_str`/`mod_load`/`str_copy`, each copying it into a fixed
-  destination at compile time, never as a runtime value you can pass
-  around.
+- String LITERALS as a runtime value - `print_str`/`mod_load`/
+  `str_copy` still only accept them as text compiled into a fixed
+  destination, never as a variable. Runtime strings as such DO exist
+  (see "The `string` type") - just without comparison or concatenation,
+  which the one existing consumer (`PLAYER.MC`'s playlist) never
+  needed, so they weren't added speculatively.
 - Pointers, `struct`, `switch`, any 16-bit arithmetic beyond what
   `long` supports (see "The `long` type"), no 32-bit type.
 - Recursion (see "Functions" above).
@@ -3298,6 +3375,11 @@ parameterized by `diskId` (0=C, 1=D) - the same `d_cmd`/`d_status`/
 `d_data`/`d_set_data` pattern already used directly inside `C/TOOLS/
 FM.MC`, factored out for new consumers instead of copy-pasting it again
 (`FM.MC` itself keeps its own copies - no need to churn working code).
+Besides the file commands (`OPEN_READ`/`READ_BYTE`/`OPEN_WRITE`/
+`WRITE_BYTE`/`CLOSE`) there's `diskio_chdir(diskId)`/
+`diskio_chdir_up(diskId)` (`CHDIR`/`CHDIR_UP`, see "Disk" above) -
+needed by `C/TOOLS/PLAYER.MC`'s playlist, see "Playlist (PLAY.LST)"
+below.
 `C/TOOLS/VIEW.MC` is a paged text-file viewer built on top of it and
 `STRLIB.MC`'s `print_number3()`: it reads its file name from `cmdArgs`
 (see "Command-line arguments" in the "Disk" section, and "Built-in
@@ -3320,6 +3402,54 @@ origin-folder fallback (see "LOAD_CHILD" in the "Disk" section) finds it
 there via `Disk::lastExecDir`, regardless of which folder `FM.MC`'s
 panels happen to be browsing when `F3` is pressed - no copying `.RUN`
 files around, no fixed "put it at the root" convention to remember.
+
+## Playlist (PLAY.LST)
+
+`C/TOOLS/PLAYER.MC` (see "Sound and music" above) can play not just a
+single track named as an argument, but a list: `player` with no
+arguments looks next to itself (`C/TOOLS/PLAY.LST`) for a text
+playlist file and shows a selectable list (arrows/`Enter`, hints at the
+bottom - the same style as `FM.MC`'s `render_status()`).
+
+`PLAY.LST` format - one track per line, `<DISK>/<path from disk root>`:
+
+    C/DEMOS/SPACE_~1.MOD
+    D/GAMES/SONG.MOD
+
+`<DISK>` is the letter `C` or `D` (byte `68` = `'D'`, anything else is
+treated as `C` - see `load_mod_from_playlist()`); the path after the
+first `/` is NOT split into segments or walked one folder at a time via
+`CHDIR` at all - it's copied as-is into `ModLoader`'s 32-byte `NAME`
+(`std::filesystem::path::operator/`, which is what `ModLoader::load()`
+uses to resolve the path on the C++ side, already correctly understands
+embedded `/` inside a single string - see `ModLoader.cpp`). The only
+thing `PLAYER.MC` itself has to do before loading is make sure the
+CHOSEN disk's `currentDir` points at the ROOT (otherwise the path in
+the playlist would resolve relative to wherever `player` actually got
+launched from, not the root) - just select the disk once via
+`MODLOADER_DISK_SELECT` (see "ModLoader" above) and send `CHDIR_UP`
+several times in a row (a safe no-op at the root, DOS-style - see
+"Disk").
+
+Up to 16 lines, no scrolling (`PLAYLIST_MAX`/`PLAYLIST_WIDTH` in
+`PLAYER.MC`) - extra lines are silently ignored, as is the tail of a
+line longer than `PLAYLIST_WIDTH` bytes. Stored in `string
+playlist[16][36]` (see "The `string` type" above) - this was in fact
+the reason `string` got added to the language: 16 parallel `int`
+arrays plus an `if` cascade (the older trick, see `SNAKE.MC`) for
+arbitrary-length paths would have been considerably more verbose.
+
+`DISKIO.MC` (see "Example: VIEW.MC / DISKIO.MC" below) was extended
+with two wrappers for reading `PLAY.LST` itself and resetting
+`currentDir` to the root: `diskio_chdir(diskId)` (`CHDIR`, enters the
+folder written into `NAME` via `diskio_set_name_char`) and
+`diskio_chdir_up(diskId)` (`CHDIR_UP`).
+
+Controls while picking a track: `Up`/`Down` - move through the list,
+`Enter` - play the selected track (reuses the same visualizer/playback
+loop as single-track mode), `Ctrl+Q` - exit the player entirely (not
+back to the list - the same behavior as `Ctrl+Q` while a track launched
+via a command-line argument is playing).
 
 ## Built-in tools: FM.MC / EDIT.MC / VIEW.MC keybindings
 
@@ -3468,6 +3598,7 @@ list.
 | `clear_screen()` | clears both text and color |
 | `print_char(x, y, ch)` | character `ch` (0-255, CP866) into cell `(x, y)` |
 | `print_str(x, y, "text")` | a string literal starting at `(x, y)`, no wrapping |
+| `print_string(x, y, arr, i)` | the string `arr[i]` (see "The `string` type") - runtime analog of `print_str` |
 | `set_color(x, y, fg, bg)` | the cell's color, `fg`/`bg` - 0-15 |
 
 **Child programs**

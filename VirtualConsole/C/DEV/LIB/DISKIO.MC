@@ -23,6 +23,8 @@ const DISKIO_READ_BYTE = 4;
 const DISKIO_OPEN_WRITE = 5;
 const DISKIO_WRITE_BYTE = 6;
 const DISKIO_CLOSE = 7;
+const DISKIO_CHDIR = 11;
+const DISKIO_CHDIR_UP = 12;
 
 int diskio_cmd(int diskId, int cmd) {
     if (diskId == 0) { poke(DISKIO_C_CMD, cmd); return 0; }
@@ -54,5 +56,22 @@ int diskio_name_char(int diskId, int idx) {
 int diskio_set_name_char(int diskId, int idx, int value) {
     if (diskId == 0) { diskioCName[idx] = value; return 0; }
     diskioDName[idx] = value;
+    return 0;
+}
+
+// CHDIR/CHDIR_UP (см. ASSEMBLY.md, "Disk") - заходят/поднимаются в
+// currentDir диска diskId. CHDIR читает целевую папку из NAME (заполнить
+// через diskio_set_name_char ДО вызова) - тот же приём, что и у файловых
+// команд выше. CHDIR_UP в корне - безопасный no-op (как в DOS), поэтому
+// его можно звать заведомо больше раз, чем реальная глубина вложенности,
+// чтобы гарантированно оказаться в корне (см. load_playlist()/
+// load_mod_from_playlist() в PLAYER.MC).
+int diskio_chdir(int diskId) {
+    diskio_cmd(diskId, DISKIO_CHDIR);
+    return 0;
+}
+
+int diskio_chdir_up(int diskId) {
+    diskio_cmd(diskId, DISKIO_CHDIR_UP);
     return 0;
 }

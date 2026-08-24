@@ -3,11 +3,17 @@
 // Impulse Tracker: рамка, статус/Order/Row и четыре горизонтальных
 // VU-метра, по одному на канал ProTracker (данные - из read-only
 // регистров визуализации SoundCard: CHANNEL0-3_VOLUME/ROW/ORDER_POS,
-// см. ASSEMBLY.md, "SoundCard"). Выбор трека/плейлисты - в следующих
-// итерациях; v1 - один файл на запуск.
+// см. ASSEMBLY.md, "SoundCard").
 //
-// Имя .mod передаётся параметром командной строки (см. ASSEMBLY.md,
-// "Аргументы командной строки"):
+// Два режима запуска:
+//
+//   player SPACE_~1.MOD          - один трек, имя параметром (как раньше)
+//   player                       - плейлист: читает PLAY.LST рядом с
+//                                   собой, показывает список (стрелки +
+//                                   Enter, подсказки внизу, как в FM.MC)
+//
+// Имя .mod для режима "один трек" передаётся параметром командной строки
+// (см. ASSEMBLY.md, "Аргументы командной строки"):
 //
 //     player SPACE_~1.MOD
 //     exec player.mc SPACE_~1.MOD
@@ -20,25 +26,37 @@
 // невозможно, для него используется DOS-стиль "SPACE_~1.MOD" (~1, как
 // в настоящем DOS при обрезании длинных имён).
 //
+// PLAY.LST (режим "плейлист") - текстовый файл рядом с PLAYER.RUN
+// (C/TOOLS/PLAY.LST), одна строка на трек: "<ДИСК>/<путь от корня
+// диска>", например "C/DEMOS/SPACE_~1.MOD" или "D/GAMES/SONG.MOD" -
+// см. load_playlist()/load_mod_from_playlist() ниже и ASSEMBLY.md,
+// раздел "Плейлист (PLAY.LST)". До 16 строк, без прокрутки; лишние
+// строки молча игнорируются.
+//
 // mod_load() из Мини-C принимает только строковый ЛИТЕРАЛ, известный на
 // этапе компиляции (см. ASSEMBLY.md, "Звук и музыка: mod_load()/
-// sound_*()") - для рантайм-имени (наш случай, имя приходит параметром)
-// программа сама копирует байты cmdArgs в NAME-буфер ModLoader
-// (0xF0001020-0xF000103F, маппированный массив modName[32]) и вручную
-// триггерит COMMAND=LOAD - тот же приём, что MUSIC.ASM когда-то делал
-// руками на голом ассемблере, но для одного зашитого имени. Проверено:
-// байт в байт тот же код, что генерирует mod_load() на этапе
+// sound_*()") - для рантайм-имени (наш случай, имя приходит параметром
+// или строкой плейлиста) программа сама копирует байты в NAME-буфер
+// ModLoader (0xF0001020-0xF000103F, маппированный массив modName[32]) и
+// вручную триггерит COMMAND=LOAD - тот же приём, что MUSIC.ASM когда-то
+// делал руками на голом ассемблере, но для одного зашитого имени.
+// Проверено: байт в байт тот же код, что генерирует mod_load() на этапе
 // компиляции (см. Compiler.cpp::genModLoad) - разницы в РЕЗУЛЬТАТЕ нет.
 //
-// Управление: Ctrl+Q - остановить и выйти, P - пауза/продолжить.
+// Управление во время проигрывания: Ctrl+Q - остановить и выйти (из
+// ЛЮБОГО режима запуска - плейлист не возвращает в список, закрывает
+// плеер целиком), P - пауза/продолжить. Управление в списке плейлиста:
+// стрелки вверх/вниз - выбор, Enter - играть, Ctrl+Q - выход.
 //
-// Собирается командой "build player.mc", запускается как
+// Собирается командой "build player.mc", запускается как "player" или
 // "player ИМЯ.MOD".
 
 #include "STRLIB.MC"
+#include "DISKIO.MC"
 
-const MODLOADER_COMMAND = 0xF0001040;
-const MODLOADER_STATUS  = 0xF0001041;
+const MODLOADER_COMMAND     = 0xF0001040;
+const MODLOADER_STATUS      = 0xF0001041;
+const MODLOADER_DISK_SELECT = 0xF0001043;   // 0=как раньше (lastExecDisk), 1=диск C, 2=диск D - см. ModLoaderDiskSelect.h
 
 const SOUNDCARD_COMMAND    = 0xF0001066;
 const SOUNDCARD_STATUS     = 0xF0001067;
@@ -48,12 +66,26 @@ const SOUNDCARD_ORDER_POS  = 0xF000106E;
 const KEY_CTRL_Q  = 17;
 const KEY_P_UPPER = 80;
 const KEY_P_LOWER = 112;
+const KEY_ENTER   = 13;
+const KEY_UP      = 72;    // стрелка вверх (extended-код _getch(), см. ASSEMBLY.md/Keyboard - как в FM.MC)
+const KEY_DOWN    = 80;    // стрелка вниз - совпадает по значению с KEY_P_UPPER, но используется только в меню плейлиста, не в цикле проигрывания, конфликта нет
 
 const BAR_X   = 9;
 const BAR_LEN = 58;   // ширина шкалы под громкость канала 0-64
 
+const PLAYLIST_MAX   = 16;   // до 16 треков, без прокрутки (см. заголовок файла)
+const PLAYLIST_WIDTH = 36;   // "<ДИСК>/" (2 байта) + до 32 байт (лимит NAME у ModLoader) + запас
+
 int modName[32] = 0xF0001020;      // NAME0-31 у ModLoader
 int channelVol[4] = 0xF0001069;    // CHANNEL0-3_VOLUME у SoundCard (read-only)
+
+// Плейлист - список путей "<ДИСК>/<путь от корня>" (см. load_playlist()/
+// load_mod_from_playlist() ниже). string, а не 16 обычных int-массивов +
+// if-каскад (как SNAKE.MC делает для строк экрана) - обычный `int arr[i]`
+// упирается в 255 элементов (arr[i] считает офсет через __mc_hladd,
+// который жёстко обнуляет старший байт - см. ASSEMBLY.md, "Тип string"),
+// а 16*36=576 такому лимиту не подчиняется.
+string playlist[PLAYLIST_MAX][PLAYLIST_WIDTH];
 
 // Состояние предыдущего кадра - для delta-перерисовки (см. draw_channel()/
 // main() ниже): трогаем экран, только если значение реально изменилось -
@@ -298,6 +330,220 @@ int toggle_pause() {
     return 0;
 }
 
+// ---- Плейлист (PLAY.LST) ----
+
+// Читает C/TOOLS/PLAY.LST (рядом с PLAYER.RUN) в playlist[][] - одна
+// строка файла на один playlist[i]. Формат строки - "<ДИСК>/<путь от
+// корня диска>" (см. заголовок файла); здесь путь не разбирается вообще,
+// только режется на строки по LF (10) - разбор диска/пути происходит
+// позже, в load_mod_from_playlist(), непосредственно перед загрузкой
+// выбранного трека. CR (13) перед LF пропускается (см. EDIT.MC про
+// формат Windows-переводов строк - тот же приём). Возвращает число
+// прочитанных треков (0, если PLAY.LST не найден - тогда main() ведёт
+// себя как раньше, без плейлиста).
+int load_playlist() {
+    int i;
+    int count;
+    int col;
+    int ch;
+    int done;
+
+    // TOOLS всегда на диске C (0) - сам PLAY.LST не бывает
+    // кросс-дисковым, кросс-дисковыми бывают только ТРЕКИ внутри него
+    // (см. load_mod_from_playlist()). Сброс в корень диска C нужен
+    // здесь, чтобы найти саму TOOLS независимо от того, откуда реально
+    // запущен player (currentDir мог быть куда угодно смещён предыдущей
+    // программой).
+    i = 0;
+    while (i < 16) { diskio_chdir_up(0); i = i + 1; }
+
+    i = 0;
+    while (i < 12) { diskio_set_name_char(0, i, 0); i = i + 1; }
+    diskio_set_name_char(0, 0, 84);   // T
+    diskio_set_name_char(0, 1, 79);   // O
+    diskio_set_name_char(0, 2, 79);   // O
+    diskio_set_name_char(0, 3, 76);   // L
+    diskio_set_name_char(0, 4, 83);   // S
+    diskio_chdir(0);
+
+    i = 0;
+    while (i < 12) { diskio_set_name_char(0, i, 0); i = i + 1; }
+    diskio_set_name_char(0, 0, 80);   // P
+    diskio_set_name_char(0, 1, 76);   // L
+    diskio_set_name_char(0, 2, 65);   // A
+    diskio_set_name_char(0, 3, 89);   // Y
+    diskio_set_name_char(0, 4, 46);   // .
+    diskio_set_name_char(0, 5, 76);   // L
+    diskio_set_name_char(0, 6, 83);   // S
+    diskio_set_name_char(0, 7, 84);   // T
+
+    diskio_cmd(0, DISKIO_OPEN_READ);
+    if (diskio_status(0) == 2) { return 0; }   // PLAY.LST не найден
+
+    count = 0;
+    col = 0;
+    done = 0;
+    while (done == 0) {
+        diskio_cmd(0, DISKIO_READ_BYTE);
+        if (diskio_status(0) == 1) {
+            done = 1;   // EOF
+        } else {
+            ch = diskio_data(0);
+            if (ch == 13) {
+                // CR перед LF - игнорируем, конец строки только по LF
+            } else {
+                if (ch == 10) {
+                    if (col > 0) {
+                        playlist[count][col] = 0;
+                        count = count + 1;
+                        col = 0;
+                        if (count >= PLAYLIST_MAX) { done = 1; }
+                    }
+                } else {
+                    if (col < PLAYLIST_WIDTH - 1) {
+                        playlist[count][col] = ch;
+                        col = col + 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Последняя строка файла без завершающего LF (EOF сразу после
+    // текста) - без этого она тихо терялась бы.
+    if (col > 0) {
+        if (count < PLAYLIST_MAX) {
+            playlist[count][col] = 0;
+            count = count + 1;
+        }
+    }
+
+    diskio_cmd(0, DISKIO_CLOSE);
+
+    return count;
+}
+
+int draw_playlist_frame() {
+    int x;
+
+    clear_screen();
+
+    print_char(0, 0, 201); print_char(79, 0, 187);   // ╔ ╗
+    x = 1; while (x < 79) { print_char(x, 0, 205); x = x + 1; }   // ═
+
+    print_char(0, 2, 204); print_char(79, 2, 185);   // ╠ ╣
+    x = 1; while (x < 79) { print_char(x, 2, 205); x = x + 1; }
+
+    print_char(0, 3 + PLAYLIST_MAX, 200); print_char(79, 3 + PLAYLIST_MAX, 188);   // ╚ ╝
+    x = 1; while (x < 79) { print_char(x, 3 + PLAYLIST_MAX, 205); x = x + 1; }
+
+    print_char(0, 1, 186); print_char(79, 1, 186);   // ║
+    x = 3;
+    while (x < 3 + PLAYLIST_MAX) { print_char(0, x, 186); print_char(79, x, 186); x = x + 1; }
+
+    color_text(0, 0, 80, 11);
+    set_color(0, 1, 11, 0); set_color(79, 1, 11, 0);
+    color_text(0, 2, 80, 11);
+    x = 3;
+    while (x < 3 + PLAYLIST_MAX) { set_color(0, x, 11, 0); set_color(79, x, 11, 0); x = x + 1; }
+    color_text(0, 3 + PLAYLIST_MAX, 80, 11);
+
+    print_str(2, 1, "VC TRACKER PLAYER - Playlist");
+    color_text(2, 1, 29, 14);
+
+    print_str(0, 3 + PLAYLIST_MAX + 2, "^/v-move   Enter-play   Ctrl+Q-exit");
+    x = 0;
+    while (x < 80) { set_color(x, 3 + PLAYLIST_MAX + 2, 0, 7); x = x + 1; }
+
+    return 0;
+}
+
+int render_playlist(int count, int sel) {
+    int i;
+    int color;
+
+    i = 0;
+    while (i < count) {
+        print_string(4, 3 + i, playlist, i);
+        color = 15;
+        if (i == sel) { color = 10; }
+        color_text(4, 3 + i, PLAYLIST_WIDTH - 2, color);
+        i = i + 1;
+    }
+
+    return 0;
+}
+
+// Показывает список плейлиста, ждёт Enter/стрелки/Ctrl+Q. Возвращает
+// выбранный индекс (0..count-1), либо count - сентинел "нажали Ctrl+Q,
+// ничего не выбрано" (обычный int, отрицательных литералов в мини-C
+// нет - см. ASSEMBLY.md - а count всегда вне диапазона реальных
+// индексов 0..count-1).
+int run_playlist_menu(int count) {
+    int sel;
+    int key;
+    int running;
+
+    sel = 0;
+    draw_playlist_frame();
+    render_playlist(count, sel);
+
+    running = 1;
+    while (running == 1) {
+        if ((peek(KEYBOARD_CONTROL) & 2) != 0) {
+            key = peek(KEYBOARD_DATA);
+            if (key == KEY_CTRL_Q) { return count; }
+            if (key == KEY_ENTER) { return sel; }
+            if (key == KEY_UP) {
+                if (sel > 0) { sel = sel - 1; render_playlist(count, sel); }
+            }
+            if (key == KEY_DOWN) {
+                if (sel < count - 1) { sel = sel + 1; render_playlist(count, sel); }
+            }
+        }
+    }
+
+    return sel;
+}
+
+// Разбирает playlist[sel] ("<ДИСК>/<путь>"), выбирает диск в ModLoader
+// (см. MODLOADER_DISK_SELECT/ModLoaderDiskSelect.h), сбрасывает
+// currentDir ВЫБРАННОГО диска в корень (путь в playlist - от корня
+// диска, а не от текущей папки - см. заголовок файла) и грузит трек.
+// Возвращает STATUS ModLoader, как и load_mod_from_arg().
+int load_mod_from_playlist(int sel) {
+    int letter;
+    int diskSel;
+    int i;
+    int j;
+    int ch;
+
+    letter = playlist[sel][0];
+    diskSel = 1;                       // диск C по умолчанию
+    if (letter == 68) { diskSel = 2; } // 'D'
+    poke(MODLOADER_DISK_SELECT, diskSel);
+
+    // diskSel-1 переводит соглашение ModLoader (1=C,2=D) в соглашение
+    // DISKIO.MC (0=C,1=D) - только тут, больше нигде эти два числа не
+    // пересекаются.
+    i = 0;
+    while (i < 16) { diskio_chdir_up(diskSel - 1); i = i + 1; }
+
+    // Копируем playlist[sel] начиная с индекса 2 (пропускаем "C/"/"D/")
+    // в NAME-буфер ModLoader - тот же приём, что load_mod_from_arg()
+    // делает с cmdArgs.
+    i = 0; j = 2;
+    while (i < 32) {
+        ch = playlist[sel][j];
+        modName[i] = ch;
+        if (ch != 0) { j = j + 1; }
+        i = i + 1;
+    }
+
+    poke(MODLOADER_COMMAND, 1);   // LOAD
+    return peek(MODLOADER_STATUS);
+}
+
 int main() {
     int argLen;
     int status;
@@ -305,6 +551,9 @@ int main() {
     int key;
     int order;
     int row;
+    int count;
+    int sel;
+    int choosingTrack;
 
     lastFilled[0] = 0; lastFilled[1] = 0; lastFilled[2] = 0; lastFilled[3] = 0;
     lastVol[0] = 0; lastVol[1] = 0; lastVol[2] = 0; lastVol[3] = 0;
@@ -320,26 +569,55 @@ int main() {
     if (argLen > 16) { argLen = 16; }   // ширина cmdArgs - см. заголовок файла
 
     if (argLen == 0) {
-        clear_screen();
-        print_str(0, 0, "Usage: player FILENAME.MOD");
-        wait_key();
-        return 1;
-    }
-
-    status = load_mod_from_arg(argLen);
-    if (status != 0) {
-        clear_screen();
-        if (status == 1) { print_str(0, 0, "MOD file not found"); }
-        else {
-            if (status == 2) { print_str(0, 0, "Unsupported MOD format"); }
-            else { print_str(0, 0, "MOD file is corrupt"); }
+        // Без аргумента - режим плейлиста (см. заголовок файла).
+        // Отсутствующий PLAY.LST - тот же "Usage:", что и раньше (для
+        // тех, кто просто набрал "player" без параметра и без плейлиста).
+        count = load_playlist();
+        if (count == 0) {
+            clear_screen();
+            print_str(0, 0, "Usage: player FILENAME.MOD");
+            wait_key();
+            return 1;
         }
-        wait_key();
-        return 1;
-    }
 
-    draw_static();
-    print_arg_name(29, 1, argLen);
+        choosingTrack = 1;
+        while (choosingTrack == 1) {
+            sel = run_playlist_menu(count);
+            if (sel >= count) { return 0; }   // Ctrl+Q в меню - выход
+
+            status = load_mod_from_playlist(sel);
+            if (status != 0) {
+                clear_screen();
+                if (status == 1) { print_str(0, 0, "MOD file not found"); }
+                else {
+                    if (status == 2) { print_str(0, 0, "Unsupported MOD format"); }
+                    else { print_str(0, 0, "MOD file is corrupt"); }
+                }
+                wait_key();
+                // choosingTrack остаётся 1 - возвращаемся к списку
+            } else {
+                choosingTrack = 0;
+            }
+        }
+
+        draw_static();
+        print_string(29, 1, playlist, sel);
+    } else {
+        status = load_mod_from_arg(argLen);
+        if (status != 0) {
+            clear_screen();
+            if (status == 1) { print_str(0, 0, "MOD file not found"); }
+            else {
+                if (status == 2) { print_str(0, 0, "Unsupported MOD format"); }
+                else { print_str(0, 0, "MOD file is corrupt"); }
+            }
+            wait_key();
+            return 1;
+        }
+
+        draw_static();
+        print_arg_name(29, 1, argLen);
+    }
 
     poke(SOUNDCARD_COMMAND, 1);   // PLAY
 

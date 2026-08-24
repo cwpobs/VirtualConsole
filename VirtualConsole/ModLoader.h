@@ -7,20 +7,24 @@
 
 class SoundCard;
 class Disk;
+class ModLoaderDiskSelect;
 
 // Устройство "загрузчик MOD" - читает и разбирает трекерный .mod-файл
 // (см. ASSEMBLY.md, "ModLoader" про формат) на стороне C++ - парсинг
 // бинарного формата с секвенсором в ассемблере этого CPU так же
 // нереален, как разбор PNG (см. PngLoader) - и кладёт готовую песню
-// в SoundCard одним вызовом. diskC - откуда брать ТЕКУЩУЮ папку (см.
-// PngLoader про то же самое).
+// в SoundCard одним вызовом. diskC/diskD - оба физических диска, на
+// случай явного выбора через diskSelect (см. load() и
+// ModLoaderDiskSelect.h - плейлист с треками на разных дисках).
 class ModLoader : public Device
 {
 public:
 
     // soundCard - куда положить разобранную песню (см.
-    // SoundCard::loadSong).
-    ModLoader(SoundCard* soundCard, Disk* diskC);
+    // SoundCard::loadSong). diskSelect - см. ModLoaderDiskSelect.h,
+    // определяет, берётся ли активный диск оттуда (явный выбор) или
+    // как раньше - из Disk::lastExecDisk (значение 0, по умолчанию).
+    ModLoader(SoundCard* soundCard, Disk* diskC, Disk* diskD, ModLoaderDiskSelect* diskSelect);
 
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
@@ -39,6 +43,8 @@ private:
 
     SoundCard* soundCard;
     Disk* diskC;
+    Disk* diskD;
+    ModLoaderDiskSelect* diskSelect;
 
     uint8_t name[32];
     uint8_t status;

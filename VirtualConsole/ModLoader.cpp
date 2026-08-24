@@ -1,13 +1,14 @@
 #include "ModLoader.h"
 #include "SoundCard.h"
 #include "Disk.h"
+#include "ModLoaderDiskSelect.h"
 
 #include <algorithm>
 #include <fstream>
 #include <vector>
 
-ModLoader::ModLoader(SoundCard* soundCard, Disk* diskC)
-    : soundCard(soundCard), diskC(diskC)
+ModLoader::ModLoader(SoundCard* soundCard, Disk* diskC, Disk* diskD, ModLoaderDiskSelect* diskSelect)
+    : soundCard(soundCard), diskC(diskC), diskD(diskD), diskSelect(diskSelect)
 {
     for (int i = 0; i < 32; i++)
     {
@@ -68,10 +69,18 @@ namespace
 
 void ModLoader::load()
 {
-    // lastExecDisk - какой диск реально запустил (через exec) текущую
-    // выполняющуюся программу - см. Disk.h. До первого exec (nullptr)
-    // используем diskC как диск по умолчанию.
-    Disk* activeDisk = (Disk::lastExecDisk != nullptr) ? Disk::lastExecDisk : diskC;
+    // diskSelect (см. ModLoaderDiskSelect.h) - явный выбор диска, нужен
+    // плейлисту (треки на разных дисках в одном play.lst - см.
+    // ASSEMBLY.md, "ModLoader"/PLAYER.MC): 1=C, 2=D. 0 (значение по
+    // умолчанию, никогда не тронутое MODLOADER_DISK_SELECT) - старое
+    // поведение без изменений: lastExecDisk - какой диск реально
+    // запустил (через exec) текущую выполняющуюся программу - см.
+    // Disk.h. До первого exec (nullptr) используем diskC как диск по
+    // умолчанию.
+    uint8_t sel = diskSelect->get();
+    Disk* activeDisk = (sel == 1) ? diskC
+        : (sel == 2) ? diskD
+        : ((Disk::lastExecDisk != nullptr) ? Disk::lastExecDisk : diskC);
     std::ifstream file(activeDisk->getCurrentPath() / nameAsString(), std::ios::binary);
 
     if (!file)

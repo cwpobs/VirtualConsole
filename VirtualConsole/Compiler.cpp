@@ -86,9 +86,9 @@ static const std::string kDevicePrelude =
     "int cmdArgs[16] = 0x00010006;\n";
 
 static const char* kKeywords[] = {
-    "int", "long", "if", "else", "while", "for", "return", "const",
+    "int", "long", "string", "if", "else", "while", "for", "return", "const",
     "poke", "peek",
-    "print_char", "print_str", "set_color", "clear_screen",
+    "print_char", "print_str", "print_string", "set_color", "clear_screen",
     "exec_child",
     "mod_load", "sound_play", "sound_stop", "sound_pause",
     "sound_resume", "sound_set_volume",
@@ -303,6 +303,24 @@ Compiler::NodePtr Compiler::parseTopLevelDecl()
         return n;
     }
 
+    if (match("string"))
+    {
+        // `string NAME[COUNT][WIDTH];` - COUNT строк по WIDTH байт,
+        // всегда собственное хранилище (см. Compiler.h, stringCounts/
+        // stringWidths) - в отличие от `int arr[N]` мапированного
+        // варианта тут нет, строкам не нужно окно в MMIO.
+        auto n = node(NodeKind::StringDecl);
+        n->text = expectIdent().text;
+        expect("[");
+        n->children.push_back(parseExpr());   // COUNT
+        expect("]");
+        expect("[");
+        n->children.push_back(parseExpr());   // WIDTH
+        expect("]");
+        expect(";");
+        return n;
+    }
+
     bool isLong = false;
     if (match("long"))
     {
@@ -507,6 +525,13 @@ Compiler::NodePtr Compiler::parseAssignment()
             n->text = left->text;
             n->children.push_back(left->children[0]);   // индекс
             n->children.push_back(value);
+            return n;
+        }
+        if (left->kind == NodeKind::Index2D)
+        {
+            auto n = node(NodeKind::Index2DAssign);
+            n->text = left->text;
+            n->children = { left->children[0], left->children[1], value };
             return n;
         }
         error("в левой части присваивания должна быть переменная или элемент массива");
@@ -791,6 +816,26 @@ Compiler::NodePtr Compiler::parsePrimary()
         return n;
     }
 
+    if (check("print_string") && peek().type == TokType::KEYWORD)
+    {
+        // print_string(x, y, arrName, index) - печатает строку index
+        // массива arrName (см. StringDecl) с (x,y), останавливаясь на
+        // первом нулевом байте или на WIDTH символах - рантайм-аналог
+        // print_str для НЕ-литеральных строк (см. genPrintString).
+        advance();
+        auto n = node(NodeKind::PrintString);
+        expect("(");
+        n->children.push_back(parseExpr());   // x
+        expect(",");
+        n->children.push_back(parseExpr());   // y
+        expect(",");
+        n->text = expectIdent().text;         // имя string-массива - резолвится в кодогене
+        expect(",");
+        n->children.push_back(parseExpr());   // index
+        expect(")");
+        return n;
+    }
+
     if (check("str_copy") && peek().type == TokType::KEYWORD)
     {
         advance();
@@ -877,10 +922,27 @@ Compiler::NodePtr Compiler::parsePrimary()
 
         if (match("["))
         {
+            NodePtr idx1 = parseExpr();
+            expect("]");
+            if (match("["))
+            {
+                // arr[i][j] - вторая скобка сразу за первой означает
+                // строку (см. StringDecl) - обычные `int arr[N]` так не
+                // индексируются, второй скобки у них не бывает. Разбор
+                // не смотрит на то, как ИМЯ реально объявлено (это ещё
+                // не известно на этапе парсинга - объявления собираются
+                // после всего файла, см. collectDeclarations) - несовпадение
+                // ловится позже, в кодогене (genStringAddress).
+                NodePtr idx2 = parseExpr();
+                expect("]");
+                auto n2 = node(NodeKind::Index2D);
+                n2->text = name;
+                n2->children = { idx1, idx2 };
+                return n2;
+            }
             auto n = node(NodeKind::Index);
             n->text = name;
-            n->children.push_back(parseExpr());
-            expect("]");
+            n->children.push_back(idx1);
             return n;
         }
 
@@ -1000,6 +1062,19 @@ void Compiler::collectDeclarations(const NodePtr& program)
                 info.paramGlobals.push_back(decl->children[i]->text);
             }
             functions[decl->text] = info;
+        }
+        else if (decl->kind == NodeKind::StringDecl)
+        {
+            long long count = foldConst(decl->children[0]);
+            long long width = foldConst(decl->children[1]);
+            if (count < 1 || count > 255 || width < 1 || width > 255)
+            {
+                throw std::runtime_error(
+                    "Мини-C: строка " + std::to_string(decl->line) +
+                    ": 'string " + decl->text + "' - COUNT и WIDTH должны быть 1-255");
+            }
+            stringCounts[decl->text] = static_cast<int>(count);
+            stringWidths[decl->text] = static_cast<int>(width);
         }
     }
 
@@ -1377,6 +1452,118 @@ void Compiler::genPrintStr(const NodePtr& expr)
     *codeOut << doneLabel << ":\n";
 }
 
+void Compiler::genStringAddress(const std::string& name, const NodePtr& rowExpr, const NodePtr& colExpr)
+{
+    // HL = name + row*WIDTH + col - тот же приём, что genScreenAddress/
+    // __mc_screen_offset уже использует для y*80+x (ADD-цикл, копящий
+    // 16-битную пару байт, вместо 8-битного MUL, который переполнился бы
+    // для row*WIDTH выше 255 - см. Compiler.h, __mc_str_offset), только
+    // WIDTH - не жёстко зашитая 80, а константа КОНКРЕТНОГО string-массива
+    // (stringWidths[name]), передаётся в __mc_str_stride перед вызовом.
+    auto widthIt = stringWidths.find(name);
+    if (widthIt == stringWidths.end())
+    {
+        throw std::runtime_error(
+            "Мини-C: '" + name + "' не объявлен как 'string' (см. NAME[COUNT][WIDTH])");
+    }
+    usesStringHelper = true;
+    int width = widthIt->second;
+
+    genExprToA(colExpr);
+    *codeOut << "    STA __mc_str_col\n";
+    genExprToA(rowExpr);
+    *codeOut << "    STA __mc_str_row\n";
+    *codeOut << "    LDI A, " << width << "\n";
+    *codeOut << "    STA __mc_str_stride\n";
+    *codeOut << "    LDHL " << name << "\n";
+    *codeOut << "    LDA __mc_str_row\n";
+    *codeOut << "    CALL __mc_str_offset\n";
+}
+
+void Compiler::genPrintString(const NodePtr& expr)
+{
+    // Рантайм-аналог genPrintStr(), но байты берутся не из DB-литерала,
+    // известного на этапе компиляции, а из строки string-массива по
+    // РАНТАЙМ-индексу (expr->children[2]) - именно поэтому нужен цикл,
+    // считывающий каждый байт через __mc_str_offset (не __mc_hladd, тот
+    // не потянул бы row*WIDTH > 255 - см. genStringAddress). Останавливается
+    // на первом нулевом байте ИЛИ на WIDTH символах, что раньше -
+    // строка может быть короче отведённого места (см. load_playlist() в
+    // PLAYER.MC - явно дописывает 0 после последнего символа строки).
+    const std::string& name = expr->text;
+    auto widthIt = stringWidths.find(name);
+    if (widthIt == stringWidths.end())
+    {
+        throw std::runtime_error(
+            "Мини-C: строка " + std::to_string(expr->line) +
+            ": print_string - '" + name + "' не объявлен как 'string'");
+    }
+    int width = widthIt->second;
+
+    usesScreenHelper = true;
+    usesStringHelper = true;
+
+    std::string loopLabel = newLabel("pstr_loop");
+    std::string doneLabel = newLabel("pstr_done");
+
+    genExprToA(expr->children[1]);   // y - не меняется на всю строку
+    *codeOut << "    STA __mc_pstr_y\n";
+    genExprToA(expr->children[0]);   // x - стартовая колонка на экране
+    *codeOut << "    STA __mc_pstr_x\n";
+    genExprToA(expr->children[2]);   // index - номер строки, считается один раз
+    *codeOut << "    STA __mc_pstr_row\n";
+
+    *codeOut << "    LDI A, 0\n";
+    *codeOut << "    STA __mc_pstr_i\n";
+
+    *codeOut << loopLabel << ":\n";
+    *codeOut << "    LDA __mc_pstr_i\n";
+    *codeOut << "    LDI B, " << width << "\n";
+    *codeOut << "    CMP B\n";
+    *codeOut << "    JZ " << doneLabel << "\n";
+
+    // HL = name + row*WIDTH + i (см. genStringAddress - тут инлайним её
+    // тело напрямую, т.к. row/col уже лежат в ячейках, а не в AST-узлах).
+    *codeOut << "    LDA __mc_pstr_i\n";
+    *codeOut << "    STA __mc_str_col\n";
+    *codeOut << "    LDA __mc_pstr_row\n";
+    *codeOut << "    STA __mc_str_row\n";
+    *codeOut << "    LDI A, " << width << "\n";
+    *codeOut << "    STA __mc_str_stride\n";
+    *codeOut << "    LDHL " << name << "\n";
+    *codeOut << "    LDA __mc_str_row\n";
+    *codeOut << "    CALL __mc_str_offset\n";
+    *codeOut << "    LDX\n";
+    *codeOut << "    STA __mc_pstr_ch\n";
+
+    *codeOut << "    LDI B, 0\n";
+    *codeOut << "    CMP B\n";
+    *codeOut << "    JZ " << doneLabel << "\n";   // нулевой байт - конец строки
+
+    // Кладём символ на экран в (x+i, y) - тот же приём, что genPrintStr.
+    *codeOut << "    LDA __mc_pstr_x\n";
+    *codeOut << "    PUSH A\n";
+    *codeOut << "    LDA __mc_pstr_i\n";
+    *codeOut << "    POP B\n";
+    *codeOut << "    ADD B\n";
+    *codeOut << "    STA __mc_scr_x\n";
+
+    *codeOut << "    LDHL 0xF0000007\n";
+    *codeOut << "    LDA __mc_pstr_y\n";
+    *codeOut << "    CALL __mc_screen_offset\n";
+
+    *codeOut << "    LDA __mc_pstr_ch\n";
+    *codeOut << "    STX\n";
+
+    *codeOut << "    LDA __mc_pstr_i\n";
+    *codeOut << "    LDI B, 1\n";
+    *codeOut << "    ADD B\n";
+    *codeOut << "    STA __mc_pstr_i\n";
+    *codeOut << "    JMP " << loopLabel << "\n";
+
+    *codeOut << doneLabel << ":\n";
+}
+
 void Compiler::genModLoad(const NodePtr& expr)
 {
     // В отличие от print_str, адрес назначения тут ВСЕГДА фиксирован
@@ -1521,6 +1708,16 @@ void Compiler::genExprToA(const NodePtr& expr)
         return;
     }
 
+    case NodeKind::Index2DAssign:
+    {
+        genExprToA(expr->children[2]);   // значение
+        *codeOut << "    PUSH A\n";
+        genStringAddress(expr->text, expr->children[0], expr->children[1]);
+        *codeOut << "    POP A\n";
+        *codeOut << "    STX\n";
+        return;
+    }
+
     case NodeKind::Ident:
     {
         std::string name = expr->text;
@@ -1565,6 +1762,11 @@ void Compiler::genExprToA(const NodePtr& expr)
         *codeOut << "    LDX\n";
         return;
 
+    case NodeKind::Index2D:
+        genStringAddress(expr->text, expr->children[0], expr->children[1]);
+        *codeOut << "    LDX\n";
+        return;
+
     case NodeKind::Peek:
     {
         long long addr = foldConst(expr->children[0]);
@@ -1586,6 +1788,10 @@ void Compiler::genExprToA(const NodePtr& expr)
 
     case NodeKind::PrintStr:
         genPrintStr(expr);
+        return;
+
+    case NodeKind::PrintString:
+        genPrintString(expr);
         return;
 
     case NodeKind::SetColor:
@@ -1944,6 +2150,9 @@ std::string Compiler::compile(const std::string& source, const std::vector<std::
     longVars.clear();
     usesScreenHelper = false;
     usesLongCompare = false;
+    stringCounts.clear();
+    stringWidths.clear();
+    usesStringHelper = false;
 
     lex(source, libSources);
     NodePtr program = parseProgram();
@@ -2050,6 +2259,74 @@ std::string Compiler::compile(const std::string& source, const std::vector<std::
         data << "__mc_ps_ch: DB 0\n";
     }
 
+    if (usesStringHelper)
+    {
+        // Параметризованный клон __mc_screen_offset выше - копит
+        // row*WIDTH+col как настоящую 16-битную пару байт (ADD/ADC),
+        // затем ОДИН ADDHL - тот же приём, только WIDTH берётся из
+        // __mc_str_stride (рантайм-ячейка, выставляется вызывающим кодом
+        // под каждый конкретный string-массив - см. genStringAddress/
+        // genPrintString), а не жёстко зашитая 80. Вход: A = row (row2
+        // хранит РАБОЧУЮ копию - сам row остаётся нетронутым для
+        // возможного повторного использования вызывающим кодом).
+        code << "__mc_str_offset:\n";
+        code << "    STA __mc_str_row2\n";
+        code << "    LDI A, 0\n";
+        code << "    STA __mc_str_accLow\n";
+        code << "    STA __mc_str_accHigh\n";
+        code << "__mc_str_offset_loop:\n";
+        code << "    LDA __mc_str_row2\n";
+        code << "    LDI B, 0\n";
+        code << "    CMP B\n";
+        code << "    JZ __mc_str_offset_row_done\n";
+        code << "    LDA __mc_str_stride\n";
+        code << "    PUSH A\n";
+        code << "    LDA __mc_str_accLow\n";
+        code << "    POP B\n";
+        code << "    ADD B\n";
+        code << "    STA __mc_str_accLow\n";
+        code << "    LDA __mc_str_accHigh\n";
+        code << "    LDI B, 0\n";
+        code << "    ADC B\n";
+        code << "    STA __mc_str_accHigh\n";
+        code << "    LDA __mc_str_row2\n";
+        code << "    LDI B, 1\n";
+        code << "    SUB B\n";
+        code << "    STA __mc_str_row2\n";
+        code << "    JMP __mc_str_offset_loop\n";
+        code << "__mc_str_offset_row_done:\n";
+        code << "    LDA __mc_str_col\n";
+        code << "    PUSH A\n";
+        code << "    POP B\n";
+        code << "    LDA __mc_str_accLow\n";
+        code << "    ADD B\n";
+        code << "    STA __mc_str_accLow\n";
+        code << "    LDA __mc_str_accHigh\n";
+        code << "    LDI B, 0\n";
+        code << "    ADC B\n";
+        code << "    STA __mc_str_accHigh\n";
+        code << "    LDA __mc_str_accHigh\n";
+        code << "    PUSH A\n";
+        code << "    POP B\n";
+        code << "    LDA __mc_str_accLow\n";
+        code << "    PUSH A\n";
+        code << "    POP C\n";
+        code << "    ADDHL B, C\n";
+        code << "    RET\n";
+
+        data << "__mc_str_row: DB 0\n";
+        data << "__mc_str_row2: DB 0\n";
+        data << "__mc_str_col: DB 0\n";
+        data << "__mc_str_stride: DB 0\n";
+        data << "__mc_str_accLow: DB 0\n";
+        data << "__mc_str_accHigh: DB 0\n";
+        data << "__mc_pstr_x: DB 0\n";
+        data << "__mc_pstr_y: DB 0\n";
+        data << "__mc_pstr_i: DB 0\n";
+        data << "__mc_pstr_row: DB 0\n";
+        data << "__mc_pstr_ch: DB 0\n";
+    }
+
     for (const auto& name : globalVars)
     {
         data << name << ": DB 0\n";
@@ -2079,6 +2356,17 @@ std::string Compiler::compile(const std::string& source, const std::vector<std::
             int size = arraySizes[decl->text];
             data << decl->text << ": DB 0\n";
             for (int i = 1; i < size; i++)
+            {
+                data << "    DB 0\n";
+            }
+        }
+        else if (decl->kind == NodeKind::StringDecl)
+        {
+            // Всегда собственное хранилище (нет мапированного варианта
+            // у string, см. Compiler.h) - COUNT*WIDTH байт подряд.
+            int total = stringCounts[decl->text] * stringWidths[decl->text];
+            data << decl->text << ": DB 0\n";
+            for (int i = 1; i < total; i++)
             {
                 data << "    DB 0\n";
             }

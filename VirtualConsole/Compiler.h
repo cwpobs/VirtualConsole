@@ -69,7 +69,8 @@ private:
         Call, Index, Ident, Number, Poke, Peek,
         PrintChar, PrintStr, SetColor, ClearScreen, ExecChild,
         ModLoad, SoundPlay, SoundStop, SoundPause, SoundResume, SoundSetVolume,
-        StrCopy
+        StrCopy,
+        StringDecl, Index2D, Index2DAssign, PrintString
     };
 
     struct Node
@@ -122,6 +123,17 @@ private:
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, int> arraySizes;
     std::map<std::string, long long> arrayBaseAddr;   // маппированные массивы (`int arr[N] = адрес;`) - alias на внешнюю память (MMIO), без собственной DB-ячейки
+
+    // `string NAME[COUNT][WIDTH];` - COUNT строк по WIDTH байт каждая,
+    // всегда собственное хранилище (мапированного варианта нет - строки
+    // не нужны как окно в MMIO). См. genStringAddress/usesStringHelper
+    // ниже - индексация `arr[i][j]` считает офсет `i*WIDTH+j` тем же
+    // приёмом (ADD-цикл + один ADDHL), что __mc_screen_offset уже
+    // считает y*80+x - обходит те же 255 элементов, в которые упирается
+    // обычный `arr[i]` через __mc_hladd (там офсет - голый 8-битный A,
+    // старший байт жёстко обнуляется).
+    std::map<std::string, int> stringCounts;
+    std::map<std::string, int> stringWidths;
     std::vector<std::string> globalVars;   // все `int x;` - и верхнего уровня, и внутри функций (переменных без глобальной DB-ячейки в этом языке не бывает)
 
     // `long NAME;` - 16-битная скалярная переменная (см. ASSEMBLY.md,
@@ -178,4 +190,11 @@ private:
     void genStrCopy(const NodePtr& expr);
     void genSetColor(const NodePtr& expr);
     void genScreenAddress(long long base, const NodePtr& xExpr, const NodePtr& yExpr);   // HL = base + y*80 + x
+
+    // ---- `string` (см. stringCounts/stringWidths выше) ----
+
+    bool usesStringHelper = false;    // нужен ли __mc_str_offset (эмитится один раз, если хоть раз использован)
+
+    void genStringAddress(const std::string& name, const NodePtr& rowExpr, const NodePtr& colExpr);   // HL = name + row*WIDTH + col
+    void genPrintString(const NodePtr& expr);
 };

@@ -18,6 +18,7 @@
 #include "MapLoader.h"
 #include "SoundCard.h"
 #include "ModLoader.h"
+#include "ModLoaderDiskSelect.h"
 #include "Gpu3D.h"
 #include "Bus.h"
 #include "Assembler.h"
@@ -73,7 +74,8 @@ int main()
     PngLoader pngLoader(&videoCard, &diskC);
     MapLoader mapLoader(&videoCard, &diskC);
     SoundCard soundCard;
-    ModLoader modLoader(&soundCard, &diskC);
+    ModLoaderDiskSelect modLoaderDiskSelect;
+    ModLoader modLoader(&soundCard, &diskC, &diskD, &modLoaderDiskSelect);
     Gpu3D gpu3D(&videoCard);
     Assembler assembler;
     VideoConsole videoConsole(&keyboard, &videoCard, &consoleLayer, config.videoConsoleScale);
@@ -104,8 +106,11 @@ int main()
     // Старое место SoundCard (см. ниже, блок SoundCard целиком перенесён
     // ПОСЛЕ Gpu3D, чтобы не сдвигать его и не переписывать жёстко
     // зашитые адреса в CUBE3D.ASM) - 0xF0001042 занят под ConsoleLayer,
-    // 0xF0001043-0xF0001044 всё ещё не используются.
+    // 0xF0001043 - под ModLoaderDiskSelect (плейлист с треками на
+    // разных дисках - см. ASSEMBLY.md, "ModLoader"), 0xF0001044 всё ещё
+    // не используется.
     bus.mapDevice(&consoleLayer, 0xF0001042, 0xF0001042); // видимость текстового слоя поверх VideoCard (0/1)
+    bus.mapDevice(&modLoaderDiskSelect, 0xF0001043, 0xF0001043); // ModLoader: явный выбор диска (0=lastExecDisk,1=C,2=D)
     bus.mapDevice(&soundCard, 0xF0001066, 0xF000106E); // звуковая карта (PLAY/STOP/VOLUME + визуализация: громкость каналов/ROW/ORDER_POS)
 
 
