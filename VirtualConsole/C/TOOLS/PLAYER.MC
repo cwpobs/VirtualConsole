@@ -71,6 +71,19 @@ const SOUNDCARD_STATUS     = 0xF0001067;
 const SOUNDCARD_ROW        = 0xF000106D;
 const SOUNDCARD_ORDER_POS  = 0xF000106E;
 
+// "Едущие блоки" - живой просмотр ноты/сэмпла/эффекта в ТЕКУЩЕМ играющем
+// паттерне (см. ASSEMBLY.md, "SoundCard"): пишем PATTERN_ROW_SELECT/
+// PATTERN_CHANNEL_SELECT, читаем обратно четыре поля ячейки. Только
+// текущий паттерн - строка, уехавшая за его начало/конец (0-63), не
+// подтягивает соседний паттерн, а просто рисуется пустой (см.
+// draw_pattern_view() ниже).
+const SOUNDCARD_PATTERN_ROW_SELECT     = 0xF000106F;
+const SOUNDCARD_PATTERN_CHANNEL_SELECT = 0xF0001070;
+const SOUNDCARD_PATTERN_NOTE           = 0xF0001071;
+const SOUNDCARD_PATTERN_SAMPLE         = 0xF0001072;
+const SOUNDCARD_PATTERN_EFFECT         = 0xF0001073;
+const SOUNDCARD_PATTERN_PARAM          = 0xF0001074;
+
 const KEY_CTRL_Q  = 17;
 const KEY_P_UPPER = 80;
 const KEY_P_LOWER = 112;
@@ -95,8 +108,29 @@ const ACTION_MENU = 1;   // Esc - вернуться к списку плейл�
 const ACTION_NEXT = 2;   // стрелка вправо - следующий трек (без зацикливания)
 const ACTION_PREV = 3;   // стрелка влево - предыдущий трек (без зацикливания)
 
+// "Едущие блоки" (см. draw_pattern_view() ниже) - окно из 9 строк вокруг
+// текущей (4 до, сама текущая, 4 после), под VU-метрами, в ранее пустых
+// строках экрана 13-24 (сам экран 0-24). PATTERN_FIRST_ROW - строка
+// экрана для ПЕРВОГО слота окна (слот 4 из 9 - текущая строка паттерна,
+// см. main.cpp/SoundCard.h "PATTERN_ROW_SELECT").
+const PATTERN_TOP       = 13;   // верхняя рамка
+const PATTERN_HEADER    = 14;   // подписи CH1-CH4
+const PATTERN_FIRST_ROW = 15;   // первый из 9 слотов окна
+const PATTERN_ROWS      = 9;
+const PATTERN_BOTTOM    = 24;   // нижняя рамка = PATTERN_FIRST_ROW + PATTERN_ROWS
+const PATTERN_CENTER    = 4;    // слот текущей строки (0-8, 4 - середина)
+
+const PATTERN_COL_X0    = 2;    // x первого канала
+const PATTERN_COL_WIDTH = 13;   // "C-3 01 A02" (10 символов) + отступ
+
 int modName[32] = 0xF0001020;      // NAME0-31 у ModLoader
 int channelVol[4] = 0xF0001069;    // CHANNEL0-3_VOLUME у SoundCard (read-only)
+
+// Имена нот - 3 октавы, тот же порядок, что PERIOD_TABLE в SoundCard.cpp
+// (см. ASSEMBLY.md, "SoundCard") - индекс 0-35, заполняется один раз
+// init_note_names() (см. main()). Классический трекерный формат "Буква
+// диез/дефис октава", например "C-1", "C#1", "D-1"... "B-3".
+string noteNames[36][4];
 
 // Плейлист - список путей "<ДИСК>/<путь от корня>" (см. load_playlist()/
 // load_mod_from_playlist() ниже). string, а не 16 обычных int-массивов +
@@ -202,6 +236,75 @@ int print_number2(int x, int y, int value) {
     d1 = value % 10;
     print_char(x, y, d0 + 48);
     print_char(x + 1, y, d1 + 48);
+    return 0;
+}
+
+// Один hex-символ (0-15 -> '0'-'9'/'A'-'F') и два подряд (0-255 -> два
+// символа) - для sample/effect/param в "едущих блоках" (см.
+// draw_pattern_view() ниже), тот же формат, что классические трекеры.
+int hex_digit(int v) {
+    if (v < 10) { return v + 48; }
+    return v + 55;   // 10 -> 65 ('A')
+}
+
+int print_hex2(int x, int y, int value) {
+    print_char(x, y, hex_digit(value / 16));
+    print_char(x + 1, y, hex_digit(value % 16));
+    return 0;
+}
+
+int set_note_name(int idx, int c0, int c1, int c2) {
+    noteNames[idx][0] = c0;
+    noteNames[idx][1] = c1;
+    noteNames[idx][2] = c2;
+    noteNames[idx][3] = 0;
+    return 0;
+}
+
+// Заполняет noteNames[36] - тот же порядок нот, что PERIOD_TABLE в
+// SoundCard.cpp (3 октавы: C-1..B-1, C-2..B-2, C-3..B-3). Зовётся один
+// раз из main() перед первым использованием. Коды символов: C=67,D=68,
+// E=69,F=70,G=71,A=65,B=66, '#'=35, '-'=45, цифры '1'/'2'/'3'=49/50/51.
+int init_note_names() {
+    set_note_name(0, 67, 45, 49);    // C-1
+    set_note_name(1, 67, 35, 49);    // C#1
+    set_note_name(2, 68, 45, 49);    // D-1
+    set_note_name(3, 68, 35, 49);    // D#1
+    set_note_name(4, 69, 45, 49);    // E-1
+    set_note_name(5, 70, 45, 49);    // F-1
+    set_note_name(6, 70, 35, 49);    // F#1
+    set_note_name(7, 71, 45, 49);    // G-1
+    set_note_name(8, 71, 35, 49);    // G#1
+    set_note_name(9, 65, 45, 49);    // A-1
+    set_note_name(10, 65, 35, 49);   // A#1
+    set_note_name(11, 66, 45, 49);   // B-1
+
+    set_note_name(12, 67, 45, 50);   // C-2
+    set_note_name(13, 67, 35, 50);   // C#2
+    set_note_name(14, 68, 45, 50);   // D-2
+    set_note_name(15, 68, 35, 50);   // D#2
+    set_note_name(16, 69, 45, 50);   // E-2
+    set_note_name(17, 70, 45, 50);   // F-2
+    set_note_name(18, 70, 35, 50);   // F#2
+    set_note_name(19, 71, 45, 50);   // G-2
+    set_note_name(20, 71, 35, 50);   // G#2
+    set_note_name(21, 65, 45, 50);   // A-2
+    set_note_name(22, 65, 35, 50);   // A#2
+    set_note_name(23, 66, 45, 50);   // B-2
+
+    set_note_name(24, 67, 45, 51);   // C-3
+    set_note_name(25, 67, 35, 51);   // C#3
+    set_note_name(26, 68, 45, 51);   // D-3
+    set_note_name(27, 68, 35, 51);   // D#3
+    set_note_name(28, 69, 45, 51);   // E-3
+    set_note_name(29, 70, 45, 51);   // F-3
+    set_note_name(30, 70, 35, 51);   // F#3
+    set_note_name(31, 71, 45, 51);   // G-3
+    set_note_name(32, 71, 35, 51);   // G#3
+    set_note_name(33, 65, 45, 51);   // A-3
+    set_note_name(34, 65, 35, 51);   // A#3
+    set_note_name(35, 66, 45, 51);   // B-3
+
     return 0;
 }
 
@@ -322,6 +425,148 @@ int draw_static(int playlistMode) {
     print_number3(BAR_X + BAR_LEN + 2, 6, 0); color_text(BAR_X + BAR_LEN + 2, 6, 3, 15);
     print_number3(BAR_X + BAR_LEN + 2, 7, 0); color_text(BAR_X + BAR_LEN + 2, 7, 3, 15);
     print_number3(BAR_X + BAR_LEN + 2, 8, 0); color_text(BAR_X + BAR_LEN + 2, 8, 3, 15);
+
+    return 0;
+}
+
+// "Едущие блоки" - живой просмотр нот/сэмплов/эффектов ТЕКУЩЕГО играющего
+// паттерна, "в духе" ProTracker (см. ASSEMBLY.md, "SoundCard"). Статика
+// (рамка/заголовки/фон, включая подсветку центральной строки) - здесь,
+// рисуется один раз вместе с draw_static(); содержимое обновляет
+// отдельная draw_pattern_view() ниже, только когда меняется ROW.
+//
+// Курсор "текущая строка" ВСЕГДА на одном и том же месте экрана (слот
+// PATTERN_CENTER, screenY = PATTERN_FIRST_ROW + PATTERN_CENTER) - едет
+// не он, а содержимое вокруг (соседние строки паттерна), так что фон
+// подсветки красится тут, один раз, и никогда не перекрашивается заново.
+int draw_pattern_frame() {
+    int x;
+    int y;
+    int ch;
+    int bg;
+
+    print_char(0, PATTERN_TOP, 204); print_char(79, PATTERN_TOP, 185);      // ╠ ╣
+    x = 1; while (x < 79) { print_char(x, PATTERN_TOP, 205); x = x + 1; }   // ═
+
+    print_char(0, PATTERN_BOTTOM, 200); print_char(79, PATTERN_BOTTOM, 188);   // ╚ ╝
+    x = 1; while (x < 79) { print_char(x, PATTERN_BOTTOM, 205); x = x + 1; }
+
+    color_text(0, PATTERN_TOP, 80, 11);
+    color_text(0, PATTERN_BOTTOM, 80, 11);
+
+    print_char(0, PATTERN_HEADER, 186); print_char(79, PATTERN_HEADER, 186);   // ║
+    set_color(0, PATTERN_HEADER, 11, 0); set_color(79, PATTERN_HEADER, 11, 0);
+
+    print_str(PATTERN_COL_X0, PATTERN_HEADER, "CH1");
+    color_text(PATTERN_COL_X0, PATTERN_HEADER, 3, 12);
+    print_str(PATTERN_COL_X0 + PATTERN_COL_WIDTH, PATTERN_HEADER, "CH2");
+    color_text(PATTERN_COL_X0 + PATTERN_COL_WIDTH, PATTERN_HEADER, 3, 10);
+    print_str(PATTERN_COL_X0 + PATTERN_COL_WIDTH * 2, PATTERN_HEADER, "CH3");
+    color_text(PATTERN_COL_X0 + PATTERN_COL_WIDTH * 2, PATTERN_HEADER, 3, 9);
+    print_str(PATTERN_COL_X0 + PATTERN_COL_WIDTH * 3, PATTERN_HEADER, "CH4");
+    color_text(PATTERN_COL_X0 + PATTERN_COL_WIDTH * 3, PATTERN_HEADER, 3, 14);
+
+    y = 0;
+    while (y < PATTERN_ROWS) {
+        bg = 0;
+        if (y == PATTERN_CENTER) { bg = 4; }   // текущая строка - синий фон, фиксирован
+
+        print_char(0, PATTERN_FIRST_ROW + y, 186);
+        print_char(79, PATTERN_FIRST_ROW + y, 186);
+        set_color(0, PATTERN_FIRST_ROW + y, 11, 0);
+        set_color(79, PATTERN_FIRST_ROW + y, 11, 0);
+
+        ch = 0;
+        while (ch < 4) {
+            x = PATTERN_COL_X0 + ch * PATTERN_COL_WIDTH;
+
+            print_char(x + 3, PATTERN_FIRST_ROW + y, 32);   // пробелы-разделители - статичны
+            print_char(x + 6, PATTERN_FIRST_ROW + y, 32);
+
+            set_color(x, PATTERN_FIRST_ROW + y, 15, bg);       // нота - белым
+            set_color(x + 1, PATTERN_FIRST_ROW + y, 15, bg);
+            set_color(x + 2, PATTERN_FIRST_ROW + y, 15, bg);
+            set_color(x + 3, PATTERN_FIRST_ROW + y, 7, bg);
+            set_color(x + 4, PATTERN_FIRST_ROW + y, 11, bg);   // сэмпл - голубым
+            set_color(x + 5, PATTERN_FIRST_ROW + y, 11, bg);
+            set_color(x + 6, PATTERN_FIRST_ROW + y, 7, bg);
+            set_color(x + 7, PATTERN_FIRST_ROW + y, 14, bg);   // эффект+параметр - жёлтым
+            set_color(x + 8, PATTERN_FIRST_ROW + y, 14, bg);
+            set_color(x + 9, PATTERN_FIRST_ROW + y, 14, bg);
+
+            ch = ch + 1;
+        }
+
+        y = y + 1;
+    }
+
+    return 0;
+}
+
+// Обновляет ТОЛЬКО текст ячеек (не цвет/фон - см. draw_pattern_frame()
+// выше) - зовётся из play_track_loop() при каждом изменении ROW, не
+// каждый кадр. currentRow - ROW из SoundCard (0-63).
+int draw_pattern_view(int currentRow) {
+    int i;
+    int ch;
+    int temp;
+    int targetRow;
+    int valid;
+    int screenY;
+    int x;
+    int note;
+    int sample;
+    int effect;
+    int param;
+
+    i = 0;
+    while (i < PATTERN_ROWS) {
+        // temp = currentRow + i, а не currentRow + i - PATTERN_CENTER
+        // напрямую - int в мини-C беззнаковый (см. ASSEMBLY.md),
+        // отрицательных промежуточных значений нет и быть не может.
+        temp = currentRow + i;
+        valid = 0;
+        targetRow = 0;
+        if (temp >= PATTERN_CENTER) {
+            targetRow = temp - PATTERN_CENTER;
+            if (targetRow <= 63) { valid = 1; }   // иначе уехали за конец паттерна
+        }
+
+        screenY = PATTERN_FIRST_ROW + i;
+
+        ch = 0;
+        while (ch < 4) {
+            x = PATTERN_COL_X0 + ch * PATTERN_COL_WIDTH;
+
+            if (valid == 1) {
+                poke(SOUNDCARD_PATTERN_ROW_SELECT, targetRow);
+                poke(SOUNDCARD_PATTERN_CHANNEL_SELECT, ch);
+                note = peek(SOUNDCARD_PATTERN_NOTE);
+                sample = peek(SOUNDCARD_PATTERN_SAMPLE);
+                effect = peek(SOUNDCARD_PATTERN_EFFECT);
+                param = peek(SOUNDCARD_PATTERN_PARAM);
+
+                if (note == 255) {
+                    print_str(x, screenY, "---");
+                } else {
+                    print_string(x, screenY, noteNames, note);
+                }
+                print_hex2(x + 4, screenY, sample);
+                print_char(x + 7, screenY, hex_digit(effect));
+                print_hex2(x + 8, screenY, param);
+            } else {
+                // Строка вне паттерна (уехали за начало/конец) - пусто.
+                print_str(x, screenY, "   ");
+                print_str(x + 4, screenY, "  ");
+                print_char(x + 7, screenY, 32);
+                print_str(x + 8, screenY, "  ");
+            }
+
+            ch = ch + 1;
+        }
+
+        i = i + 1;
+    }
 
     return 0;
 }
@@ -452,7 +697,11 @@ int play_track_loop(int playlistMode, int sel, int count) {
         order = peek(SOUNDCARD_ORDER_POS);
         if (order != lastOrder) { print_number3(27, 2, order); lastOrder = order; }
         row = peek(SOUNDCARD_ROW);
-        if (row != lastRow) { print_number3(39, 2, row); lastRow = row; }
+        if (row != lastRow) {
+            print_number3(39, 2, row);
+            lastRow = row;
+            draw_pattern_view(row);
+        }
 
         draw_channel(5, channelVol[0], 12, 0);
         draw_channel(6, channelVol[1], 10, 1);
@@ -697,6 +946,8 @@ int main() {
     int action;
     int menuRunning;
 
+    init_note_names();
+
     argLen = peek(CMD_ARGS_LEN);
     if (argLen > 16) { argLen = 16; }   // ширина cmdArgs - см. заголовок файла
 
@@ -740,6 +991,7 @@ int main() {
             } else {
                 reset_delta_state();
                 draw_static(1);
+                draw_pattern_frame();
                 print_string(29, 1, playlist, sel);
                 action = play_track_loop(1, sel, count);
                 if (action == ACTION_EXIT) { menuRunning = 0; }
@@ -765,6 +1017,7 @@ int main() {
 
     reset_delta_state();
     draw_static(0);
+    draw_pattern_frame();
     print_arg_name(29, 1, argLen);
     play_track_loop(0, 0, 1);   // playlistMode=0 - Esc/влево/вправо не активны, sel/count не используются
 

@@ -82,6 +82,24 @@ private:
     static const uint32_t REG_ROW = 7;
     static const uint32_t REG_ORDER_POS = 8;
 
+    // Регистры "запроса ячейки паттерна" - выбор (PATTERN_ROW_SELECT/
+    // PATTERN_CHANNEL_SELECT, оба write-only) + четыре read-only поля
+    // ячейки в ТЕКУЩЕМ играющем паттерне (см. getQueryCell() ниже) -
+    // нужны PLAYER.MC для "едущих блоков" (живой просмотр нот/сэмплов/
+    // эффектов, см. ASSEMBLY.md, "SoundCard"/"Плейлист"). В отличие от
+    // REG_CHANNEL*_VOLUME/REG_ROW/REG_ORDER_POS выше, это НЕ зеркала,
+    // обновляемые аудио-потоком раз за тик - каждое чтение вычисляет
+    // ответ заново по queryRow/queryChannel, поэтому обычные (не
+    // atomic) поля вполне достаточны: и запись, и чтение происходят из
+    // одного и того же CPU-потока, как и у любого другого write-only/
+    // read-only регистра на этой шине.
+    static const uint32_t REG_PATTERN_ROW_SELECT = 9;       // write: строка в текущем паттерне, 0-63
+    static const uint32_t REG_PATTERN_CHANNEL_SELECT = 10;  // write: канал, 0-3
+    static const uint32_t REG_PATTERN_NOTE = 11;            // read: индекс ноты 0-35 (см. PERIOD_TABLE), 255 = нет ноты
+    static const uint32_t REG_PATTERN_SAMPLE = 12;          // read: номер сэмпла 0-31 (0 = нет)
+    static const uint32_t REG_PATTERN_EFFECT = 13;          // read: номер эффекта 0-15
+    static const uint32_t REG_PATTERN_PARAM = 14;           // read: параметр эффекта 0-255
+
     static const int SAMPLE_RATE = 44100;
 
     // Стандартная таблица periods ProTracker (finetune = 0, 3 октавы,
@@ -122,6 +140,12 @@ private:
     bool songLoaded;
     std::mutex songMutex;   // защищает song/songLoaded от гонки LOAD во время PLAY
 
+    // Выбор для REG_PATTERN_NOTE/SAMPLE/EFFECT/PARAM (см. getQueryCell()
+    // ниже) - обычные поля, не atomic (см. комментарий у REG_PATTERN_*
+    // выше про то, почему этого достаточно).
+    uint8_t queryRow = 0;
+    uint8_t queryChannel = 0;
+
     // Состояние секвенсора - трогается только аудио-потоком, пока он
     // жив; play()/stop() синхронизируются через playRequested/stopRequested.
     ChannelState channels[4];
@@ -154,6 +178,16 @@ private:
     void renderSamples(int16_t* out, int frameCount);
     static double periodToFrequency(uint16_t period);
     static uint16_t periodForSemitoneOffset(uint16_t basePeriod, int semitoneOffset);
+
+    // См. REG_PATTERN_* выше - для "едущих блоков" PLAYER.MC. Читают
+    // song/orderPosAtomic под songMutex (song заменяется целиком в
+    // loadSong(), см. её комментарий) - возвращают "пустую" ячейку
+    // (ModCell{}, period=0) для любого некорректного состояния (песня
+    // не загружена, currentRow/queryChannel вне диапазона и т.п.), а не
+    // бросают/падают - тот же стиль, что и у остальных read-регистров
+    // этой шины (ASSEMBLY.md, "SoundCard": "статус=..." вместо ошибок).
+    ModCell getQueryCell();
+    uint8_t queryNoteIndex();
 
     void audioThreadMain();
 };

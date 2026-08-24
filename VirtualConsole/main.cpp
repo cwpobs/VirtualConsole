@@ -111,7 +111,7 @@ int main()
     // не используется.
     bus.mapDevice(&consoleLayer, 0xF0001042, 0xF0001042); // видимость текстового слоя поверх VideoCard (0/1)
     bus.mapDevice(&modLoaderDiskSelect, 0xF0001043, 0xF0001043); // ModLoader: явный выбор диска (0=lastExecDisk,1=C,2=D)
-    bus.mapDevice(&soundCard, 0xF0001066, 0xF000106E); // звуковая карта (PLAY/STOP/VOLUME + визуализация: громкость каналов/ROW/ORDER_POS)
+    bus.mapDevice(&soundCard, 0xF0001066, 0xF0001074); // звуковая карта (PLAY/STOP/VOLUME + визуализация: громкость каналов/ROW/ORDER_POS + запрос ячейки паттерна PATTERN_*)
 
 
     // ========================================

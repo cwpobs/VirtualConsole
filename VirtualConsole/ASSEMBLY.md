@@ -1306,7 +1306,7 @@ Current address space map:
 | 0xF0001043 | ModLoaderDiskSelect (explicit disk choice for ModLoader - see "ModLoader") |
 | 0xF0001044 | unused gap (old SoundCard location - see below) |
 | 0xF0001045 - 0xF0001065 | Gpu3D (vertices/triangles/PRESENT) |
-| 0xF0001066 - 0xF000106E | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME, visualization) |
+| 0xF0001066 - 0xF0001074 | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME, visualization, pattern-cell query PATTERN_*) |
 
 MMIO is placed far from RAM (starting at `0xF0000000`) rather than
 right after its current end - this way RAM can be expanded in the
@@ -2371,8 +2371,14 @@ at all.
 | 3-6 | CHANNEL0-3_VOLUME (read-only) | current per-channel volume, 0-64 (native ProTracker units, same scale as `Cxx`) |
 | 7 | ROW (read-only) | current pattern row, 0-63 |
 | 8 | ORDER_POS (read-only) | current position in the order table, 0-127 |
+| 9 | PATTERN_ROW_SELECT (write) | row to query in the CURRENTLY playing pattern, 0-63 |
+| 10 | PATTERN_CHANNEL_SELECT (write) | channel to query, 0-3 |
+| 11 | PATTERN_NOTE (read-only) | note index at (row,channel), 0-35, `255` = no note |
+| 12 | PATTERN_SAMPLE (read-only) | sample number at that cell, 0-31 (`0` = none) |
+| 13 | PATTERN_EFFECT (read-only) | effect number at that cell, 0-15 |
+| 14 | PATTERN_PARAM (read-only) | effect param at that cell, 0-255 |
 
-Addresses: `0xF0001066` (COMMAND) - `0xF000106E` (ORDER_POS). Note the
+Addresses: `0xF0001066` (COMMAND) - `0xF0001074` (PATTERN_PARAM). Note the
 gap at the old location, `0xF0001042`-`0xF0001044`: this block used to
 sit right there, directly before `Gpu3D`, but got too small once the
 visualization registers below were added, and growing it in place
@@ -2402,6 +2408,37 @@ gives runtime-indexed access to all four channels in one variable, the
 same trick `SNAKE.MC` uses for its game board. `ROW`/`ORDER_POS` are
 single bytes at fixed addresses, so a plain `peek()` is enough for
 those.
+
+### Pattern-cell query registers (PATTERN_*)
+
+Unlike `CHANNEL*_VOLUME`/`ROW`/`ORDER_POS` above, these six registers
+are NOT mirrors refreshed once per tick by the audio thread - they're
+computed fresh on every read: writing `PATTERN_ROW_SELECT` (0-63) and
+`PATTERN_CHANNEL_SELECT` (0-3) selects a cell in the CURRENTLY playing
+pattern (`song.orderTable[ORDER_POS]`), then `PATTERN_NOTE`/
+`PATTERN_SAMPLE`/`PATTERN_EFFECT`/`PATTERN_PARAM` read its fields.
+`PATTERN_NOTE` isn't the raw period - it's a ready-made index 0-35 into
+the same 36-note table as `PERIOD_TABLE` (below), found by an exact
+match against the cell's period; `255` means either the cell has no
+note at all (period=0) or the period didn't match any standard value
+(an unusual finetune, etc.). Any invalid query (no song loaded,
+`ORDER_POS`/pattern number out of range, `PATTERN_ROW_SELECT >= 64`, or
+`PATTERN_CHANNEL_SELECT >= 4`) returns an "empty" cell (`NOTE=255`,
+everything else `0`) rather than an error - the same style every
+read-only register on this bus already follows.
+
+Added for a live note/sample/effect view - `C/TOOLS/PLAYER.MC`'s
+"blocks racing by" visualizer, in the spirit of classic trackers (see
+"Playlist (PLAY.LST)" below, which covers that whole file, subsection
+"Blocks racing by"). The query only reaches into the CURRENTLY playing
+pattern - a row scrolled past its start/end (0-63) does not pull in the
+neighboring pattern from the order table; the caller decides what to
+show in that case (a blank row, etc.).
+
+`getQueryCell()` (`SoundCard.cpp`) locks `songMutex` for the duration
+of the read - `song` (samples/patterns/order table) is replaced wholesale
+by `loadSong()` on every new `LOAD` through `ModLoader`, and that's the
+same object `getQueryCell()` reads from.
 
 Commands:
 
@@ -3474,6 +3511,35 @@ it for per-frame waiting and resets it on every call), but
 approximately: 30 iterations of the `wait_ms(33)` loop are counted as
 one second. The small drift (30×33ms=990ms, not exactly 1000) doesn't
 matter for a corner-of-the-screen stopwatch.
+
+### Blocks racing by - a live pattern view
+
+Below the VU meters (screen rows 13-24, previously unused), `PLAYER.MC`
+draws a classic-tracker-style window of 9 rows from the CURRENTLY
+playing pattern, across all 4 channels - real notes/samples/effects,
+not an abstract animation (see "Pattern-cell query registers
+(PATTERN_*)" in the "SoundCard" section above - all the real work lives
+there, `PLAYER.MC` just queries and prints). Cell format is
+`"C-3 01 A02"` (note, hex sample number, hex effect+param), `"---"` for
+an empty cell (no note).
+
+The "current row" cursor is ALWAYS in the same spot on screen (the
+middle one, slot 5 of 9) - it's the content around it that moves, not
+the cursor: `draw_pattern_view()` (in `PLAYER.MC`) recomputes the
+`[ROW-4, ROW+4]` window and re-queries all 36 cells (9 rows × 4
+channels) every time `ROW` changes, while `draw_pattern_frame()`
+(background/border/current-row highlight) is drawn only once, when the
+track starts - the same "don't recolor what hasn't changed" principle
+already used throughout the rest of the visualizer. Rows that scroll
+past the start/end of the pattern (`ROW-4 < 0` or `ROW+4 > 63`) render
+blank - see the query's own limitation, above, of never reaching outside
+the current pattern.
+
+Note names (`noteNames[36][4]`, a `string` - see "The `string` type"
+above) are filled once at startup (`init_note_names()`), in the same
+order as `PERIOD_TABLE` in `SoundCard.cpp`: 3 octaves of 12 semitones
+each, classic tracker "letter, sharp-or-dash, octave" format (`"C-1"`,
+`"C#1"`, ... `"B-3"`).
 
 ## Built-in tools: FM.MC / EDIT.MC / VIEW.MC keybindings
 

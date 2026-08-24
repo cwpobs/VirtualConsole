@@ -52,6 +52,10 @@ uint8_t SoundCard::read(uint32_t address)
     case REG_CHANNEL3_VOLUME: return channelVolumeAtomic[3];
     case REG_ROW: return rowAtomic;
     case REG_ORDER_POS: return orderPosAtomic;
+    case REG_PATTERN_NOTE: return queryNoteIndex();
+    case REG_PATTERN_SAMPLE: return getQueryCell().sampleNumber;
+    case REG_PATTERN_EFFECT: return getQueryCell().effect;
+    case REG_PATTERN_PARAM: return getQueryCell().param;
     default: return 0;
     }
 }
@@ -75,9 +79,47 @@ void SoundCard::write(uint32_t address, uint8_t value)
         volume = value;
         return;
 
+    case REG_PATTERN_ROW_SELECT:
+        queryRow = value;
+        return;
+
+    case REG_PATTERN_CHANNEL_SELECT:
+        queryChannel = value;
+        return;
+
     default:
         return;
     }
+}
+
+ModCell SoundCard::getQueryCell()
+{
+    std::lock_guard<std::mutex> lock(songMutex);
+
+    if (!songLoaded) return ModCell();
+
+    uint8_t pos = orderPosAtomic;
+    if (pos >= song.orderTable.size()) return ModCell();
+
+    uint8_t patternIndex = song.orderTable[pos];
+    if (patternIndex >= song.patterns.size()) return ModCell();
+
+    if (queryRow >= 64 || queryChannel >= 4) return ModCell();
+
+    return song.patterns[patternIndex].cells[queryRow][queryChannel];
+}
+
+uint8_t SoundCard::queryNoteIndex()
+{
+    ModCell cell = getQueryCell();
+    if (cell.period == 0) return 255;
+
+    for (int i = 0; i < 36; i++)
+    {
+        if (PERIOD_TABLE[i] == cell.period) return static_cast<uint8_t>(i);
+    }
+
+    return 255;   // нестандартный period (необычный finetune и т.п.) - трактуем как "нет ноты"
 }
 
 void SoundCard::loadSong(ModSong&& newSong)
