@@ -224,7 +224,10 @@ int draw_empty_bar(int row) {
 
 // Статическая часть экрана (рамка/подписи) - рисуется один раз, дальше
 // каждый кадр обновляются только цифры/метры поверх неё (см. main()).
-int draw_static() {
+// playlistMode - какую подсказку внизу показать (см. play_track_loop() -
+// Esc/влево/вправо активны только в режиме плейлиста, так что и в
+// подсказке им незачем быть, если играем трек, запущенный параметром).
+int draw_static(int playlistMode) {
     int x;
 
     clear_screen();
@@ -298,8 +301,13 @@ int draw_static() {
     print_str(2, 7, "CH3"); color_text(2, 7, 3, 9);
     print_str(2, 8, "CH4"); color_text(2, 8, 3, 14);
 
-    print_str(2, 11, "Ctrl+Q - exit     P - pause / resume");
-    color_text(2, 11, 37, 8);
+    if (playlistMode == 1) {
+        print_str(2, 11, "Ctrl+Q-exit  P-pause  Esc-list  <-prev  next->");
+        color_text(2, 11, 46, 8);
+    } else {
+        print_str(2, 11, "Ctrl+Q - exit     P - pause / resume");
+        color_text(2, 11, 37, 8);
+    }
 
     // Метры каналов рисуются "пустыми" сразу здесь - основной цикл
     // (draw_channel()) потом только ДОРИСОВЫВАЕТ разницу с прошлым
@@ -731,7 +739,7 @@ int main() {
                 action = ACTION_MENU;   // назад к списку
             } else {
                 reset_delta_state();
-                draw_static();
+                draw_static(1);
                 print_string(29, 1, playlist, sel);
                 action = play_track_loop(1, sel, count);
                 if (action == ACTION_EXIT) { menuRunning = 0; }
@@ -756,7 +764,7 @@ int main() {
     }
 
     reset_delta_state();
-    draw_static();
+    draw_static(0);
     print_arg_name(29, 1, argLen);
     play_track_loop(0, 0, 1);   // playlistMode=0 - Esc/влево/вправо не активны, sel/count не используются
 
