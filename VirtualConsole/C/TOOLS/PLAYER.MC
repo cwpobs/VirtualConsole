@@ -202,11 +202,11 @@ int load_mod_from_arg(int argLen) {
 }
 
 int color_text(int x, int y, int len, int fg) {
-    int i;
-    i = 0;
-    while (i < len) {
-        set_color(x + i, y, fg, 0);
-        i = i + 1;
+    int colorTextI;
+    colorTextI = 0;
+    while (colorTextI < len) {
+        set_color(x + colorTextI, y, fg, 0);
+        colorTextI = colorTextI + 1;
     }
     return 0;
 }
@@ -853,16 +853,16 @@ int draw_playlist_frame() {
 }
 
 int render_playlist(int count, int sel) {
-    int i;
+    int entryIdx;
     int color;
 
-    i = 0;
-    while (i < count) {
-        print_string(4, 3 + i, playlist, i);
+    entryIdx = 0;
+    while (entryIdx < count) {
+        print_string(4, 3 + entryIdx, playlist, entryIdx);
         color = 15;
-        if (i == sel) { color = 10; }
-        color_text(4, 3 + i, PLAYLIST_WIDTH - 2, color);
-        i = i + 1;
+        if (entryIdx == sel) { color = 10; }
+        color_text(4, 3 + entryIdx, PLAYLIST_WIDTH - 2, color);
+        entryIdx = entryIdx + 1;
     }
 
     return 0;
