@@ -43,10 +43,18 @@
 // Проверено: байт в байт тот же код, что генерирует mod_load() на этапе
 // компиляции (см. Compiler.cpp::genModLoad) - разницы в РЕЗУЛЬТАТЕ нет.
 //
-// Управление во время проигрывания: Ctrl+Q - остановить и выйти (из
-// ЛЮБОГО режима запуска - плейлист не возвращает в список, закрывает
-// плеер целиком), P - пауза/продолжить. Управление в списке плейлиста:
-// стрелки вверх/вниз - выбор, Enter - играть, Ctrl+Q - выход.
+// Управление во время проигрывания: Ctrl+Q - остановить и выйти из
+// плеера целиком (из ЛЮБОГО режима запуска), P - пауза/продолжить. В
+// режиме плейлиста дополнительно: Esc - остановить и вернуться к
+// списку, стрелки влево/вправо - предыдущий/следующий трек БЕЗ
+// зацикливания (на первом треке влево и на последнем вправо - молча
+// ничего не делают, трек не прерывается). Текущее время трека (мм:сс с
+// начала, не общая длительность - MOD-файлы её не хранят, а честно
+// посчитать нельзя без учёта Fxx-эффектов смены темпа внутри песни, см.
+// ASSEMBLY.md/SoundCard) - в углу экрана, рядом с Order/Row.
+//
+// Управление в списке плейлиста: стрелки вверх/вниз - выбор, Enter -
+// играть, Ctrl+Q - выход из плеера.
 //
 // Собирается командой "build player.mc", запускается как "player" или
 // "player ИМЯ.MOD".
@@ -67,14 +75,25 @@ const KEY_CTRL_Q  = 17;
 const KEY_P_UPPER = 80;
 const KEY_P_LOWER = 112;
 const KEY_ENTER   = 13;
+const KEY_ESC     = 27;
 const KEY_UP      = 72;    // стрелка вверх (extended-код _getch(), см. ASSEMBLY.md/Keyboard - как в FM.MC)
 const KEY_DOWN    = 80;    // стрелка вниз - совпадает по значению с KEY_P_UPPER, но используется только в меню плейлиста, не в цикле проигрывания, конфликта нет
+const KEY_LEFT    = 75;    // стрелка влево (та же extended-таблица - см. TSCROLL.MC/EDIT.MC)
+const KEY_RIGHT   = 77;    // стрелка вправо
 
 const BAR_X   = 9;
 const BAR_LEN = 58;   // ширина шкалы под громкость канала 0-64
 
 const PLAYLIST_MAX   = 16;   // до 16 треков, без прокрутки (см. заголовок файла)
 const PLAYLIST_WIDTH = 36;   // "<ДИСК>/" (2 байта) + до 32 байт (лимит NAME у ModLoader) + запас
+
+// Возвращаемое play_track_loop() ниже - что делать дальше, когда трек
+// перестал играть (по любой причине - клавиша или сама завершила бы
+// цикл, если бы такое было возможно).
+const ACTION_EXIT = 0;   // Ctrl+Q - закрыть плеер целиком
+const ACTION_MENU = 1;   // Esc - вернуться к списку плейлиста
+const ACTION_NEXT = 2;   // стрелка вправо - следующий трек (без зацикливания)
+const ACTION_PREV = 3;   // стрелка влево - предыдущий трек (без зацикливания)
 
 int modName[32] = 0xF0001020;      // NAME0-31 у ModLoader
 int channelVol[4] = 0xF0001069;    // CHANNEL0-3_VOLUME у SoundCard (read-only)
@@ -95,6 +114,17 @@ int lastVol[4];       // напечатанное число громкости 
 int lastStatus;        // STATUS SoundCard на прошлом кадре
 int lastOrder;         // ORDER_POS на прошлом кадре
 int lastRow;           // ROW на прошлом кадре
+
+// Прошедшее время трека (мм:сс) - см. play_track_loop() ниже. Честной
+// длительности MOD-файлы не хранят (движок её не считает, и она всё
+// равно "плавает" от Fxx-эффектов смены темпа внутри песни - см.
+// ASSEMBLY.md, "SoundCard") - только то, сколько уже играем. Копится
+// приблизительно (30 кадров wait_ms(33) ~= 1 секунда, а не настоящие
+// показания часов) - для секундомера в углу экрана точность до
+// миллисекунды не нужна, а десяток лишних мс на "секунду" не заметны.
+int elapsedFrameTick;   // 0-29, кадров с последней целой секунды
+int elapsedSec;          // 0-59
+int elapsedMin;           // 0-255 (проигрывание длиннее 255 минут не ожидается)
 
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
@@ -144,6 +174,40 @@ int color_text(int x, int y, int len, int fg) {
         set_color(x + i, y, fg, 0);
         i = i + 1;
     }
+    return 0;
+}
+
+// Сбрасывает состояние delta-перерисовки (см. lastFilled/lastVol/
+// lastStatus/lastOrder/lastRow выше) под свежий draw_static() - нужно
+// звать перед КАЖДЫМ draw_static(), не только один раз при старте
+// программы: теперь draw_static() рисуется заново на каждый новый трек
+// (плейлист, Esc/следующий/предыдущий), а не только один раз за запуск.
+int reset_delta_state() {
+    lastFilled[0] = 0; lastFilled[1] = 0; lastFilled[2] = 0; lastFilled[3] = 0;
+    lastVol[0] = 0; lastVol[1] = 0; lastVol[2] = 0; lastVol[3] = 0;
+    // int в мини-C - 8 бит (0-255) - сентинелы ниже подобраны заведомо
+    // вне реального диапазона каждого регистра (STATUS 0-3, ORDER_POS
+    // 0-127, ROW 0-63), но внутри 0-255, чтобы гарантировать первую
+    // отрисовку без переполнения литерала.
+    lastStatus = 4;
+    lastOrder = 255;
+    lastRow = 255;
+    return 0;
+}
+
+int print_number2(int x, int y, int value) {
+    int d0;
+    int d1;
+    d0 = value / 10;
+    d1 = value % 10;
+    print_char(x, y, d0 + 48);
+    print_char(x + 1, y, d1 + 48);
+    return 0;
+}
+
+int draw_time() {
+    print_number2(56, 2, elapsedMin);
+    print_number2(59, 2, elapsedSec);
     return 0;
 }
 
@@ -219,11 +283,15 @@ int draw_static() {
     print_str(2, 2, "Status:");
     print_str(20, 2, "Order:");
     print_str(34, 2, "Row:");
+    print_str(50, 2, "Time:");
     color_text(2, 2, 7, 7);
     color_text(20, 2, 6, 7);
     color_text(34, 2, 4, 7);
+    color_text(50, 2, 5, 7);
     color_text(27, 2, 3, 15);
     color_text(39, 2, 3, 15);
+    color_text(56, 2, 5, 15);
+    print_char(58, 2, 58); set_color(58, 2, 15, 0);   // ':' между мм и сс - ставится один раз, не перерисовывается
 
     print_str(2, 5, "CH1"); color_text(2, 5, 3, 12);
     print_str(2, 6, "CH2"); color_text(2, 6, 3, 10);
@@ -328,6 +396,75 @@ int toggle_pause() {
     if (st == 1) { poke(SOUNDCARD_COMMAND, 3); return 0; }   // PLAYING -> PAUSE
     if (st == 2) { poke(SOUNDCARD_COMMAND, 4); return 0; }   // PAUSED -> RESUME
     return 0;
+}
+
+// Играет уже загруженный (ModLoader.LOAD уже сделан вызывающим кодом)
+// трек до тех пор, пока пользователь не нажмёт что-то, что должно его
+// остановить - возвращает, ЧТО делать дальше (см. ACTION_* выше).
+// playlistMode=0 (запуск с именем файла параметром) - Esc/влево/вправо
+// не активны вообще, только Ctrl+Q/P, как раньше; playlistMode=1 - все
+// четыре, плюс без зацикливания на границах списка (стрелка молча
+// ничего не делает, если ехать уже некуда - проверяется здесь, ДО
+// остановки трека, поэтому играющий трек не прерывается впустую).
+int play_track_loop(int playlistMode, int sel, int count) {
+    int running;
+    int key;
+    int action;
+    int order;
+    int row;
+
+    elapsedFrameTick = 0;
+    elapsedSec = 0;
+    elapsedMin = 0;
+    draw_time();
+
+    poke(SOUNDCARD_COMMAND, 1);   // PLAY
+
+    running = 1;
+    action = ACTION_EXIT;
+    while (running == 1) {
+        if ((peek(KEYBOARD_CONTROL) & 2) != 0) {
+            key = peek(KEYBOARD_DATA);
+            if (key == KEY_CTRL_Q) { running = 0; action = ACTION_EXIT; }
+            if (key == KEY_P_UPPER) { toggle_pause(); }
+            if (key == KEY_P_LOWER) { toggle_pause(); }
+            if (playlistMode == 1) {
+                if (key == KEY_ESC) { running = 0; action = ACTION_MENU; }
+                if (key == KEY_LEFT) {
+                    if (sel > 0) { running = 0; action = ACTION_PREV; }
+                }
+                if (key == KEY_RIGHT) {
+                    if (sel < count - 1) { running = 0; action = ACTION_NEXT; }
+                }
+            }
+        }
+
+        draw_status(peek(SOUNDCARD_STATUS));
+
+        order = peek(SOUNDCARD_ORDER_POS);
+        if (order != lastOrder) { print_number3(27, 2, order); lastOrder = order; }
+        row = peek(SOUNDCARD_ROW);
+        if (row != lastRow) { print_number3(39, 2, row); lastRow = row; }
+
+        draw_channel(5, channelVol[0], 12, 0);
+        draw_channel(6, channelVol[1], 10, 1);
+        draw_channel(7, channelVol[2], 9, 2);
+        draw_channel(8, channelVol[3], 14, 3);
+
+        elapsedFrameTick = elapsedFrameTick + 1;
+        if (elapsedFrameTick >= 30) {   // ~30 кадров по 33мс - см. elapsedFrameTick выше
+            elapsedFrameTick = 0;
+            elapsedSec = elapsedSec + 1;
+            if (elapsedSec >= 60) { elapsedSec = 0; elapsedMin = elapsedMin + 1; }
+            draw_time();
+        }
+
+        wait_ms(33);   // ~30 кадров/сек
+    }
+
+    poke(SOUNDCARD_COMMAND, 2);   // STOP
+
+    return action;
 }
 
 // ---- Плейлист (PLAY.LST) ----
@@ -547,23 +684,10 @@ int load_mod_from_playlist(int sel) {
 int main() {
     int argLen;
     int status;
-    int running;
-    int key;
-    int order;
-    int row;
     int count;
     int sel;
-    int choosingTrack;
-
-    lastFilled[0] = 0; lastFilled[1] = 0; lastFilled[2] = 0; lastFilled[3] = 0;
-    lastVol[0] = 0; lastVol[1] = 0; lastVol[2] = 0; lastVol[3] = 0;
-    // int в мини-C - 8 бит (0-255) - сентинелы ниже подобраны заведомо
-    // вне реального диапазона каждого регистра (STATUS 0-3, ORDER_POS
-    // 0-127, ROW 0-63), но внутри 0-255, чтобы гарантировать первую
-    // отрисовку без переполнения литерала.
-    lastStatus = 4;
-    lastOrder = 255;
-    lastRow = 255;
+    int action;
+    int menuRunning;
 
     argLen = peek(CMD_ARGS_LEN);
     if (argLen > 16) { argLen = 16; }   // ширина cmdArgs - см. заголовок файла
@@ -580,10 +704,20 @@ int main() {
             return 1;
         }
 
-        choosingTrack = 1;
-        while (choosingTrack == 1) {
-            sel = run_playlist_menu(count);
-            if (sel >= count) { return 0; }   // Ctrl+Q в меню - выход
+        sel = 0;
+        action = ACTION_MENU;   // первый заход - всегда показать список
+        menuRunning = 1;
+        while (menuRunning == 1) {
+            if (action == ACTION_MENU) {
+                sel = run_playlist_menu(count);
+                if (sel >= count) { return 0; }   // Ctrl+Q в меню - выход
+            } else {
+                // ACTION_NEXT/ACTION_PREV - play_track_loop() уже
+                // проверил границы списка (см. его комментарий), сюда
+                // попадаем только с валидным следующим/предыдущим sel.
+                if (action == ACTION_NEXT) { sel = sel + 1; }
+                if (action == ACTION_PREV) { sel = sel - 1; }
+            }
 
             status = load_mod_from_playlist(sel);
             if (status != 0) {
@@ -594,58 +728,37 @@ int main() {
                     else { print_str(0, 0, "MOD file is corrupt"); }
                 }
                 wait_key();
-                // choosingTrack остаётся 1 - возвращаемся к списку
+                action = ACTION_MENU;   // назад к списку
             } else {
-                choosingTrack = 0;
+                reset_delta_state();
+                draw_static();
+                print_string(29, 1, playlist, sel);
+                action = play_track_loop(1, sel, count);
+                if (action == ACTION_EXIT) { menuRunning = 0; }
+                // ACTION_MENU/ACTION_NEXT/ACTION_PREV - следующая
+                // итерация while обработает их сама.
             }
         }
 
-        draw_static();
-        print_string(29, 1, playlist, sel);
-    } else {
-        status = load_mod_from_arg(argLen);
-        if (status != 0) {
-            clear_screen();
-            if (status == 1) { print_str(0, 0, "MOD file not found"); }
-            else {
-                if (status == 2) { print_str(0, 0, "Unsupported MOD format"); }
-                else { print_str(0, 0, "MOD file is corrupt"); }
-            }
-            wait_key();
-            return 1;
-        }
-
-        draw_static();
-        print_arg_name(29, 1, argLen);
+        return 0;
     }
 
-    poke(SOUNDCARD_COMMAND, 1);   // PLAY
-
-    running = 1;
-    while (running == 1) {
-        if ((peek(KEYBOARD_CONTROL) & 2) != 0) {
-            key = peek(KEYBOARD_DATA);
-            if (key == KEY_CTRL_Q) { running = 0; }
-            if (key == KEY_P_UPPER) { toggle_pause(); }
-            if (key == KEY_P_LOWER) { toggle_pause(); }
+    status = load_mod_from_arg(argLen);
+    if (status != 0) {
+        clear_screen();
+        if (status == 1) { print_str(0, 0, "MOD file not found"); }
+        else {
+            if (status == 2) { print_str(0, 0, "Unsupported MOD format"); }
+            else { print_str(0, 0, "MOD file is corrupt"); }
         }
-
-        draw_status(peek(SOUNDCARD_STATUS));
-
-        order = peek(SOUNDCARD_ORDER_POS);
-        if (order != lastOrder) { print_number3(27, 2, order); lastOrder = order; }
-        row = peek(SOUNDCARD_ROW);
-        if (row != lastRow) { print_number3(39, 2, row); lastRow = row; }
-
-        draw_channel(5, channelVol[0], 12, 0);
-        draw_channel(6, channelVol[1], 10, 1);
-        draw_channel(7, channelVol[2], 9, 2);
-        draw_channel(8, channelVol[3], 14, 3);
-
-        wait_ms(33);   // ~30 кадров/сек
+        wait_key();
+        return 1;
     }
 
-    poke(SOUNDCARD_COMMAND, 2);   // STOP
+    reset_delta_state();
+    draw_static();
+    print_arg_name(29, 1, argLen);
+    play_track_loop(0, 0, 1);   // playlistMode=0 - Esc/влево/вправо не активны, sel/count не используются
 
     return 0;
 }

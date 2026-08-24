@@ -3447,9 +3447,33 @@ folder written into `NAME` via `diskio_set_name_char`) and
 
 Controls while picking a track: `Up`/`Down` - move through the list,
 `Enter` - play the selected track (reuses the same visualizer/playback
-loop as single-track mode), `Ctrl+Q` - exit the player entirely (not
-back to the list - the same behavior as `Ctrl+Q` while a track launched
-via a command-line argument is playing).
+loop as single-track mode), `Ctrl+Q` - exit the player entirely.
+
+Controls while a track is playing (see `play_track_loop()` in
+`PLAYER.MC`) - `Ctrl+Q` exits the player entirely in EITHER launch mode
+(a filename argument or the playlist), `P` - pause/resume. Playlist mode
+adds three more: `Esc` - stop and go back to the list (`ACTION_MENU`),
+`Left`/`Right` - previous/next track (`ACTION_PREV`/`ACTION_NEXT`)
+WITHOUT wrapping at the ends of the list - `play_track_loop()` itself
+checks `sel > 0`/`sel < count - 1` BEFORE stopping the track, so an
+arrow key on the first/last track silently does nothing instead of
+stopping and immediately restarting the same one. In single-track mode
+(launched with a filename argument) these three keys aren't active at
+all - there's nowhere to go back or switch to, `play_track_loop()` gets
+`playlistMode=0`.
+
+Elapsed track time (`elapsedMin`/`elapsedSec` in `PLAYER.MC`, `mm:ss`
+format) is shown in a corner of the screen next to `Order`/`Row`. MOD
+files don't carry a real duration - the sequencer never precomputes
+one, and an honest calculation would be approximate anyway because of
+`Fxx` tempo/speed-change effects inside the song itself (see
+"SoundCard" above) - so only "how long we've been playing" is shown,
+with no total length. It isn't accumulated from `Clock`
+(`CLOCK_LOW`/`CLOCK_HIGH`, see "Clock" above - `wait_ms()` already uses
+it for per-frame waiting and resets it on every call), but
+approximately: 30 iterations of the `wait_ms(33)` loop are counted as
+one second. The small drift (30×33ms=990ms, not exactly 1000) doesn't
+matter for a corner-of-the-screen stopwatch.
 
 ## Built-in tools: FM.MC / EDIT.MC / VIEW.MC keybindings
 
