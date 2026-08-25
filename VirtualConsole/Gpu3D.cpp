@@ -21,13 +21,29 @@ Gpu3D::Gpu3D(VideoCard* videoCard)
 {
     vxLow = vxHigh = vyLow = vyHigh = vzLow = vzHigh = 0;
     vr = vg = vb = 0;
+    vnx = vny = vnz = 0;
+    vu = vv = vtexture = 0;
     status = 0;
+    cubeSizeLow = cubeSizeHigh = 0;
 
     objXLow = objXHigh = objYLow = objYHigh = objZLow = objZHigh = 0;
     objYawLow = objYawHigh = objPitchLow = objPitchHigh = objRollLow = objRollHigh = 0;
 
     camXLow = camXHigh = camYLow = camYHigh = camZLow = camZHigh = 0;
     camYawLow = camYawHigh = camPitchLow = camPitchHigh = 0;
+
+    lightDirX = 0;
+    lightDirY = 0;
+    lightDirZ = static_cast<uint8_t>(static_cast<int8_t>(-100)); // по умолчанию светит вдоль -Z
+    lightR = lightG = lightB = 255;
+    ambient = 60;
+
+    mathALow = mathAHigh = mathBLow = mathBHigh = 0;
+    mathStatus = 0;
+    mathResultLow = mathResultHigh = 0;
+
+    for (int i = 0; i < 4; i++) { math32A[i] = math32B[i] = math32Result[i] = 0; }
+    math32Status = 0;
 
     pendingCount = 0;
 
@@ -39,6 +55,36 @@ Gpu3D::Gpu3D(VideoCard* videoCard)
 int16_t Gpu3D::combine(uint8_t low, uint8_t high)
 {
     return static_cast<int16_t>(static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8));
+}
+
+void Gpu3D::split(int16_t value, uint8_t& low, uint8_t& high)
+{
+    uint16_t bits = static_cast<uint16_t>(value);
+    low = static_cast<uint8_t>(bits & 0xFF);
+    high = static_cast<uint8_t>((bits >> 8) & 0xFF);
+}
+
+double Gpu3D::toUnit(uint8_t raw)
+{
+    return static_cast<double>(static_cast<int8_t>(raw)) / 100.0;
+}
+
+int32_t Gpu3D::combine32(const uint8_t bytes[4])
+{
+    return static_cast<int32_t>(
+        static_cast<uint32_t>(bytes[0]) |
+        (static_cast<uint32_t>(bytes[1]) << 8) |
+        (static_cast<uint32_t>(bytes[2]) << 16) |
+        (static_cast<uint32_t>(bytes[3]) << 24));
+}
+
+void Gpu3D::split32(int32_t value, uint8_t bytes[4])
+{
+    uint32_t bits = static_cast<uint32_t>(value);
+    bytes[0] = static_cast<uint8_t>(bits & 0xFF);
+    bytes[1] = static_cast<uint8_t>((bits >> 8) & 0xFF);
+    bytes[2] = static_cast<uint8_t>((bits >> 16) & 0xFF);
+    bytes[3] = static_cast<uint8_t>((bits >> 24) & 0xFF);
 }
 
 uint8_t Gpu3D::read(uint32_t address)
@@ -54,7 +100,15 @@ uint8_t Gpu3D::read(uint32_t address)
     case REG_VR: return vr;
     case REG_VG: return vg;
     case REG_VB: return vb;
+    case REG_VNX: return vnx;
+    case REG_VNY: return vny;
+    case REG_VNZ: return vnz;
+    case REG_VU: return vu;
+    case REG_VV: return vv;
+    case REG_VTEXTURE: return vtexture;
     case REG_STATUS: return status;
+    case REG_CUBE_SIZE_LOW: return cubeSizeLow;
+    case REG_CUBE_SIZE_HIGH: return cubeSizeHigh;
 
     case REG_OBJ_X_LOW: return objXLow;
     case REG_OBJ_X_HIGH: return objXHigh;
@@ -80,6 +134,36 @@ uint8_t Gpu3D::read(uint32_t address)
     case REG_CAM_PITCH_LOW: return camPitchLow;
     case REG_CAM_PITCH_HIGH: return camPitchHigh;
 
+    case REG_LIGHT_DIR_X: return lightDirX;
+    case REG_LIGHT_DIR_Y: return lightDirY;
+    case REG_LIGHT_DIR_Z: return lightDirZ;
+    case REG_LIGHT_R: return lightR;
+    case REG_LIGHT_G: return lightG;
+    case REG_LIGHT_B: return lightB;
+    case REG_AMBIENT: return ambient;
+
+    case REG_MATH_A_LOW: return mathALow;
+    case REG_MATH_A_HIGH: return mathAHigh;
+    case REG_MATH_B_LOW: return mathBLow;
+    case REG_MATH_B_HIGH: return mathBHigh;
+    case REG_MATH_STATUS: return mathStatus;
+    case REG_MATH_RESULT_LOW: return mathResultLow;
+    case REG_MATH_RESULT_HIGH: return mathResultHigh;
+
+    case REG_MATH32_A0: return math32A[0];
+    case REG_MATH32_A1: return math32A[1];
+    case REG_MATH32_A2: return math32A[2];
+    case REG_MATH32_A3: return math32A[3];
+    case REG_MATH32_B0: return math32B[0];
+    case REG_MATH32_B1: return math32B[1];
+    case REG_MATH32_B2: return math32B[2];
+    case REG_MATH32_B3: return math32B[3];
+    case REG_MATH32_STATUS: return math32Status;
+    case REG_MATH32_RESULT0: return math32Result[0];
+    case REG_MATH32_RESULT1: return math32Result[1];
+    case REG_MATH32_RESULT2: return math32Result[2];
+    case REG_MATH32_RESULT3: return math32Result[3];
+
     default: return 0;
     }
 }
@@ -97,6 +181,14 @@ void Gpu3D::write(uint32_t address, uint8_t value)
     case REG_VR: vr = value; return;
     case REG_VG: vg = value; return;
     case REG_VB: vb = value; return;
+    case REG_VNX: vnx = value; return;
+    case REG_VNY: vny = value; return;
+    case REG_VNZ: vnz = value; return;
+    case REG_VU: vu = value; return;
+    case REG_VV: vv = value; return;
+    case REG_VTEXTURE: vtexture = value; return;
+    case REG_CUBE_SIZE_LOW: cubeSizeLow = value; return;
+    case REG_CUBE_SIZE_HIGH: cubeSizeHigh = value; return;
 
     case REG_COMMAND:
         switch (value)
@@ -105,6 +197,7 @@ void Gpu3D::write(uint32_t address, uint8_t value)
         case 2: drawTriangle(); break;
         case 3: clear(); break;
         case 4: present(); break;
+        case 5: drawCube(); break;
         default: break;
         }
         return;
@@ -133,9 +226,103 @@ void Gpu3D::write(uint32_t address, uint8_t value)
     case REG_CAM_PITCH_LOW: camPitchLow = value; return;
     case REG_CAM_PITCH_HIGH: camPitchHigh = value; return;
 
+    case REG_LIGHT_DIR_X: lightDirX = value; return;
+    case REG_LIGHT_DIR_Y: lightDirY = value; return;
+    case REG_LIGHT_DIR_Z: lightDirZ = value; return;
+    case REG_LIGHT_R: lightR = value; return;
+    case REG_LIGHT_G: lightG = value; return;
+    case REG_LIGHT_B: lightB = value; return;
+    case REG_AMBIENT: ambient = value; return;
+
+    case REG_MATH_A_LOW: mathALow = value; return;
+    case REG_MATH_A_HIGH: mathAHigh = value; return;
+    case REG_MATH_B_LOW: mathBLow = value; return;
+    case REG_MATH_B_HIGH: mathBHigh = value; return;
+    case REG_MATH_COMMAND: executeMath16(value); return;
+
+    case REG_MATH32_A0: math32A[0] = value; return;
+    case REG_MATH32_A1: math32A[1] = value; return;
+    case REG_MATH32_A2: math32A[2] = value; return;
+    case REG_MATH32_A3: math32A[3] = value; return;
+    case REG_MATH32_B0: math32B[0] = value; return;
+    case REG_MATH32_B1: math32B[1] = value; return;
+    case REG_MATH32_B2: math32B[2] = value; return;
+    case REG_MATH32_B3: math32B[3] = value; return;
+    case REG_MATH32_COMMAND: executeMath32(value); return;
+
     default:
         return;
     }
+}
+
+void Gpu3D::executeMath16(uint8_t command)
+{
+    int16_t a = combine(mathALow, mathAHigh);
+    int16_t b = combine(mathBLow, mathBHigh);
+
+    mathStatus = 0;
+    int16_t result = 0;
+
+    switch (command)
+    {
+    case 1: result = static_cast<int16_t>(static_cast<uint16_t>(a) + static_cast<uint16_t>(b)); break; // ADD
+    case 2: result = static_cast<int16_t>(static_cast<uint16_t>(a) - static_cast<uint16_t>(b)); break; // SUB
+    case 3: result = static_cast<int16_t>(static_cast<uint16_t>(a * b)); break; // MUL
+
+    case 4: // DIV
+        if (b == 0) { mathStatus = 1; result = 0; }
+        else { result = static_cast<int16_t>(a / b); }
+        break;
+
+    case 5: // SIN - a - угол в градусах, результат *100 (100 = 1.0)
+        result = static_cast<int16_t>(std::lround(std::sin(degToRad(a)) * 100.0));
+        break;
+
+    case 6: // COS
+        result = static_cast<int16_t>(std::lround(std::cos(degToRad(a)) * 100.0));
+        break;
+
+    case 7: // SQRT
+        if (a < 0) { mathStatus = 1; result = 0; }
+        else { result = static_cast<int16_t>(std::lround(std::sqrt(static_cast<double>(a)))); }
+        break;
+
+    default:
+        break;
+    }
+
+    split(result, mathResultLow, mathResultHigh);
+}
+
+void Gpu3D::executeMath32(uint8_t command)
+{
+    int32_t a = combine32(math32A);
+    int32_t b = combine32(math32B);
+
+    math32Status = 0;
+    int32_t result = 0;
+
+    switch (command)
+    {
+    case 1: result = static_cast<int32_t>(static_cast<uint32_t>(a) + static_cast<uint32_t>(b)); break; // ADD
+    case 2: result = static_cast<int32_t>(static_cast<uint32_t>(a) - static_cast<uint32_t>(b)); break; // SUB
+    case 3: result = static_cast<int32_t>(static_cast<uint32_t>(a) * static_cast<uint32_t>(b)); break; // MUL
+
+    case 4: // DIV
+        if (b == 0) { math32Status = 1; result = 0; }
+        else { result = a / b; }
+        break;
+
+    case 5: // SQRT - целочисленный квадратный корень (без тригонометрии - 32 бита нужны для позиций/дистанций, не углов)
+        if (a < 0) { math32Status = 1; result = 0; }
+        else { result = static_cast<int32_t>(std::llround(std::sqrt(static_cast<double>(a)))); }
+        break;
+
+    default:
+        break;
+    }
+
+    split32(result, math32Result);
 }
 
 void Gpu3D::submitVertex()
@@ -150,6 +337,9 @@ void Gpu3D::submitVertex()
     pendingVertices[slot].x = combine(vxLow, vxHigh);
     pendingVertices[slot].y = combine(vyLow, vyHigh);
     pendingVertices[slot].z = combine(vzLow, vzHigh);
+    pendingVertices[slot].nx = toUnit(vnx);
+    pendingVertices[slot].ny = toUnit(vny);
+    pendingVertices[slot].nz = toUnit(vnz);
     pendingVertices[slot].r = vr;
     pendingVertices[slot].g = vg;
     pendingVertices[slot].b = vb;
@@ -190,6 +380,23 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
     double worldY = y3 + objY;
     double worldZ = z3 + objZ;
 
+    // ---- та же модельная матрица (roll -> pitch -> yaw), но БЕЗ переноса -
+    // применяется к нормали, чтобы получить мировую нормаль для освещения ----
+
+    double nx = v.nx, ny = v.ny, nz = v.nz;
+
+    double nx1 = nx * std::cos(roll) - ny * std::sin(roll);
+    double ny1 = nx * std::sin(roll) + ny * std::cos(roll);
+    double nz1 = nz;
+
+    double ny2 = ny1 * std::cos(pitch) - nz1 * std::sin(pitch);
+    double nz2 = ny1 * std::sin(pitch) + nz1 * std::cos(pitch);
+    double nx2 = nx1;
+
+    double worldNx = nx2 * std::cos(yaw) + nz2 * std::sin(yaw);
+    double worldNz = -nx2 * std::sin(yaw) + nz2 * std::cos(yaw);
+    double worldNy = ny2;
+
     // ---- камера: перенос -> отмена pitch -> отмена yaw (без крена) ----
 
     double camX = combine(camXLow, camXHigh);
@@ -212,11 +419,37 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
     double vz2 = vy1 * std::sin(-camPitch) + vz1 * std::cos(-camPitch);
     double vx2 = vx1;
 
+    // ---- освещение (Gouraud - считается один раз на вершину, дальше
+    // просто интерполируется по треугольнику в rasterizeTriangle, как и
+    // раньше с "сырым" цветом вершины) - направленный свет + фоновая
+    // засветка ----
+
+    double lightDirXu = toUnit(lightDirX);
+    double lightDirYu = toUnit(lightDirY);
+    double lightDirZu = toUnit(lightDirZ);
+    double lightLen = std::sqrt(lightDirXu * lightDirXu + lightDirYu * lightDirYu + lightDirZu * lightDirZu);
+
+    double diffuseFactor = 0.0;
+    if (lightLen > 1e-6)
+    {
+        double dot = (worldNx * lightDirXu + worldNy * lightDirYu + worldNz * lightDirZu) / lightLen;
+        diffuseFactor = std::max(0.0, dot);
+    }
+
+    double ambientFactor = ambient / 255.0;
+
+    auto lit = [&](uint8_t base, uint8_t lightChannel) -> uint8_t
+    {
+        double brightness = ambientFactor + (lightChannel / 255.0) * diffuseFactor;
+        double value = base * brightness;
+        return static_cast<uint8_t>(std::min(255.0, std::max(0.0, value)));
+    };
+
     ScreenVertex out;
     out.viewZ = vz2;
-    out.r = v.r;
-    out.g = v.g;
-    out.b = v.b;
+    out.r = lit(v.r, lightR);
+    out.g = lit(v.g, lightG);
+    out.b = lit(v.b, lightB);
 
     // ---- перспективная проекция ----
     // f - фокусное расстояние в пикселях, посчитанное из вертикального
@@ -226,8 +459,8 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
     if (vz2 <= 1.0)
     {
         // За камерой/слишком близко - помечаем недопустимой глубиной,
-        // drawTriangle() отбросит весь треугольник, если хоть одна из
-        // 3 вершин в таком состоянии (см. drawTriangle).
+        // rasterizeTriangle() отбросит весь треугольник, если хоть одна
+        // из 3 вершин в таком состоянии.
         out.x = 0;
         out.y = 0;
         out.viewZ = -1.0;
@@ -240,25 +473,18 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
     return out;
 }
 
-void Gpu3D::drawTriangle()
+void Gpu3D::rasterizeTriangle(const Vertex (&verts)[3])
 {
-    if (pendingCount < 3)
-    {
-        status = 1;
-        return;
-    }
-
     ScreenVertex sv[3];
     for (int i = 0; i < 3; i++)
     {
-        sv[i] = transformAndProject(pendingVertices[i]);
+        sv[i] = transformAndProject(verts[i]);
     }
 
     // Упрощение вместо честного клиппинга (см. ASSEMBLY.md, "Gpu3D") -
     // если хоть одна вершина "за камерой", весь треугольник отбрасывается.
     if (sv[0].viewZ < 0 || sv[1].viewZ < 0 || sv[2].viewZ < 0)
     {
-        status = 0;
         return;
     }
 
@@ -279,7 +505,6 @@ void Gpu3D::drawTriangle()
     double area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
     if (std::abs(area) < 1e-9)
     {
-        status = 0;
         return;   // вырожденный треугольник (нулевая площадь на экране)
     }
 
@@ -317,8 +542,89 @@ void Gpu3D::drawTriangle()
             colorBuffer[colorIndex + 2] = static_cast<uint8_t>(w0 * sv[0].b + w1 * sv[1].b + w2 * sv[2].b);
         }
     }
+}
+
+void Gpu3D::drawTriangle()
+{
+    if (pendingCount < 3)
+    {
+        status = 1;
+        return;
+    }
+
+    rasterizeTriangle(pendingVertices);
 
     pendingCount = 0;
+    status = 0;
+}
+
+void Gpu3D::drawCube()
+{
+    // Аппаратный примитив "нарисуй куб": вместо 36 SUBMIT_VERTEX (12
+    // треугольников по 3 вершины, ~13 poke() на вершину с CPU) вызывающий
+    // код шлёт всего центр/размер/цвет (VX/VY/VZ/CUBE_SIZE/VR/VG/VB) -
+    // ~12 poke() суммарно - а все 8 вершин и 12 треугольников с
+    // правильными осевыми нормалями строит и растеризует C++ здесь,
+    // переиспользуя тот же rasterizeTriangle(), что и обычный
+    // DRAW_TRIANGLE (см. misty-zooming-bee.md про то, почему это было
+    // главной причиной тормозов демки с полом из кубов). Не трогает
+    // pendingVertices/pendingCount - можно мешать DRAW_CUBE и обычные
+    // SUBMIT_VERTEX/DRAW_TRIANGLE в одном кадре.
+
+    double cx = combine(vxLow, vxHigh);
+    double cy = combine(vyLow, vyHigh);
+    double cz = combine(vzLow, vzHigh);
+    double half = combine(cubeSizeLow, cubeSizeHigh);
+
+    double xMin = cx - half, xMax = cx + half;
+    double yMin = cy - half, yMax = cy + half;
+    double zMin = cz - half, zMax = cz + half;
+
+    // Те же комбинации min/max по осям на угол, что раньше собирались
+    // вручную в мини-C (C/DEV/LIB/GEOM3D.MC, emit_corner) - v0..v7.
+    double cxs[8] = { xMin, xMax, xMax, xMin, xMin, xMax, xMax, xMin };
+    double cys[8] = { yMin, yMin, yMax, yMax, yMin, yMin, yMax, yMax };
+    double czs[8] = { zMin, zMin, zMin, zMin, zMax, zMax, zMax, zMax };
+
+    auto corner = [&](int id) -> Vertex
+    {
+        Vertex v;
+        v.x = cxs[id]; v.y = cys[id]; v.z = czs[id];
+        v.nx = v.ny = v.nz = 0;
+        v.r = vr; v.g = vg; v.b = vb;
+        return v;
+    };
+
+    auto withNormal = [](Vertex v, double nx, double ny, double nz) -> Vertex
+    {
+        v.nx = nx; v.ny = ny; v.nz = nz;
+        return v;
+    };
+
+    auto face = [&](int a, int b, int c, double nx, double ny, double nz)
+    {
+        Vertex tri[3] =
+        {
+            withNormal(corner(a), nx, ny, nz),
+            withNormal(corner(b), nx, ny, nz),
+            withNormal(corner(c), nx, ny, nz),
+        };
+        rasterizeTriangle(tri);
+    };
+
+    face(0, 1, 2, 0, 0, -1);   // -Z
+    face(0, 2, 3, 0, 0, -1);
+    face(4, 5, 6, 0, 0, 1);    // +Z
+    face(4, 6, 7, 0, 0, 1);
+    face(0, 1, 5, 0, -1, 0);   // -Y
+    face(0, 5, 4, 0, -1, 0);
+    face(3, 2, 6, 0, 1, 0);    // +Y
+    face(3, 6, 7, 0, 1, 0);
+    face(0, 4, 7, -1, 0, 0);   // -X
+    face(0, 7, 3, -1, 0, 0);
+    face(1, 2, 6, 1, 0, 0);    // +X
+    face(1, 6, 5, 1, 0, 0);
+
     status = 0;
 }
 

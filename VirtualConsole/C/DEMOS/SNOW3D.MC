@@ -43,6 +43,13 @@
 // Ctrl+Q - выход (сразу, не дожидаясь конца анимации).
 //
 // Собирается командой "build snow3d.mc", запускается как "snow3d".
+//
+// Gpu3D-адреса теперь берутся из C/DEV/LIB/GEOM3D.MC (было - объявлялись
+// тут же руками; после слияния Gpu3D/Light3D/MathUnit в одно устройство
+// с новыми адресами, см. misty-zooming-bee.md, проще подключить общую
+// библиотеку, чем дублировать адреса второй раз).
+
+#include "GEOM3D.MC"
 
 const KEY_CTRL_Q = 17;
 
@@ -54,24 +61,6 @@ const SCROLL_SPEED = 2;   // px/кадр, как в TSCROLL.MC
 // TSCROLL.MC, экран 320x240: maxScrollX = 1280-320 = 960
 const MAX_SCROLL_X_HIGH = 3;
 const MAX_SCROLL_X_LOW  = 192;   // 960 = 3*256+192
-
-// Gpu3D - адреса не подмешиваются компилятором (см. Compiler.cpp,
-// kDevicePrelude - там только Keyboard/Clock/VideoCard/ConsoleLayer/
-// PngLoader/MapLoader), объявляем как в C/DEMOS/CUBE3D.ASM.
-const GPU3D_VX_LOW = 0xF0001045;
-const GPU3D_VX_HIGH = 0xF0001046;
-const GPU3D_VY_LOW = 0xF0001047;
-const GPU3D_VY_HIGH = 0xF0001048;
-const GPU3D_VZ_LOW = 0xF0001049;
-const GPU3D_VZ_HIGH = 0xF000104A;
-const GPU3D_VR = 0xF000104B;
-const GPU3D_VG = 0xF000104C;
-const GPU3D_VB = 0xF000104D;
-const GPU3D_COMMAND = 0xF000104E;
-const GPU3D_OBJ_YAW_LOW = 0xF0001056;
-const GPU3D_OBJ_YAW_HIGH = 0xF0001057;
-const GPU3D_CAM_Z_LOW = 0xF0001060;
-const GPU3D_CAM_Z_HIGH = 0xF0001061;
 
 const COL_STEP = 7;   // gcd(7,80)=1 - полный обход 80 колонок без повторов
 const ROW_STEP = 7;   // gcd(7,25)=1 - полный обход 25 строк без повторов

@@ -6,6 +6,11 @@ void Bus::mapDevice(Device* device, uint32_t start, uint32_t end)
     devices.push_back({ device, start, end });
 }
 
+void Bus::registerTickable(Device* device)
+{
+    tickableDevices.push_back(device);
+}
+
 Bus::MappedDevice* Bus::findDevice(uint32_t address)
 {
     for (MappedDevice& mapped : devices)
@@ -50,9 +55,9 @@ bool Bus::isMapped(uint32_t address)
 
 void Bus::tick()
 {
-    for (MappedDevice& mapped : devices)
+    for (Device* device : tickableDevices)
     {
-        mapped.device->tick();
+        device->tick();
     }
 }
 

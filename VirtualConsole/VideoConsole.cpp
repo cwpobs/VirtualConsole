@@ -1,5 +1,6 @@
 #include "VideoConsole.h"
 #include "Keyboard.h"
+#include "Mouse.h"
 #include "TextVRAM.h"
 #include "TextAttr.h"
 #include "Font8x16.h"
@@ -168,6 +169,76 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         }
     }
 
+    if (msg == WM_MOUSEMOVE)
+    {
+        // Захват мыши (FPS-style mouse-look): пока Mouse::CONTROL включён
+        // (программа сама решает, poke(MOUSE_CONTROL,1)), курсор прячется
+        // и удерживается в центре клиентской области - дельта копится как
+        // разница между текущей позицией сообщения и этим центром, а не
+        // между последовательными сообщениями, поэтому не нужно хранить
+        // "прошлую" позицию отдельно (SetCursorPos ниже сам возвращает
+        // курсор обратно перед следующим сообщением).
+        VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+        if (self != nullptr && self->mouse != nullptr)
+        {
+            bool captureRequested = self->mouse->isCaptureEnabled();
+
+            RECT client;
+            GetClientRect(hwnd, &client);
+            int centerX = (client.right - client.left) / 2;
+            int centerY = (client.bottom - client.top) / 2;
+
+            int curX = static_cast<short>(LOWORD(lParam));
+            int curY = static_cast<short>(HIWORD(lParam));
+
+            if (captureRequested)
+            {
+                if (!self->mouseCaptured)
+                {
+                    ShowCursor(FALSE);
+                    self->mouseCaptured = true;
+                }
+                else
+                {
+                    int dx = curX - centerX;
+                    int dy = curY - centerY;
+
+                    if (dx != 0 || dy != 0)
+                    {
+                        self->mouse->injectMouseMove(dx, dy);
+                    }
+                }
+
+                POINT center = { centerX, centerY };
+                ClientToScreen(hwnd, &center);
+                SetCursorPos(center.x, center.y);
+            }
+            else if (self->mouseCaptured)
+            {
+                ShowCursor(TRUE);
+                self->mouseCaptured = false;
+            }
+        }
+
+        return 0;
+    }
+
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
+        msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP)
+    {
+        VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+        if (self != nullptr && self->mouse != nullptr)
+        {
+            bool down = (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN);
+            int bit = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) ? 0 : 1;
+            self->mouse->setButton(bit, down);
+        }
+
+        return 0;
+    }
+
     if (msg == WM_CHAR)
     {
         // Окно видеоконсоли живёт своим отдельным HWND - если у него
@@ -201,8 +272,9 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-VideoConsole::VideoConsole(Keyboard* keyboard, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale)
-    : keyboard(keyboard), videoCard(videoCard), consoleLayer(consoleLayer), scale(scale), stopRequested(false),
+VideoConsole::VideoConsole(Keyboard* keyboard, Mouse* mouse, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale)
+    : keyboard(keyboard), mouse(mouse), videoCard(videoCard), consoleLayer(consoleLayer), scale(scale),
+    mouseCaptured(false), stopRequested(false),
     cursorRow(0), cursorCol(0), cursorVisible(false), frameGeneration(0)
 {
     for (int i = 0; i < COLS * ROWS; i++)

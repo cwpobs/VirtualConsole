@@ -33,7 +33,6 @@ uint8_t CPU::busRead(uint32_t address)
     uint8_t value = bus->read(address);
 
     cycles++;
-    bus->tick();
 
     return value;
 }
@@ -43,7 +42,6 @@ void CPU::busWrite(uint32_t address, uint8_t value)
     bus->write(address, value);
 
     cycles++;
-    bus->tick();
 }
 
 uint8_t* CPU::getRegister(uint8_t index)
@@ -62,6 +60,14 @@ uint8_t* CPU::getRegister(uint8_t index)
 
 void CPU::step()
 {
+    // Раз на инструкцию, а не на каждый байт шины (было в busRead/
+    // busWrite - см. Bus::tick()) - только зарегистрированные через
+    // Bus::registerTickable() устройства (Timer/Keyboard), не все
+    // замапленные. См. misty-zooming-bee.md про то, почему опрос на
+    // каждый байт был главной причиной тормозов при интенсивном MMIO
+    // (например Gpu3D).
+    bus->tick();
+
     // =========================
     // Interrupt check
     // =========================

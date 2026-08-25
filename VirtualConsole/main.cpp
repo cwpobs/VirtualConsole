@@ -20,6 +20,8 @@
 #include "ModLoader.h"
 #include "ModLoaderDiskSelect.h"
 #include "Gpu3D.h"
+#include "Mouse.h"
+#include "MatrixLoader.h"
 #include "Bus.h"
 #include "Assembler.h"
 #include "VideoConsole.h"
@@ -77,8 +79,10 @@ int main()
     ModLoaderDiskSelect modLoaderDiskSelect;
     ModLoader modLoader(&soundCard, &diskC, &diskD, &modLoaderDiskSelect);
     Gpu3D gpu3D(&videoCard);
+    Mouse mouse;
+    MatrixLoader matrixLoader(&diskC);
     Assembler assembler;
-    VideoConsole videoConsole(&keyboard, &videoCard, &consoleLayer, config.videoConsoleScale);
+    VideoConsole videoConsole(&keyboard, &mouse, &videoCard, &consoleLayer, config.videoConsoleScale);
 
     if (config.useVideoConsole)
     {
@@ -102,16 +106,34 @@ int main()
     bus.mapDevice(&pngLoader, 0xF0000FFE, 0xF0001011); // загрузчик PNG (спрайты и тайлы, stb_image)
     bus.mapDevice(&mapLoader, 0xF0001012, 0xF000101F); // загрузчик текстовой карты тайлов
     bus.mapDevice(&modLoader, 0xF0001020, 0xF0001041); // загрузчик .mod-файлов
-    bus.mapDevice(&gpu3D, 0xF0001045, 0xF0001065);     // 3D-ускоритель (вершины/треугольники/PRESENT)
-    // Старое место SoundCard (см. ниже, блок SoundCard целиком перенесён
-    // ПОСЛЕ Gpu3D, чтобы не сдвигать его и не переписывать жёстко
-    // зашитые адреса в CUBE3D.ASM) - 0xF0001042 занят под ConsoleLayer,
-    // 0xF0001043 - под ModLoaderDiskSelect (плейлист с треками на
-    // разных дисках - см. ASSEMBLY.md, "ModLoader"), 0xF0001044 всё ещё
-    // не используется.
+    // 0xF0001042 занят под ConsoleLayer, 0xF0001043 - под
+    // ModLoaderDiskSelect (плейлист с треками на разных дисках - см.
+    // ASSEMBLY.md, "ModLoader"). 0xF0001044-0xF0001065 - свободная дыра
+    // (тут раньше сидел Gpu3D один; после слияния Gpu3D+Light3D+MathUnit
+    // в один девайс с большим адресным диапазоном - см.
+    // misty-zooming-bee.md - переехал далеко вверх, см. ниже).
     bus.mapDevice(&consoleLayer, 0xF0001042, 0xF0001042); // видимость текстового слоя поверх VideoCard (0/1)
     bus.mapDevice(&modLoaderDiskSelect, 0xF0001043, 0xF0001043); // ModLoader: явный выбор диска (0=lastExecDisk,1=C,2=D)
     bus.mapDevice(&soundCard, 0xF0001066, 0xF0001074); // звуковая карта (PLAY/STOP/VOLUME + визуализация: громкость каналов/ROW/ORDER_POS + запрос ячейки паттерна PATTERN_*)
+
+    // Дальше - свободное адресное пространство после SoundCard.
+    bus.mapDevice(&mouse, 0xF0001075, 0xF000107A);        // мышь: дельта X/Y (знак+модуль) + кнопки + control
+    // 0xF000107B-0xF000108C - свободная дыра (было MathUnit/Light3D до
+    // слияния в Gpu3D, см. misty-zooming-bee.md).
+    bus.mapDevice(&matrixLoader, 0xF000108D, 0xF00010A3); // обобщённый загрузчик матрицы чисел (карта уровня и т.п.) с обратным чтением ячеек
+
+    // Единый 3D-девайс (ускоритель + свет + математика 16/32 бит) - с
+    // большим запасом адресов (256 байт, реально занято ~78) под
+    // будущий рост (текстуры, доп. источники света) без повторной
+    // перенумерации - см. misty-zooming-bee.md.
+    bus.mapDevice(&gpu3D, 0xF0001100, 0xF00011FF);
+
+    // Только устройства, которым реально нужен периодический опрос
+    // (Timer - счётчик тиков/прерывание, Keyboard - опрос реальной
+    // клавиатуры) - см. Bus::registerTickable про то, почему это отдельный
+    // короткий список, а не "все устройства на шине".
+    bus.registerTickable(&timer);
+    bus.registerTickable(&keyboard);
 
 
     // ========================================

@@ -21,9 +21,9 @@
     ; ---- камера: смотрит на куб издалека ----
 
     LDI A, 106
-    STA 0xF0001060      ; CAM_Z_LOW  (-150, см. combine())
+    STA 0xF0001123      ; CAM_Z_LOW  (-150, см. combine())
     LDI A, 255
-    STA 0xF0001061      ; CAM_Z_HIGH
+    STA 0xF0001124      ; CAM_Z_HIGH
 
     ; ---- UI-спрайт (иконка) поверх сцены ----
 
@@ -90,8 +90,8 @@ cube3d_no_sprite:
     STA 0xF0000FE9      ; VideoCard COMMAND = MODE_ON
 
     LDI A, 0
-    STA 0xF0001056      ; OBJ_YAW_LOW = 0
-    STA 0xF0001057      ; OBJ_YAW_HIGH = 0
+    STA 0xF0001119      ; OBJ_YAW_LOW = 0
+    STA 0xF000111A      ; OBJ_YAW_HIGH = 0
 
 
 cube3d_loop:
@@ -102,203 +102,203 @@ cube3d_loop:
     JZ cube3d_exit
 
     LDI A, 3
-    STA 0xF000104E      ; Gpu3D COMMAND = CLEAR
+    STA 0xF000110F      ; Gpu3D COMMAND = CLEAR
 
     ; ---- 12 треугольников (6 граней куба) ----
 
     CALL v0
     CALL c_red
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v1
     CALL c_red
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v2
     CALL c_red
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань -Z, треугольник 1
+    STA 0xF000110F      ; грань -Z, треугольник 1
 
     CALL v0
     CALL c_red
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v2
     CALL c_red
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v3
     CALL c_red
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань -Z, треугольник 2
+    STA 0xF000110F      ; грань -Z, треугольник 2
 
     CALL v4
     CALL c_green
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v5
     CALL c_green
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v6
     CALL c_green
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань +Z, треугольник 1
+    STA 0xF000110F      ; грань +Z, треугольник 1
 
     CALL v4
     CALL c_green
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v6
     CALL c_green
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v7
     CALL c_green
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань +Z, треугольник 2
+    STA 0xF000110F      ; грань +Z, треугольник 2
 
     CALL v0
     CALL c_blue
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v1
     CALL c_blue
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v5
     CALL c_blue
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань -Y, треугольник 1
+    STA 0xF000110F      ; грань -Y, треугольник 1
 
     CALL v0
     CALL c_blue
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v5
     CALL c_blue
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v4
     CALL c_blue
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань -Y, треугольник 2
+    STA 0xF000110F      ; грань -Y, треугольник 2
 
     CALL v3
     CALL c_yellow
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v2
     CALL c_yellow
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v6
     CALL c_yellow
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань +Y, треугольник 1
+    STA 0xF000110F      ; грань +Y, треугольник 1
 
     CALL v3
     CALL c_yellow
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v6
     CALL c_yellow
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v7
     CALL c_yellow
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань +Y, треугольник 2
+    STA 0xF000110F      ; грань +Y, треугольник 2
 
     CALL v0
     CALL c_magenta
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v4
     CALL c_magenta
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v7
     CALL c_magenta
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань -X, треугольник 1
+    STA 0xF000110F      ; грань -X, треугольник 1
 
     CALL v0
     CALL c_magenta
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v7
     CALL c_magenta
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v3
     CALL c_magenta
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань -X, треугольник 2
+    STA 0xF000110F      ; грань -X, треугольник 2
 
     CALL v1
     CALL c_cyan
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v2
     CALL c_cyan
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v6
     CALL c_cyan
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань +X, треугольник 1
+    STA 0xF000110F      ; грань +X, треугольник 1
 
     CALL v1
     CALL c_cyan
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v6
     CALL c_cyan
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     CALL v5
     CALL c_cyan
     LDI A, 1
-    STA 0xF000104E
+    STA 0xF000110F
     LDI A, 2
-    STA 0xF000104E      ; грань +X, треугольник 2
+    STA 0xF000110F      ; грань +X, треугольник 2
 
     LDI A, 4
-    STA 0xF000104E      ; Gpu3D COMMAND = PRESENT
+    STA 0xF000110F      ; Gpu3D COMMAND = PRESENT
 
     ; ---- повернуть куб на пару градусов ----
 
-    LDA 0xF0001056      ; OBJ_YAW_LOW
+    LDA 0xF0001119      ; OBJ_YAW_LOW
     LDI B, 2
     ADD B
-    STA 0xF0001056
-    LDA 0xF0001057      ; OBJ_YAW_HIGH
+    STA 0xF0001119
+    LDA 0xF000111A      ; OBJ_YAW_HIGH
     LDI B, 0
     ADC B
-    STA 0xF0001057
+    STA 0xF000111A
 
     ; ---- пауза - 60 кадров/сек через Clock ----
 
@@ -333,122 +333,122 @@ cube3d_exit:
 
 v0:
     LDI A, 226
-    STA 0xF0001045      ; VX_LOW = -30
+    STA 0xF0001100      ; VX_LOW = -30
     LDI A, 255
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 226
-    STA 0xF0001047      ; VY_LOW = -30
+    STA 0xF0001102      ; VY_LOW = -30
     LDI A, 255
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 226
-    STA 0xF0001049      ; VZ_LOW = -30
+    STA 0xF0001104      ; VZ_LOW = -30
     LDI A, 255
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v1:
     LDI A, 30
-    STA 0xF0001045      ; VX_LOW = 30
+    STA 0xF0001100      ; VX_LOW = 30
     LDI A, 0
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 226
-    STA 0xF0001047      ; VY_LOW = -30
+    STA 0xF0001102      ; VY_LOW = -30
     LDI A, 255
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 226
-    STA 0xF0001049      ; VZ_LOW = -30
+    STA 0xF0001104      ; VZ_LOW = -30
     LDI A, 255
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v2:
     LDI A, 30
-    STA 0xF0001045      ; VX_LOW = 30
+    STA 0xF0001100      ; VX_LOW = 30
     LDI A, 0
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 30
-    STA 0xF0001047      ; VY_LOW = 30
+    STA 0xF0001102      ; VY_LOW = 30
     LDI A, 0
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 226
-    STA 0xF0001049      ; VZ_LOW = -30
+    STA 0xF0001104      ; VZ_LOW = -30
     LDI A, 255
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v3:
     LDI A, 226
-    STA 0xF0001045      ; VX_LOW = -30
+    STA 0xF0001100      ; VX_LOW = -30
     LDI A, 255
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 30
-    STA 0xF0001047      ; VY_LOW = 30
+    STA 0xF0001102      ; VY_LOW = 30
     LDI A, 0
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 226
-    STA 0xF0001049      ; VZ_LOW = -30
+    STA 0xF0001104      ; VZ_LOW = -30
     LDI A, 255
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v4:
     LDI A, 226
-    STA 0xF0001045      ; VX_LOW = -30
+    STA 0xF0001100      ; VX_LOW = -30
     LDI A, 255
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 226
-    STA 0xF0001047      ; VY_LOW = -30
+    STA 0xF0001102      ; VY_LOW = -30
     LDI A, 255
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 30
-    STA 0xF0001049      ; VZ_LOW = 30
+    STA 0xF0001104      ; VZ_LOW = 30
     LDI A, 0
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v5:
     LDI A, 30
-    STA 0xF0001045      ; VX_LOW = 30
+    STA 0xF0001100      ; VX_LOW = 30
     LDI A, 0
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 226
-    STA 0xF0001047      ; VY_LOW = -30
+    STA 0xF0001102      ; VY_LOW = -30
     LDI A, 255
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 30
-    STA 0xF0001049      ; VZ_LOW = 30
+    STA 0xF0001104      ; VZ_LOW = 30
     LDI A, 0
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v6:
     LDI A, 30
-    STA 0xF0001045      ; VX_LOW = 30
+    STA 0xF0001100      ; VX_LOW = 30
     LDI A, 0
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 30
-    STA 0xF0001047      ; VY_LOW = 30
+    STA 0xF0001102      ; VY_LOW = 30
     LDI A, 0
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 30
-    STA 0xF0001049      ; VZ_LOW = 30
+    STA 0xF0001104      ; VZ_LOW = 30
     LDI A, 0
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 v7:
     LDI A, 226
-    STA 0xF0001045      ; VX_LOW = -30
+    STA 0xF0001100      ; VX_LOW = -30
     LDI A, 255
-    STA 0xF0001046
+    STA 0xF0001101
     LDI A, 30
-    STA 0xF0001047      ; VY_LOW = 30
+    STA 0xF0001102      ; VY_LOW = 30
     LDI A, 0
-    STA 0xF0001048
+    STA 0xF0001103
     LDI A, 30
-    STA 0xF0001049      ; VZ_LOW = 30
+    STA 0xF0001104      ; VZ_LOW = 30
     LDI A, 0
-    STA 0xF000104A
+    STA 0xF0001105
     RET
 
 
@@ -456,50 +456,50 @@ v7:
 
 c_red:
     LDI A, 255
-    STA 0xF000104B
+    STA 0xF0001106
     LDI A, 0
-    STA 0xF000104C
-    STA 0xF000104D
+    STA 0xF0001107
+    STA 0xF0001108
     RET
 
 c_green:
     LDI A, 0
-    STA 0xF000104B
+    STA 0xF0001106
     LDI A, 255
-    STA 0xF000104C
+    STA 0xF0001107
     LDI A, 0
-    STA 0xF000104D
+    STA 0xF0001108
     RET
 
 c_blue:
     LDI A, 0
-    STA 0xF000104B
-    STA 0xF000104C
+    STA 0xF0001106
+    STA 0xF0001107
     LDI A, 255
-    STA 0xF000104D
+    STA 0xF0001108
     RET
 
 c_yellow:
     LDI A, 255
-    STA 0xF000104B
-    STA 0xF000104C
+    STA 0xF0001106
+    STA 0xF0001107
     LDI A, 0
-    STA 0xF000104D
+    STA 0xF0001108
     RET
 
 c_magenta:
     LDI A, 255
-    STA 0xF000104B
+    STA 0xF0001106
     LDI A, 0
-    STA 0xF000104C
+    STA 0xF0001107
     LDI A, 255
-    STA 0xF000104D
+    STA 0xF0001108
     RET
 
 c_cyan:
     LDI A, 0
-    STA 0xF000104B
+    STA 0xF0001106
     LDI A, 255
-    STA 0xF000104C
-    STA 0xF000104D
+    STA 0xF0001107
+    STA 0xF0001108
     RET

@@ -50,8 +50,10 @@ Devices attached to the bus (details on each one are in section 9):
 | PngLoader | `0xF0000FFE-0xF0001011` | 20 B | PNG loading (sprites/tiles) |
 | MapLoader | `0xF0001012-0xF000101F` | 14 B | text tile-map loading |
 | ModLoader | `0xF0001020-0xF0001041` | 34 B | `.mod` music loading (ProTracker) |
-| Gpu3D | `0xF0001045-0xF0001065` | 33 B | 3D accelerator (vertices/triangles/PRESENT) |
 | SoundCard | `0xF0001066-0xF000106E` | 9 B | playback (PLAY/STOP/VOLUME) + visualization (per-channel volume/ROW/ORDER_POS) |
+| Mouse | `0xF0001075-0xF000107A` | 6 B | relative mouse movement (sign+magnitude), buttons, capture |
+| MatrixLoader | `0xF000108D-0xF00010A3` | 23 B | generic number-matrix loading (level maps etc.) with cell read-back |
+| Gpu3D | `0xF0001100-0xF00011FF` | 256 B | 3D accelerator + lighting + 16/32-bit math coprocessor (vertices/triangles/cubes/PRESENT) |
 
 The CPU has no clock frequency as such — it's a software interpreter
 (`CPU::step()`), not real electronic circuitry, so "speed" depends
@@ -1304,9 +1306,12 @@ Current address space map:
 | 0xF0001020 - 0xF0001041 | ModLoader (parses `.mod` files) |
 | 0xF0001042 | ConsoleLayer (text-layer visibility over VideoCard) |
 | 0xF0001043 | ModLoaderDiskSelect (explicit disk choice for ModLoader - see "ModLoader") |
-| 0xF0001044 | unused gap (old SoundCard location - see below) |
-| 0xF0001045 - 0xF0001065 | Gpu3D (vertices/triangles/PRESENT) |
+| 0xF0001044 - 0xF0001065 | unused gap (old SoundCard/Gpu3D locations - Gpu3D moved to make room for the Light3D/MathUnit merge, see below) |
 | 0xF0001066 - 0xF0001074 | SoundCard (PLAY/STOP/PAUSE/RESUME, VOLUME, visualization, pattern-cell query PATTERN_*) |
+| 0xF0001075 - 0xF000107A | Mouse (relative movement sign+magnitude, buttons, capture) |
+| 0xF000107B - 0xF000108C | unused gap (old MathUnit/Light3D locations - folded into Gpu3D, see below) |
+| 0xF000108D - 0xF00010A3 | MatrixLoader (generic number-matrix loading with cell read-back) |
+| 0xF0001100 - 0xF00011FF | Gpu3D (3D accelerator + lighting + 16/32-bit math coprocessor - vertices/triangles/cubes/PRESENT; 256 B reserved, ~78 used) |
 
 MMIO is placed far from RAM (starting at `0xF0000000`) rather than
 right after its current end - this way RAM can be expanded in the
@@ -2585,65 +2590,103 @@ A full working example - `C/DEMOS/MUSIC.ASM` (`cd demos`, then
 
 ## Gpu3D
 
-A 3D accelerator: all the math (model/camera matrices, perspective
-projection, z-buffered rasterization) lives on the C++ side. The
-processor is nowhere near capable of it (it doesn't even have proper
-multiplication without byte overflow, let alone trigonometry) - same
-reasoning as `PngLoader`/`ModLoader`. The assembly side only sees
-commands at the level of "here's a vertex", "draw a triangle", "show
-the frame" - the whole 3D scene accumulates in `Gpu3D`'s OWN internal
-buffer (its own 320x240 color buffer + its own z-buffer + a mask of
-"touched" pixels) and is handed to `VideoCard` all at once with a
-`PRESENT` command (see "Hardware tiles and scrolling" above for the
-full layer order - 3D is drawn OVER the tiles, but UNDER the
-sprites).
+A 3D accelerator, lighting, and a math coprocessor - ONE device. It used
+to be three (`Gpu3D`/`Light3D`/`MathUnit`), each with barely any address
+room to grow; live testing showed that split apart to be a bad idea (no
+spare registers, and juggling three small devices for what is really one
+"3D + math" subsystem), so they were merged - see `misty-zooming-bee.md`.
+All the math (model/camera matrices, perspective projection, z-buffered
+rasterization, general 16/32-bit arithmetic and trigonometry) lives on
+the C++ side - the processor is nowhere near capable of it (it doesn't
+even have proper multiplication without byte overflow). The assembly
+side only sees commands at the level of "here's a vertex", "draw a
+triangle", "draw a cube", "compute A+B", "show the frame" - the whole 3D
+scene accumulates in `Gpu3D`'s OWN internal buffer (its own 320x240
+color buffer + its own z-buffer + a mask of "touched" pixels) and is
+handed to `VideoCard` all at once with a `PRESENT` command (see
+"Hardware tiles and scrolling" above for the full layer order - 3D is
+drawn OVER the tiles, but UNDER the sprites).
 
-No textures - color is fixed per vertex (Gouraud shading, like on the
-PS1/N64); the rasterizer linearly interpolates color and depth across
-a triangle's three vertices.
+The address range is deliberately generous - 256 bytes, `0xF0001100`-
+`0xF00011FF` - even though under a third of it is wired to a real
+register today. The whole point is room to grow (more light sources,
+textures) without another renumbering; unused offsets just read 0 and
+ignore writes.
+
+No texture sampling yet - color is fixed per vertex (Gouraud shading,
+like on the PS1/N64); the rasterizer linearly interpolates color and
+depth across a triangle's three vertices. `VU`/`VV`/`VTEXTURE` (offsets
+12-14) exist as **reserved** per-vertex fields for a future texture
+protocol - written and read back like any other register, but currently
+ignored by rendering. The vertex color submitted through `VR`/`VG`/`VB`
+is the triangle's *base* color - if a normal is set (`VNX`/`VNY`/`VNZ`)
+before `SUBMIT_VERTEX`, the actual color stored for that vertex is the
+base color modulated by the light (see below); a vertex submitted with
+no normal set (the default, all zeros) gets no directional shading,
+only whatever the ambient level contributes.
 
 | Offset | Register | Description |
 |----------|---------|----------|
 | 0-1 | VX_LOW/HIGH | vertex X, signed 16-bit, model units |
 | 2-3 | VY_LOW/HIGH | vertex Y |
 | 4-5 | VZ_LOW/HIGH | vertex Z |
-| 6 | VR | vertex color, R (0-255) |
-| 7 | VG | vertex color, G |
-| 8 | VB | vertex color, B |
-| 9 | COMMAND (write = trigger) | 1=SUBMIT_VERTEX, 2=DRAW_TRIANGLE, 3=CLEAR, 4=PRESENT |
-| 10 | STATUS (read-only) | 0=ok, 1=DRAW_TRIANGLE called without 3 accumulated vertices |
-| 11-16 | OBJ_X/Y/Z_LOW/HIGH | object position in the world, signed 16-bit |
-| 17-22 | OBJ_YAW/PITCH/ROLL_LOW/HIGH | object rotation, degrees (signed 16-bit) |
-| 23-28 | CAM_X/Y/Z_LOW/HIGH | camera position in the world |
-| 29-32 | CAM_YAW/PITCH_LOW/HIGH | camera rotation (no roll) |
+| 6 | VR | vertex/cube color, R (0-255) |
+| 7 | VG | vertex/cube color, G |
+| 8 | VB | vertex/cube color, B |
+| 9-11 | VNX/VNY/VNZ | normal of the *next* vertex submitted (see "Lighting" below) |
+| 12 | VU | **reserved** - texture U (unused) |
+| 13 | VV | **reserved** - texture V (unused) |
+| 14 | VTEXTURE | **reserved** - texture id (unused) |
+| 15 | COMMAND (write = trigger) | 1=SUBMIT_VERTEX, 2=DRAW_TRIANGLE, 3=CLEAR, 4=PRESENT, 5=DRAW_CUBE |
+| 16 | STATUS (read-only) | 0=ok, 1=DRAW_TRIANGLE called without 3 accumulated vertices |
+| 17-18 | CUBE_SIZE_LOW/HIGH | half edge length of the next `DRAW_CUBE`, signed 16-bit |
+| 19-24 | OBJ_X/Y/Z_LOW/HIGH | object position in the world, signed 16-bit |
+| 25-30 | OBJ_YAW/PITCH/ROLL_LOW/HIGH | object rotation, degrees (signed 16-bit) |
+| 31-36 | CAM_X/Y/Z_LOW/HIGH | camera position in the world |
+| 37-40 | CAM_YAW/PITCH_LOW/HIGH | camera rotation (no roll) |
+| 41-43 | LIGHT_DIR_X/Y/Z | light direction, world space |
+| 44-46 | LIGHT_R/G/B | light color/intensity (0-255 per channel) |
+| 47 | AMBIENT | background light level (0-255) |
+| 48-55 | *(reserved)* | future texture-upload protocol |
+| 56-63 | see "Math (16-bit)" below | |
+| 64-77 | see "Math (32-bit)" below | |
 
 `OBJ_*`/`CAM_*` take effect immediately on write, with no command
 (like sprite position/map scroll) - rotating an object or moving the
 camera every frame should be cheap (a few `STA`s, no extra command
 byte).
 
-Addresses: `0xF0001045` (VX_LOW) - `0xF0001065` (CAM_PITCH_HIGH).
+All nine direction/normal registers (`VNX`/`VNY`/`VNZ`/`LIGHT_DIR_*`)
+use the same fixed-point encoding: a signed byte, `/100.0` (100 = 1.0,
+`156` = -1.0, i.e. `256 - 100`). One byte is plenty of range for a unit
+vector - no low/high pair needed here, unlike `Gpu3D`'s world
+coordinates which need the full 16 bits. `VNX`/`VNY`/`VNZ` should be set
+right before each `SUBMIT_VERTEX` (like `VR`/`VG`/`VB`) -
+`Gpu3D::submitVertex()` snapshots them into that vertex at the moment
+`SUBMIT_VERTEX` runs.
 
-Commands:
+Addresses: `0xF0001100` (VX_LOW) - `0xF00011FF` (end of reserved range).
 
-- **1 (SUBMIT_VERTEX)** - adds the current `VX/VY/VZ/VR/VG/VB` to an
-  internal triangle-vertex accumulator. Designed for exactly 3
-  vertices - the calling code must send `SUBMIT_VERTEX` three times
+### Commands
+
+- **1 (SUBMIT_VERTEX)** - adds the current `VX/VY/VZ/VR/VG/VB/VNX/VNY/
+  VNZ` to an internal triangle-vertex accumulator. Designed for exactly
+  3 vertices - the calling code must send `SUBMIT_VERTEX` three times
   before every `DRAW_TRIANGLE` (like `WRITE_PIXEL` for `VideoCard`'s
   sprites/tiles, just without auto-incrementing an index - here it's
   always exactly 3 vertices per triangle).
 - **2 (DRAW_TRIANGLE)** - applies the model matrix (`OBJ_*` - the
   object's translation and rotation) and the camera matrix (`CAM_*`)
-  to the 3 accumulated vertices, projects them into screen
-  coordinates (320x240, a fixed vertical FOV of ~70°), and
-  rasterizes the triangle into `Gpu3D`'s OWN internal buffer -
-  barycentric rasterization, Gouraud color interpolation, a per-pixel
-  z-buffer test (only a nearer pixel overwrites a farther one). A
-  triangle with even one vertex behind the camera (or closer than the
-  minimum distance) is discarded entirely - there's no proper
-  plane clipping in v1 (a simplification: not an issue for convex
-  objects like a cube at typical demo distances). Doesn't touch
-  `VideoCard` directly - only its own internal buffer.
+  to the 3 accumulated vertices, projects them into screen coordinates
+  (320x240, a fixed vertical FOV of ~70°), and rasterizes the triangle
+  into `Gpu3D`'s OWN internal buffer - barycentric rasterization,
+  Gouraud color interpolation, a per-pixel z-buffer test (only a nearer
+  pixel overwrites a farther one). A triangle with even one vertex
+  behind the camera (or closer than the minimum distance) is discarded
+  entirely - there's no proper plane clipping in v1 (a simplification:
+  not an issue for convex objects like a cube at typical demo
+  distances). Doesn't touch `VideoCard` directly - only its own
+  internal buffer.
 - **3 (CLEAR)** - resets the internal z-buffer (to "infinity") and the
   "touched pixels" mask - preparation for a new frame. There's no
   need to touch the color buffer itself - pixels not hit in the new
@@ -2656,44 +2699,180 @@ Commands:
   the video card's frame composition - before that it's simply
   skipped, old demos without 3D (`DEMO.ASM`, `SPRITES.ASM`,
   `TILEDEMO.ASM`) see no difference.
+- **5 (DRAW_CUBE)** - a hardware fast path for the extremely common
+  case of an axis-aligned cube. Instead of the CPU sending 36
+  `SUBMIT_VERTEX`s (12 triangles × 3 vertices, ~13 register writes
+  each - hundreds of bus transactions per cube), it writes just the
+  center (`VX/VY/VZ`), half edge length (`CUBE_SIZE_LOW/HIGH`), and
+  base color (`VR/VG/VB`), then triggers `DRAW_CUBE` once. `Gpu3D`
+  builds all 8 corners and 12 triangles (with the correct axis-aligned
+  normal per face) internally and rasterizes them through the exact
+  same pipeline as `DRAW_TRIANGLE` - same model/camera transform, same
+  lighting, same z-buffer. Doesn't touch `pendingVertices` at all, so
+  it's safe to mix `DRAW_CUBE` and manual `SUBMIT_VERTEX`/
+  `DRAW_TRIANGLE` calls within the same frame. Doesn't call `CLEAR`/
+  `PRESENT` itself - same convention as `DRAW_TRIANGLE`, the caller
+  clears once per frame and presents once per frame, after drawing
+  everything. This was added specifically because a floor built out of
+  many individually-submitted cubes (`C/DEMOS/CUBEWRLD.MC`) was far too
+  slow for interactive use - see `misty-zooming-bee.md`.
 
-Example - draw a single triangle (camera at `(0,0,-150)`, the
-cube/object at the origin with no rotation - both are the defaults):
+### Lighting
+
+One directional light + an ambient level, computed once per vertex
+(Gouraud - interpolated across the triangle by the existing rasterizer,
+same as color always was): the vertex normal is rotated by the same
+object rotation as the vertex position (but not translated), then
+
+    brightness = AMBIENT/255 + (LIGHT_channel/255) * max(0, dot(worldNormal, normalize(LIGHT_DIR)))
+    finalColor = clamp(baseColor * brightness, 0, 255)
+
+is applied per color channel. A vertex with a zero normal (the default)
+always has `dot(...) = 0`, so it only ever gets the ambient term -
+useful for objects that don't care about lighting. `DRAW_CUBE` computes
+the correct axis-aligned normal per face itself, so cubes are always lit
+correctly without the caller setting `VNX`/`VNY`/`VNZ`.
+
+### Math (16-bit)
+
+| Offset | Register | Description |
+|----------|---------|----------|
+| 56-57 | MATH_A_LOW/HIGH | operand A, signed 16-bit |
+| 58-59 | MATH_B_LOW/HIGH | operand B, signed 16-bit |
+| 60 | MATH_COMMAND (write = trigger) | 1=ADD, 2=SUB, 3=MUL, 4=DIV, 5=SIN, 6=COS, 7=SQRT |
+| 61 | MATH_STATUS (read-only) | 0=ok, 1=error (divide by zero, or `sqrt` of a negative A) |
+| 62-63 | MATH_RESULT_LOW/HIGH (read-only) | result of the last command |
+
+Not tied to 3D specifically - any program needing real 16-bit
+arithmetic or trigonometry can use it (the CPU's `MUL`/`DIV` are 8-bit
+only, and mini-C's `long` type supports only +/- against a plain `int`,
+see "The `long` type" below), the way `CUBEWRLD.MC`'s camera movement
+does (see `C/DEV/LIB/GEOM3D.MC`). `SIN`/`COS` treat `A` as an angle in
+degrees (same convention as `*_YAW`/`*_PITCH`/`*_ROLL` above) and ignore
+`B`; the result is fixed-point `*100` (100 = 1.0), the same scale the
+light/normal registers use. `SQRT` uses only `A` and requires `A >= 0`.
+
+Addresses: `0xF0001138` (MATH_A_LOW) - `0xF000113F` (MATH_RESULT_HIGH).
+
+### Math (32-bit)
+
+| Offset | Register | Description |
+|----------|---------|----------|
+| 64-67 | MATH32_A0-A3 | operand A, signed 32-bit, little-endian (byte 0 = least significant) |
+| 68-71 | MATH32_B0-B3 | operand B, signed 32-bit, little-endian |
+| 72 | MATH32_COMMAND (write = trigger) | 1=ADD, 2=SUB, 3=MUL, 4=DIV, 5=SQRT |
+| 73 | MATH32_STATUS (read-only) | 0=ok, 1=error (divide by zero, or `sqrt` of a negative A) |
+| 74-77 | MATH32_RESULT0-3 (read-only) | result of the last command, little-endian |
+
+The wider counterpart to the 16-bit block above, for values that don't
+fit in 16 bits (large world coordinates, distances, anything that would
+overflow). No `SIN`/`COS` here - angles never need 32-bit range, they
+stay on the 16-bit block.
+
+Addresses: `0xF0001140` (MATH32_A0) - `0xF000114D` (MATH32_RESULT3).
+
+### Example
+
+Draw a single triangle (camera at `(0,0,-150)`, the cube/object at the
+origin with no rotation - both are the defaults):
 
     LDI A, 106
-    STA 0xF0001060      ; CAM_Z_LOW  (-150 in 16-bit two's complement)
+    STA 0xF0001123      ; CAM_Z_LOW  (-150 in 16-bit two's complement)
     LDI A, 255
-    STA 0xF0001061      ; CAM_Z_HIGH
+    STA 0xF0001124      ; CAM_Z_HIGH
 
     LDI A, 3
-    STA 0xF000104E      ; COMMAND = CLEAR
+    STA 0xF000110F      ; COMMAND = CLEAR
 
     ; vertex 0: (-30,-30,0), red
     LDI A, 226
-    STA 0xF0001045      ; VX_LOW
+    STA 0xF0001100      ; VX_LOW
     LDI A, 255
-    STA 0xF0001046      ; VX_HIGH
+    STA 0xF0001101      ; VX_HIGH
     ; ... similarly VY_LOW/HIGH = -30, VZ_LOW/HIGH = 0 ...
     LDI A, 255
-    STA 0xF000104B      ; VR = 255
+    STA 0xF0001106      ; VR = 255
     LDI A, 0
-    STA 0xF000104C      ; VG = 0
-    STA 0xF000104D      ; VB = 0
+    STA 0xF0001107      ; VG = 0
+    STA 0xF0001108      ; VB = 0
     LDI A, 1
-    STA 0xF000104E      ; COMMAND = SUBMIT_VERTEX
+    STA 0xF000110F      ; COMMAND = SUBMIT_VERTEX
 
     ; ... vertices 1 and 2 the same way ...
 
     LDI A, 2
-    STA 0xF000104E      ; COMMAND = DRAW_TRIANGLE
+    STA 0xF000110F      ; COMMAND = DRAW_TRIANGLE
 
     LDI A, 4
-    STA 0xF000104E      ; COMMAND = PRESENT
+    STA 0xF000110F      ; COMMAND = PRESENT
 
 A full working example - `C/DEMOS/CUBE3D.ASM` (`cd demos`, then
 `exec cube3d.asm`): a spinning colored cube (12 triangles, 2 per
-face) with a UI icon on top (a sprite from `SPRITES.PNG`).
+face) with a UI icon on top (a sprite from `SPRITES.PNG`). A much
+faster equivalent using the `DRAW_CUBE` hardware primitive plus a
+lit, textured-later floor loaded from a level file -
+`C/DEMOS/CUBEWRLD.MC` (see `C/DEV/LIB/GEOM3D.MC` for the mini-C
+wrapper functions).
 
+## Mouse
+
+Relative mouse movement (not absolute screen position - there's no
+register for where the cursor is, only how far it moved) - built for
+FPS-style "mouse looks around" camera control, not for pointing at
+things on screen.
+
+| Offset | Register | Description |
+|----------|---------|----------|
+| 0 | DELTA_X_SIGN (read-only) | 0 = right, 1 = left |
+| 1 | DELTA_X_MAG (read-only) | accumulated |X movement| since last read (0-127); reading resets it to 0 |
+| 2 | DELTA_Y_SIGN (read-only) | 0 = up, 1 = down |
+| 3 | DELTA_Y_MAG (read-only) | accumulated |Y movement| since last read; reading resets it to 0 |
+| 4 | BUTTONS (read-only) | bit 0 = left button, bit 1 = right button |
+| 5 | CONTROL | bit 0 = capture (1 = hide the cursor and lock it to the window center, feeding `DELTA_*` from the movement that would otherwise have moved the cursor off-window; 0 = normal system cursor, no deltas accumulate) |
+
+Movement is reported as sign+magnitude, not a signed byte - this
+plays well with mini-C's 8-bit `int` (unsigned, wraparound
+arithmetic): the caller reads `*_SIGN` first, then `*_MAG` (magnitude
+read clears the accumulator, so read the sign *before* the magnitude,
+not after), and adds or subtracts the magnitude depending on the sign
+instead of having to interpret a raw two's-complement byte.
+
+Addresses: `0xF0001075` (DELTA_X_SIGN) - `0xF000107A` (CONTROL).
+
+## MatrixLoader
+
+A generalization of `MapLoader` (see above) for "any map that can be
+described as a matrix of numbers" - a level layout, a collision grid,
+anything - rather than specifically a `VideoCard` tile map.
+`MapLoader` itself is untouched (`TILEDEMO.ASM`/`TSCROLL.MC`/
+`SNOW3D.MC` depend on its exact behavior); `MatrixLoader` is a
+separate device with two differences:
+
+- values are the full byte range 0-255 (not 0-127 - a cell's value
+  isn't necessarily a tile index here);
+- the matrix is queryable cell-by-cell from the CPU after loading -
+  `MapLoader` only ever pushes its result into `VideoCard` and can't
+  be read back at all.
+
+| Offset | Register | Description |
+|----------|---------|----------|
+| 0-11 | NAME0-11 | file name, 8.3 format (same convention as `Disk`/`PngLoader`/`MapLoader`) |
+| 12 | COMMAND (write = trigger) | 1=LOAD |
+| 13 | STATUS (read-only) | 0=ok, 1=file not found, 2=parse error |
+| 14-15 | WIDTH_LOW/HIGH (read-only) | matrix width, set by LOAD |
+| 16-17 | HEIGHT_LOW/HIGH (read-only) | matrix height, set by LOAD |
+| 18-19 | CELL_X_LOW/HIGH | X of the cell to query next |
+| 20-21 | CELL_Y_LOW/HIGH | Y of the cell to query next |
+| 22 | CELL_VALUE (read-only) | value at `(CELL_X, CELL_Y)`, computed on read; 0 if out of bounds |
+
+File format is identical to `MapLoader`'s: each line is one row,
+decimal numbers separated by whitespace, every row the same length
+(a rectangular matrix), trailing blank lines ignored - see "MapLoader"
+above for the exact parsing rules. `C/DEMOS/LEVEL.TXT` is an example
+(an 8x8 grid, values 0-2 - see `C/DEMOS/CUBEWORLD.MC`, which treats
+the value as a stack height in cubes).
+
+Addresses: `0xF000108D` (NAME0) - `0xF00010A3` (CELL_VALUE).
 
 ---
 
@@ -3063,10 +3242,10 @@ Before your own source is compiled, the compiler silently prepends a
 fixed block of `const`/mapped-array declarations for the registers most
 graphics/tile programs need - `Keyboard`, `Clock`, `VideoCard`
 (background, hardware sprites, tile scroll), `ConsoleLayer`,
-`PngLoader`, `MapLoader` (see their sections above for what each
-register does). You don't declare these yourself - they're just
-already there, named with a device prefix so registers that share a
-name across devices (`COMMAND`, `STATUS`) don't collide:
+`PngLoader`, `MapLoader`, `Mouse`, `MatrixLoader` (see their sections
+above for what each register does). You don't declare these yourself -
+they're just already there, named with a device prefix so registers
+that share a name across devices (`COMMAND`, `STATUS`) don't collide:
 
     KEYBOARD_DATA, KEYBOARD_CONTROL
     CLOCK_LOW, CLOCK_HIGH
@@ -3076,18 +3255,25 @@ name across devices (`COMMAND`, `STATUS`) don't collide:
     CONSOLE_VISIBLE
     PNGLOADER_NAME0, PNGLOADER_SRC_X_LOW .. PNGLOADER_TILE_INDEX
     MAPLOADER_NAME0, MAPLOADER_COMMAND, MAPLOADER_STATUS
+    MOUSE_DELTA_X_SIGN .. MOUSE_CONTROL
+    MATRIXLOADER_NAME0 .. MATRIXLOADER_CELL_VALUE
     EXEC_CHILD_DISK
     CMD_ARGS_LEN
 
-Gpu3D is an exception - its registers are NOT in the prelude (see the
-`C/DEMOS/SNOW3D.MC` example, which declares them by hand as plain
-`const`s) - the addresses are stable, and adding them to the prelude
-the same way as the rest would be easy, it just hasn't been done yet.
+`Gpu3D` (which also covers lighting and the 16/32-bit math coprocessor,
+see its section above) is an exception - its registers are NOT in the
+prelude, they're declared by hand as plain `const`s in the
+`C/DEV/LIB/GEOM3D.MC` library (`#include "GEOM3D.MC"` - see "#include"
+below) - the addresses are stable, and adding them to the prelude the
+same way as the rest would be easy, it just hasn't been done, to keep
+the prelude focused on devices almost every program touches rather than
+the 3D-specific ones.
 
-Two ready-made mapped arrays over the `NAME0-11` buffers come prepended
-alongside them - `pngLoaderName`/`mapLoaderName` (`int ...[12] = ...;`),
-meant to be used directly with `str_copy()` (see below) instead of
-writing a device's file name byte by byte. A third, `cmdArgs[16]`, is a
+Three ready-made mapped arrays over the `NAME0-11` buffers come
+prepended alongside them - `pngLoaderName`/`mapLoaderName`/
+`matrixLoaderName` (`int ...[12] = ...;`), meant to be used directly
+with `str_copy()` (see below) instead of writing a device's file name
+byte by byte. Another, `cmdArgs[16]`, is a
 mapped array over `CMD_ARGS_TEXT` (see "Command-line arguments" in the
 "Disk" section above) - the argument text after the program's own name
 on the command line, or whatever a parent program placed there before
@@ -3676,10 +3862,12 @@ the links in the last column).
 
 Already declared for you in every program - `KEYBOARD_*`, `CLOCK_*`,
 `VIDEOCARD_*` (background/sprites/scroll), `CONSOLE_VISIBLE`,
-`PNGLOADER_*`, `MAPLOADER_*`, `EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus
-ready mapped arrays `pngLoaderName`/`mapLoaderName`/`cmdArgs`. See
-"Built-in device register constants (prelude)" above for the full
-list.
+`PNGLOADER_*`, `MAPLOADER_*`, `MOUSE_*`, `MATRIXLOADER_*`,
+`EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus ready mapped arrays
+`pngLoaderName`/`mapLoaderName`/`matrixLoaderName`/`cmdArgs`. `GPU3D_*`
+(3D + lighting + math coprocessor) is NOT in the prelude -
+`#include "GEOM3D.MC"` instead (see "#include" below). See "Built-in
+device register constants (prelude)" above for the full list.
 
 **Screen (Text VRAM/TextAttr)**
 

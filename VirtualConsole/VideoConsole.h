@@ -11,6 +11,7 @@
 #include <Windows.h>   // HWND/WPARAM/LPARAM/LRESULT - для WindowProc ниже
 
 class Keyboard;
+class Mouse;
 class TextVRAM;
 class TextAttr;
 class VideoCard;
@@ -78,7 +79,7 @@ public:
     // пикселя окна (1 = 640x400, 2 = 1280x800 и т.д.) - глиф остаётся
     // резким при увеличении, т.к. рисуется как есть, без сглаживания
     // (см. renderThreadMain, glPixelZoom).
-    VideoConsole(Keyboard* keyboard, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale);
+    VideoConsole(Keyboard* keyboard, Mouse* mouse, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale);
     ~VideoConsole();
 
     // Открывает окно и стартует рендер-поток - вызывается один раз из
@@ -113,9 +114,16 @@ private:
     void compositeVideoCardLayer(uint8_t* rgb) const;
 
     Keyboard* keyboard;
+    Mouse* mouse;
     VideoCard* videoCard;
     ConsoleLayer* consoleLayer;
     int scale;
+
+    // Отслеживает, спрятан ли сейчас системный курсор (ShowCursor - это
+    // счётчик показов/скрытий, не булев флаг - звать его на каждый
+    // WM_MOUSEMOVE нельзя, нужно звать РОВНО один раз на переход
+    // включено/выключено захвата мыши, см. WM_MOUSEMOVE в .cpp).
+    bool mouseCaptured;
 
     std::thread renderThread;
     std::atomic<bool> stopRequested;
