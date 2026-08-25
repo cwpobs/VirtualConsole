@@ -34,9 +34,9 @@ const GPU3D_VB = 0xF0001108;
 const GPU3D_VNX = 0xF0001109;
 const GPU3D_VNY = 0xF000110A;
 const GPU3D_VNZ = 0xF000110B;
-const GPU3D_VU = 0xF000110C;         // зарезервировано под текстуры
-const GPU3D_VV = 0xF000110D;         // зарезервировано под текстуры
-const GPU3D_VTEXTURE = 0xF000110E;   // зарезервировано под текстуры
+const GPU3D_VU = 0xF000110C;         // текстурная U следующей вершины (0-255 = 0.0-1.0)
+const GPU3D_VV = 0xF000110D;         // текстурная V следующей вершины
+const GPU3D_VTEXTURE = 0xF000110E;   // слот текстуры следующей вершины (0 = без текстуры)
 const GPU3D_COMMAND = 0xF000110F;
 const GPU3D_STATUS = 0xF0001110;
 const GPU3D_CUBE_SIZE_LOW = 0xF0001111;
@@ -230,25 +230,76 @@ int sqrt32(int a0, int a1, int a2, int a3) {
     return math_op32(MATH32_OP_SQRT, a0, a1, a2, a3, 0, 0, 0, 0);
 }
 
-// ---- draw_cube_at(centerX, centerY, centerZ, halfSize, r, g, b) - куб
-// заданного размера с центром в мировых координатах (все параметры -
-// пары low/high). Аппаратный примитив DRAW_CUBE (см. Gpu3D.cpp) сам
-// строит 8 вершин/12 треугольников с осевыми нормалями и освещением -
-// сигнатура функции та же, что была при ручной сборке через
-// SUBMIT_VERTEX (см. git-историю этого файла), но тело теперь - всего
-// ~12 poke() вместо 468 (36 вершин × 13 байт) - именно это было главной
-// причиной тормозов демки с полом из кубов (см.
-// misty-zooming-bee.md). Не вызывает CLEAR/PRESENT сама - это забота
-// вызывающего кода (CLEAR один раз в начале кадра, PRESENT один раз в
-// конце, после всех кубов). ----
+// ---- текстуры - своя "быстрая память" Gpu3D, не отдельное устройство
+// (см. misty-zooming-bee.md). Протокол - как у PngLoader (LOAD
+// декодирует PNG-атлас, EXTRACT вырезает квадрат 32x32 в один из 8
+// слотов) - см. Gpu3D.cpp, loadTexture()/extractTexture(). ----
+
+const GPU3D_TEX_NAME0 = 0xF000114E;
+const GPU3D_TEX_SRC_X_LOW = 0xF000115A;
+const GPU3D_TEX_SRC_X_HIGH = 0xF000115B;
+const GPU3D_TEX_SRC_Y_LOW = 0xF000115C;
+const GPU3D_TEX_SRC_Y_HIGH = 0xF000115D;
+const GPU3D_TEX_SLOT = 0xF000115E;
+const GPU3D_TEX_COMMAND = 0xF000115F;
+const GPU3D_TEX_STATUS = 0xF0001160;
+
+const GPU3D_TEX_CMD_LOAD = 1;
+const GPU3D_TEX_CMD_EXTRACT = 2;
+
+int gpu3dTexName[12] = 0xF000114E;
+
+// Загрузка самого файла атласа НЕ обёрнута тут функцией с параметром -
+// str_copy() принимает только строковый ЛИТЕРАЛ, известный на этапе
+// компиляции (см. ASSEMBLY.md, "str_copy()"), а не значение параметра
+// функции (мини-C функции вообще не умеют в параметры-строки, только
+// int) - поэтому загрузку конкретного файла атласа пишет сам
+// подключающий код, тем же приёмом, что load_tileset() в
+// C/DEMOS/SNOW3D.MC:
+//
+//     int load_my_atlas() {
+//         str_copy(gpu3dTexName, "TILES.PNG");
+//         poke(GPU3D_TEX_COMMAND, GPU3D_TEX_CMD_LOAD);
+//         return peek(GPU3D_TEX_STATUS);
+//     }
+
+// Вырезает квадрат 32x32 по (srcX, srcY) из уже загруженного атласа в
+// текстурный слот 1-8 - см. GPU3D_VTEXTURE (какой слот применяется к
+// следующей вершине/кубу) и draw_cube_at() ниже.
+int load_texture_tile(int slot, int srcXLow, int srcXHigh, int srcYLow, int srcYHigh) {
+    poke(GPU3D_TEX_SRC_X_LOW, srcXLow);
+    poke(GPU3D_TEX_SRC_X_HIGH, srcXHigh);
+    poke(GPU3D_TEX_SRC_Y_LOW, srcYLow);
+    poke(GPU3D_TEX_SRC_Y_HIGH, srcYHigh);
+    poke(GPU3D_TEX_SLOT, slot);
+    poke(GPU3D_TEX_COMMAND, GPU3D_TEX_CMD_EXTRACT);
+    return peek(GPU3D_TEX_STATUS);
+}
+
+// ---- draw_cube_at(centerX, centerY, centerZ, halfSize, r, g, b,
+// texSlot) - куб заданного размера с центром в мировых координатах
+// (все координатные параметры - пары low/high). Аппаратный примитив
+// DRAW_CUBE (см. Gpu3D.cpp) сам строит 8 вершин/12 треугольников с
+// осевыми нормалями, освещением и (если texSlot != 0) UV-развёрткой на
+// каждую грань - тело тут всего ~13 poke() вместо 468 (36 вершин × 13
+// байт вручную) - именно это было главной причиной тормозов демки с
+// полом из кубов (см. misty-zooming-bee.md). texSlot = 0 - куб красится
+// плоским цветом r/g/b (как раньше); texSlot 1-8 - куб текстурируется
+// содержимым этого слота (загружается заранее через
+// load_texture_tile() ниже), r/g/b в этом случае игнорируются (текстура
+// полностью заменяет базовый цвет, освещение по-прежнему применяется
+// поверх). Не вызывает CLEAR/PRESENT сама - это забота вызывающего кода
+// (CLEAR один раз в начале кадра, PRESENT один раз в конце, после всех
+// кубов). ----
 
 int draw_cube_at(int cxLow, int cxHigh, int cyLow, int cyHigh, int czLow, int czHigh,
-                  int halfLow, int halfHigh, int r, int g, int b) {
+                  int halfLow, int halfHigh, int r, int g, int b, int texSlot) {
     poke(GPU3D_VX_LOW, cxLow); poke(GPU3D_VX_HIGH, cxHigh);
     poke(GPU3D_VY_LOW, cyLow); poke(GPU3D_VY_HIGH, cyHigh);
     poke(GPU3D_VZ_LOW, czLow); poke(GPU3D_VZ_HIGH, czHigh);
     poke(GPU3D_CUBE_SIZE_LOW, halfLow); poke(GPU3D_CUBE_SIZE_HIGH, halfHigh);
     poke(GPU3D_VR, r); poke(GPU3D_VG, g); poke(GPU3D_VB, b);
+    poke(GPU3D_VTEXTURE, texSlot);
     poke(GPU3D_COMMAND, GPU3D_CMD_DRAW_CUBE);
     return 0;
 }

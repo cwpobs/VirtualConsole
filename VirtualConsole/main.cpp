@@ -78,7 +78,7 @@ int main()
     SoundCard soundCard;
     ModLoaderDiskSelect modLoaderDiskSelect;
     ModLoader modLoader(&soundCard, &diskC, &diskD, &modLoaderDiskSelect);
-    Gpu3D gpu3D(&videoCard);
+    Gpu3D gpu3D(&videoCard, &diskC);
     Mouse mouse;
     MatrixLoader matrixLoader(&diskC);
     Assembler assembler;

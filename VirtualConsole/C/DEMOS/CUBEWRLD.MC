@@ -10,9 +10,12 @@
 // без тригонометрии (см. ASSEMBLY.md, "The long type").
 //
 // Пол рисуется аппаратной командой DRAW_CUBE (GEOM3D.MC::draw_cube_at) -
-// один куб это ~12 poke() вместо 468 (36 вершин по 13 байт вручную) - это
+// один куб это ~13 poke() вместо 468 (36 вершин по 13 байт вручную) - это
 // было главной причиной тормозов первой версии этой демки, см.
-// misty-zooming-bee.md.
+// misty-zooming-bee.md. Кубы текстурированы 32x32-тайлами из TILES.PNG
+// (тот же атлас, что у TSCROLL.MC/SNOW3D.MC) - загрузка текстур встроена
+// прямо в Gpu3D, своя "быстрая память" на 8 слотов (не отдельное
+// устройство, см. misty-zooming-bee.md).
 //
 // Демка ограничена уровнями до 64 клеток (8x8, как LEVEL.TXT) - позиции
 // кубов кэшируются один раз при загрузке в фиксированные массивы
@@ -41,6 +44,12 @@ const CUBE_DRAW_HALF = 19; // используется для ОТРИСОВКИ
                             // от z-fighting (выглядит как кубы "проникают" друг
                             // в друга на стыке) - см. misty-zooming-bee.md
 const MOVE_SPEED = 4;
+
+// Текстурные слоты Gpu3D (1-8, см. GEOM3D.MC) - пол первого слоя и
+// стопки второго слоя красятся разными тайлами из TILES.PNG, чтобы
+// визуально отличались.
+const TEX_SLOT_FLOOR = 1;
+const TEX_SLOT_LAYER2 = 2;
 
 int cellCenterXLow[MAX_CELLS];
 int cellCenterXHigh[MAX_CELLS];
@@ -156,6 +165,26 @@ int load_level() {
     return peek(MATRIXLOADER_STATUS);
 }
 
+// str_copy() принимает только строковый литерал (см. GEOM3D.MC про
+// gpu3dTexName) - поэтому имя файла атласа зашито тут, а не параметром.
+int load_floor_textures() {
+    int status;
+
+    str_copy(gpu3dTexName, "TILES.PNG");
+    poke(GPU3D_TEX_COMMAND, GPU3D_TEX_CMD_LOAD);
+    status = peek(GPU3D_TEX_STATUS);
+    if (status != 0) { return status; }
+
+    // Координаты - те же гарантированно валидные 32x32-регионы TILES.PNG,
+    // что уже использует C/DEMOS/SNOW3D.MC::extract_all_tiles() (первые
+    // два из восьми) - не гадаем новые вслепую.
+    status = load_texture_tile(TEX_SLOT_FLOOR, 0, 0, 0, 0);
+    if (status != 0) { return status; }
+
+    status = load_texture_tile(TEX_SLOT_LAYER2, 32, 0, 64, 0);
+    return status;
+}
+
 // Считает мировые координаты каждой клетки ОДИН РАЗ (уровень статичен) и
 // кладёт их в cellCenterX*/cellCenterZ*/cellHeight - см. заголовок файла.
 int build_level_cache() {
@@ -225,11 +254,11 @@ int draw_floor() {
     while (i < cellCount) {
         if (cellHeight[i] > 0) {
             draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], 0, 0,
-                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 180, 180, 190);
+                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 180, 180, 190, TEX_SLOT_FLOOR);
         }
         if (cellHeight[i] > 1) {
             draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], layer2YLow, layer2YHigh,
-                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 150, 150, 210);
+                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 150, 150, 210, TEX_SLOT_LAYER2);
         }
         i = i + 1;
     }
@@ -250,6 +279,13 @@ int main() {
         return 1;
     }
     build_level_cache();
+
+    status = load_floor_textures();
+    if (status != 0) {
+        clear_screen();
+        print_str(0, 0, "texture load error");
+        return 1;
+    }
 
     // Один направленный источник + фоновая засветка - см. Gpu3D.h.
     // Направление подобрать живым тестом, если грани будут выглядеть

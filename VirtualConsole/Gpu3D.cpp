@@ -1,5 +1,13 @@
 #include "Gpu3D.h"
 #include "VideoCard.h"
+#include "Disk.h"
+
+// Только объявления stb_image - реализация (STB_IMAGE_IMPLEMENTATION)
+// уже один раз определена в PngLoader.cpp; определить её здесь ЕЩЁ раз
+// значило бы получить дублирующиеся символы на этапе линковки (stb -
+// однозаголовочная библиотека, реализация должна попасть в бинарник
+// ровно один раз, из одной единицы трансляции).
+#include "stb_image.h"
 
 #include <algorithm>
 #include <cmath>
@@ -16,8 +24,8 @@ namespace
     }
 }
 
-Gpu3D::Gpu3D(VideoCard* videoCard)
-    : videoCard(videoCard)
+Gpu3D::Gpu3D(VideoCard* videoCard, Disk* diskC)
+    : videoCard(videoCard), diskC(diskC)
 {
     vxLow = vxHigh = vyLow = vyHigh = vzLow = vzHigh = 0;
     vr = vg = vb = 0;
@@ -44,6 +52,14 @@ Gpu3D::Gpu3D(VideoCard* videoCard)
 
     for (int i = 0; i < 4; i++) { math32A[i] = math32B[i] = math32Result[i] = 0; }
     math32Status = 0;
+
+    for (int i = 0; i < 12; i++) { texName[i] = 0; }
+    texSrcXLow = texSrcXHigh = texSrcYLow = texSrcYHigh = 0;
+    texSlot = 0;
+    texStatus = 0;
+    texSourceWidth = 0;
+    texSourceHeight = 0;
+    textureSlots.assign(static_cast<size_t>(TEXTURE_SLOTS) * TEX_SIZE * TEX_SIZE * 3, 0);
 
     pendingCount = 0;
 
@@ -89,6 +105,11 @@ void Gpu3D::split32(int32_t value, uint8_t bytes[4])
 
 uint8_t Gpu3D::read(uint32_t address)
 {
+    if (address >= REG_TEX_NAME_FIRST && address <= REG_TEX_NAME_LAST)
+    {
+        return texName[address - REG_TEX_NAME_FIRST];
+    }
+
     switch (address)
     {
     case REG_VX_LOW: return vxLow;
@@ -164,12 +185,25 @@ uint8_t Gpu3D::read(uint32_t address)
     case REG_MATH32_RESULT2: return math32Result[2];
     case REG_MATH32_RESULT3: return math32Result[3];
 
+    case REG_TEX_SRC_X_LOW: return texSrcXLow;
+    case REG_TEX_SRC_X_HIGH: return texSrcXHigh;
+    case REG_TEX_SRC_Y_LOW: return texSrcYLow;
+    case REG_TEX_SRC_Y_HIGH: return texSrcYHigh;
+    case REG_TEX_SLOT: return texSlot;
+    case REG_TEX_STATUS: return texStatus;
+
     default: return 0;
     }
 }
 
 void Gpu3D::write(uint32_t address, uint8_t value)
 {
+    if (address >= REG_TEX_NAME_FIRST && address <= REG_TEX_NAME_LAST)
+    {
+        texName[address - REG_TEX_NAME_FIRST] = value;
+        return;
+    }
+
     switch (address)
     {
     case REG_VX_LOW: vxLow = value; return;
@@ -249,6 +283,21 @@ void Gpu3D::write(uint32_t address, uint8_t value)
     case REG_MATH32_B2: math32B[2] = value; return;
     case REG_MATH32_B3: math32B[3] = value; return;
     case REG_MATH32_COMMAND: executeMath32(value); return;
+
+    case REG_TEX_SRC_X_LOW: texSrcXLow = value; return;
+    case REG_TEX_SRC_X_HIGH: texSrcXHigh = value; return;
+    case REG_TEX_SRC_Y_LOW: texSrcYLow = value; return;
+    case REG_TEX_SRC_Y_HIGH: texSrcYHigh = value; return;
+    case REG_TEX_SLOT: texSlot = value; return;
+
+    case REG_TEX_COMMAND:
+        switch (value)
+        {
+        case 1: loadTexture(); break;
+        case 2: extractTexture(); break;
+        default: break;
+        }
+        return;
 
     default:
         return;
@@ -340,6 +389,9 @@ void Gpu3D::submitVertex()
     pendingVertices[slot].nx = toUnit(vnx);
     pendingVertices[slot].ny = toUnit(vny);
     pendingVertices[slot].nz = toUnit(vnz);
+    pendingVertices[slot].u = vu / 255.0;
+    pendingVertices[slot].v = vv / 255.0;
+    pendingVertices[slot].textureSlot = vtexture;
     pendingVertices[slot].r = vr;
     pendingVertices[slot].g = vg;
     pendingVertices[slot].b = vb;
@@ -438,18 +490,27 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
 
     double ambientFactor = ambient / 255.0;
 
-    auto lit = [&](uint8_t base, uint8_t lightChannel) -> uint8_t
+    auto brightnessOf = [&](uint8_t lightChannel) -> double
     {
-        double brightness = ambientFactor + (lightChannel / 255.0) * diffuseFactor;
+        return ambientFactor + (lightChannel / 255.0) * diffuseFactor;
+    };
+
+    auto lit = [&](uint8_t base, double brightness) -> uint8_t
+    {
         double value = base * brightness;
         return static_cast<uint8_t>(std::min(255.0, std::max(0.0, value)));
     };
 
     ScreenVertex out;
     out.viewZ = vz2;
-    out.r = lit(v.r, lightR);
-    out.g = lit(v.g, lightG);
-    out.b = lit(v.b, lightB);
+    out.u = v.u;
+    out.v = v.v;
+    out.litR = brightnessOf(lightR);
+    out.litG = brightnessOf(lightG);
+    out.litB = brightnessOf(lightB);
+    out.r = lit(v.r, out.litR);
+    out.g = lit(v.g, out.litG);
+    out.b = lit(v.b, out.litB);
 
     // ---- перспективная проекция ----
     // f - фокусное расстояние в пикселях, посчитанное из вертикального
@@ -479,6 +540,17 @@ void Gpu3D::rasterizeTriangle(const Vertex (&verts)[3])
     for (int i = 0; i < 3; i++)
     {
         sv[i] = transformAndProject(verts[i]);
+    }
+
+    // Текстура не варьируется по вершинам одного треугольника на
+    // практике (весь треугольник либо текстурирован одной текстурой,
+    // либо нет) - берём с первой вершины, интерполировать незачем.
+    int textureSlot = verts[0].textureSlot;
+    const uint8_t* texture = nullptr;
+
+    if (textureSlot >= 1 && textureSlot <= TEXTURE_SLOTS)
+    {
+        texture = &textureSlots[static_cast<size_t>(textureSlot - 1) * TEX_SIZE * TEX_SIZE * 3];
     }
 
     // Упрощение вместо честного клиппинга (см. ASSEMBLY.md, "Gpu3D") -
@@ -537,9 +609,35 @@ void Gpu3D::rasterizeTriangle(const Vertex (&verts)[3])
             touchedMask[pixelIndex] = 1;
 
             int colorIndex = pixelIndex * 3;
-            colorBuffer[colorIndex] = static_cast<uint8_t>(w0 * sv[0].r + w1 * sv[1].r + w2 * sv[2].r);
-            colorBuffer[colorIndex + 1] = static_cast<uint8_t>(w0 * sv[0].g + w1 * sv[1].g + w2 * sv[2].g);
-            colorBuffer[colorIndex + 2] = static_cast<uint8_t>(w0 * sv[0].b + w1 * sv[1].b + w2 * sv[2].b);
+
+            if (texture != nullptr)
+            {
+                double u = w0 * sv[0].u + w1 * sv[1].u + w2 * sv[2].u;
+                double v = w0 * sv[0].v + w1 * sv[1].v + w2 * sv[2].v;
+                double litR = w0 * sv[0].litR + w1 * sv[1].litR + w2 * sv[2].litR;
+                double litG = w0 * sv[0].litG + w1 * sv[1].litG + w2 * sv[2].litG;
+                double litB = w0 * sv[0].litB + w1 * sv[1].litB + w2 * sv[2].litB;
+
+                int tx = std::min(std::max(static_cast<int>(u * (TEX_SIZE - 1)), 0), TEX_SIZE - 1);
+                int ty = std::min(std::max(static_cast<int>(v * (TEX_SIZE - 1)), 0), TEX_SIZE - 1);
+                int texelIndex = (ty * TEX_SIZE + tx) * 3;
+
+                auto sample = [&](int channel, double brightness) -> uint8_t
+                {
+                    double value = texture[texelIndex + channel] * brightness;
+                    return static_cast<uint8_t>(std::min(255.0, std::max(0.0, value)));
+                };
+
+                colorBuffer[colorIndex] = sample(0, litR);
+                colorBuffer[colorIndex + 1] = sample(1, litG);
+                colorBuffer[colorIndex + 2] = sample(2, litB);
+            }
+            else
+            {
+                colorBuffer[colorIndex] = static_cast<uint8_t>(w0 * sv[0].r + w1 * sv[1].r + w2 * sv[2].r);
+                colorBuffer[colorIndex + 1] = static_cast<uint8_t>(w0 * sv[0].g + w1 * sv[1].g + w2 * sv[2].g);
+                colorBuffer[colorIndex + 2] = static_cast<uint8_t>(w0 * sv[0].b + w1 * sv[1].b + w2 * sv[2].b);
+            }
         }
     }
 }
@@ -591,6 +689,8 @@ void Gpu3D::drawCube()
         Vertex v;
         v.x = cxs[id]; v.y = cys[id]; v.z = czs[id];
         v.nx = v.ny = v.nz = 0;
+        v.u = v.v = 0;
+        v.textureSlot = vtexture;   // одна текстура на весь куб (как сейчас один цвет)
         v.r = vr; v.g = vg; v.b = vb;
         return v;
     };
@@ -601,29 +701,40 @@ void Gpu3D::drawCube()
         return v;
     };
 
-    auto face = [&](int a, int b, int c, double nx, double ny, double nz)
+    auto withUV = [](Vertex v, double u, double vv) -> Vertex
+    {
+        v.u = u; v.v = vv;
+        return v;
+    };
+
+    // Развёртка UV на грань - каждая грань как квад (0,0)-(1,0)-(1,1)-(0,1),
+    // разрезанный на два треугольника (p0,p1,p2)/(p0,p2,p3) - тот же
+    // порядок углов, что уже используется ниже для позиции/нормали,
+    // поэтому UV просто идёт позиционно по вызовам face().
+    auto face = [&](int a, int b, int c, double nx, double ny, double nz,
+                     double ua, double va, double ub, double vb, double uc, double vcUv)
     {
         Vertex tri[3] =
         {
-            withNormal(corner(a), nx, ny, nz),
-            withNormal(corner(b), nx, ny, nz),
-            withNormal(corner(c), nx, ny, nz),
+            withUV(withNormal(corner(a), nx, ny, nz), ua, va),
+            withUV(withNormal(corner(b), nx, ny, nz), ub, vb),
+            withUV(withNormal(corner(c), nx, ny, nz), uc, vcUv),
         };
         rasterizeTriangle(tri);
     };
 
-    face(0, 1, 2, 0, 0, -1);   // -Z
-    face(0, 2, 3, 0, 0, -1);
-    face(4, 5, 6, 0, 0, 1);    // +Z
-    face(4, 6, 7, 0, 0, 1);
-    face(0, 1, 5, 0, -1, 0);   // -Y
-    face(0, 5, 4, 0, -1, 0);
-    face(3, 2, 6, 0, 1, 0);    // +Y
-    face(3, 6, 7, 0, 1, 0);
-    face(0, 4, 7, -1, 0, 0);   // -X
-    face(0, 7, 3, -1, 0, 0);
-    face(1, 2, 6, 1, 0, 0);    // +X
-    face(1, 6, 5, 1, 0, 0);
+    face(0, 1, 2, 0, 0, -1, 0, 0, 1, 0, 1, 1);   // -Z
+    face(0, 2, 3, 0, 0, -1, 0, 0, 1, 1, 0, 1);
+    face(4, 5, 6, 0, 0, 1, 0, 0, 1, 0, 1, 1);    // +Z
+    face(4, 6, 7, 0, 0, 1, 0, 0, 1, 1, 0, 1);
+    face(0, 1, 5, 0, -1, 0, 0, 0, 1, 0, 1, 1);   // -Y
+    face(0, 5, 4, 0, -1, 0, 0, 0, 1, 1, 0, 1);
+    face(3, 2, 6, 0, 1, 0, 0, 0, 1, 0, 1, 1);    // +Y
+    face(3, 6, 7, 0, 1, 0, 0, 0, 1, 1, 0, 1);
+    face(0, 4, 7, -1, 0, 0, 0, 0, 1, 0, 1, 1);   // -X
+    face(0, 7, 3, -1, 0, 0, 0, 0, 1, 1, 0, 1);
+    face(1, 2, 6, 1, 0, 0, 0, 0, 1, 0, 1, 1);    // +X
+    face(1, 6, 5, 1, 0, 0, 0, 0, 1, 1, 0, 1);
 
     status = 0;
 }
@@ -640,4 +751,106 @@ void Gpu3D::present()
 {
     videoCard->setThreeDLayer(colorBuffer.data(), touchedMask.data());
     status = 0;
+}
+
+std::string Gpu3D::texNameAsString() const
+{
+    std::string result;
+
+    for (int i = 0; i < 12 && texName[i] != 0; i++)
+    {
+        result += static_cast<char>(texName[i]);
+    }
+
+    return result;
+}
+
+void Gpu3D::loadTexture()
+{
+    // Тот же протокол, что у PngLoader::load() - lastExecDisk см. там же.
+    Disk* activeDisk = (Disk::lastExecDisk != nullptr) ? Disk::lastExecDisk : diskC;
+    std::string path = (activeDisk->getCurrentPath() / texNameAsString()).string();
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+
+    unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
+
+    if (data == nullptr)
+    {
+        texStatus = 1;
+        texSourcePixels.clear();
+        texSourceWidth = 0;
+        texSourceHeight = 0;
+        return;
+    }
+
+    texSourcePixels.assign(data, data + (static_cast<size_t>(width) * height * 4));
+    stbi_image_free(data);
+
+    texSourceWidth = width;
+    texSourceHeight = height;
+    texStatus = 0;
+}
+
+void Gpu3D::extractTexture()
+{
+    int slot = texSlot;
+
+    if (slot < 1 || slot > TEXTURE_SLOTS)
+    {
+        texStatus = 3;
+        return;
+    }
+
+    if (texSourcePixels.empty())
+    {
+        texStatus = 1;
+        return;
+    }
+
+    int x = combine(texSrcXLow, texSrcXHigh);
+    int y = combine(texSrcYLow, texSrcYHigh);
+
+    if (x < 0 || y < 0 || x + TEX_SIZE > texSourceWidth || y + TEX_SIZE > texSourceHeight)
+    {
+        texStatus = 2;
+        return;
+    }
+
+    uint8_t* dst = &textureSlots[static_cast<size_t>(slot - 1) * TEX_SIZE * TEX_SIZE * 3];
+
+    for (int sy = 0; sy < TEX_SIZE; sy++)
+    {
+        for (int sx = 0; sx < TEX_SIZE; sx++)
+        {
+            size_t srcIndex = (static_cast<size_t>(y + sy) * texSourceWidth + (x + sx)) * 4;
+            uint8_t r = texSourcePixels[srcIndex];
+            uint8_t g = texSourcePixels[srcIndex + 1];
+            uint8_t b = texSourcePixels[srcIndex + 2];
+            uint8_t a = texSourcePixels[srcIndex + 3];
+
+            int dstIndex = (sy * TEX_SIZE + sx) * 3;
+
+            if (a < 128)
+            {
+                // Прозрачный пиксель PNG - тот же цвет-ключ, что у
+                // PngLoader::extractInto (см. ASSEMBLY.md, "Аппаратные
+                // спрайты") - для куба вряд ли пригодится, но
+                // реализуется бесплатно тем же кодом.
+                dst[dstIndex] = 255;
+                dst[dstIndex + 1] = 0;
+                dst[dstIndex + 2] = 255;
+            }
+            else
+            {
+                dst[dstIndex] = r;
+                dst[dstIndex + 1] = g;
+                dst[dstIndex + 2] = b;
+            }
+        }
+    }
+
+    texStatus = 0;
 }

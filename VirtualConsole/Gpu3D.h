@@ -3,9 +3,11 @@
 #include "Device.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class VideoCard;
+class Disk;
 
 // 3D-ускоритель + свет + математический сопроцессор - ОДНО устройство
 // (раньше было три: Gpu3D/Light3D/MathUnit - по итогам живого тестирования
@@ -24,15 +26,18 @@ class VideoCard;
 // регистру на пиксель.
 //
 // Адресный диапазон нарочно большой (256 байт, см. main.cpp) - реально
-// занято меньше трети; остальное - запас под будущий рост (текстуры,
-// доп. источники света) БЕЗ повторной перенумерации регистров - именно
-// то, чего не хватило в прошлый раз (Gpu3D/Light3D/MathUnit пришлось
-// разносить по трём тесным диапазонам подряд).
+// занято меньше половины; остальное - запас под будущий рост (доп.
+// источники света, что угодно ещё) БЕЗ повторной перенумерации
+// регистров - именно то, чего не хватило в прошлый раз (Gpu3D/Light3D/
+// MathUnit пришлось разносить по трём тесным диапазонам подряд).
+// Текстуры (загрузка PNG-атласа + семплирование по вершинным UV) -
+// тоже часть этого устройства, не отдельное - см. TEX_* регистры и
+// TEXTURE_SLOTS ниже.
 class Gpu3D : public Device
 {
 public:
 
-    explicit Gpu3D(VideoCard* videoCard);
+    Gpu3D(VideoCard* videoCard, Disk* diskC);
 
     uint8_t read(uint32_t address) override;
     void write(uint32_t address, uint8_t value) override;
@@ -55,9 +60,9 @@ private:
     static const uint32_t REG_VNX = 9;
     static const uint32_t REG_VNY = 10;
     static const uint32_t REG_VNZ = 11;
-    static const uint32_t REG_VU = 12;         // зарезервировано под текстуры
-    static const uint32_t REG_VV = 13;         // зарезервировано под текстуры
-    static const uint32_t REG_VTEXTURE = 14;   // зарезервировано под текстуры
+    static const uint32_t REG_VU = 12;         // текстурная U следующей вершины (0-255 = 0.0-1.0)
+    static const uint32_t REG_VV = 13;         // текстурная V следующей вершины
+    static const uint32_t REG_VTEXTURE = 14;   // слот текстуры следующей вершины (0 = без текстуры)
     static const uint32_t REG_COMMAND = 15;
     static const uint32_t REG_STATUS = 16;
     static const uint32_t REG_CUBE_SIZE_LOW = 17;
@@ -97,7 +102,7 @@ private:
     static const uint32_t REG_LIGHT_B = 46;
     static const uint32_t REG_AMBIENT = 47;
 
-    // 48-55: зарезервировано (будущий протокол загрузки текстур)
+    // 48-55: зарезервировано (свободно)
 
     // ---- математика 16 бит (был отдельным устройством MathUnit) ----
     static const uint32_t REG_MATH_A_LOW = 56;
@@ -125,10 +130,29 @@ private:
     static const uint32_t REG_MATH32_RESULT2 = 76;
     static const uint32_t REG_MATH32_RESULT3 = 77;
 
+    // ---- загрузка текстур (своя "быстрая память" - НЕ отдельное
+    // устройство, см. misty-zooming-bee.md) - протокол один в один как
+    // у PngLoader (LOAD декодирует PNG, EXTRACT вырезает квадрат
+    // TEX_SIZE x TEX_SIZE в один из TEXTURE_SLOTS слотов) ----
+    static const uint32_t REG_TEX_NAME_FIRST = 78;
+    static const uint32_t REG_TEX_NAME_LAST = 89;
+    static const uint32_t REG_TEX_SRC_X_LOW = 90;
+    static const uint32_t REG_TEX_SRC_X_HIGH = 91;
+    static const uint32_t REG_TEX_SRC_Y_LOW = 92;
+    static const uint32_t REG_TEX_SRC_Y_HIGH = 93;
+    static const uint32_t REG_TEX_SLOT = 94;
+    static const uint32_t REG_TEX_COMMAND = 95;
+    static const uint32_t REG_TEX_STATUS = 96;
+
+    static const int TEX_SIZE = 32;        // как PngLoader::CELL_SIZE
+    static const int TEXTURE_SLOTS = 8;    // слоты нумеруются 1..8 (0 = "без текстуры")
+
     struct Vertex
     {
         double x, y, z;
         double nx, ny, nz;   // нормаль (снэпшот VNX/VNY/VNZ в момент SUBMIT_VERTEX)
+        double u, v;         // текстурные координаты 0..1 (снэпшот VU/VV)
+        int textureSlot;     // 0 = без текстуры, иначе 1..TEXTURE_SLOTS
         uint8_t r, g, b;
     };
 
@@ -136,15 +160,18 @@ private:
     {
         double x, y;    // экранные координаты (float - до растеризации)
         double viewZ;   // глубина в пространстве камеры (для z-буфера)
-        uint8_t r, g, b;
+        double u, v;    // текстурные координаты - не зависят от 3D-трансформа, просто прокидываются
+        double litR, litG, litB;   // множитель освещения (для текстурного пути - без него)
+        uint8_t r, g, b;           // итоговый цвет для НЕтекстурного пути (базовый цвет * lit)
     };
 
     VideoCard* videoCard;
+    Disk* diskC;
 
     uint8_t vxLow, vxHigh, vyLow, vyHigh, vzLow, vzHigh;
     uint8_t vr, vg, vb;
     uint8_t vnx, vny, vnz;
-    uint8_t vu, vv, vtexture;   // зарезервировано, хранится, но не используется
+    uint8_t vu, vv, vtexture;
     uint8_t status;
     uint8_t cubeSizeLow, cubeSizeHigh;
 
@@ -165,6 +192,24 @@ private:
     uint8_t math32A[4], math32B[4];
     uint8_t math32Status;
     uint8_t math32Result[4];
+
+    uint8_t texName[12];
+    uint8_t texSrcXLow, texSrcXHigh, texSrcYLow, texSrcYHigh;
+    uint8_t texSlot;
+    uint8_t texStatus;
+
+    // Кэш последнего декодированного атласа (RGBA) - один LOAD
+    // обслуживает много EXTRACT без повторного декодирования, тот же
+    // приём, что и у PngLoader::pixels/imageWidth/imageHeight.
+    std::vector<uint8_t> texSourcePixels;
+    int texSourceWidth;
+    int texSourceHeight;
+
+    // "Быстрая память" текстур самого Gpu3D - TEXTURE_SLOTS слотов по
+    // TEX_SIZE*TEX_SIZE*3 (RGB) байт, слот (TEX_SLOT-1) в индексации
+    // с нуля; слот 0 (VTEXTURE=0) - зарезервированное значение "без
+    // текстуры", в этом массиве не хранится.
+    std::vector<uint8_t> textureSlots;
 
     Vertex pendingVertices[3];
     int pendingCount;
@@ -188,6 +233,10 @@ private:
 
     void executeMath16(uint8_t command);
     void executeMath32(uint8_t command);
+
+    std::string texNameAsString() const;
+    void loadTexture();
+    void extractTexture();
 
     ScreenVertex transformAndProject(const Vertex& v) const;
     void rasterizeTriangle(const Vertex (&verts)[3]);

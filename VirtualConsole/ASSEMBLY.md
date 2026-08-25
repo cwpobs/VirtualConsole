@@ -2608,35 +2608,34 @@ handed to `VideoCard` all at once with a `PRESENT` command (see
 drawn OVER the tiles, but UNDER the sprites).
 
 The address range is deliberately generous - 256 bytes, `0xF0001100`-
-`0xF00011FF` - even though under a third of it is wired to a real
-register today. The whole point is room to grow (more light sources,
-textures) without another renumbering; unused offsets just read 0 and
-ignore writes.
+`0xF00011FF` - even though under half of it is wired to a real register
+today. The whole point is room to grow (more light sources, a texture
+upload protocol richer than the current fixed 32x32 squares) without
+another renumbering; unused offsets just read 0 and ignore writes.
 
-No texture sampling yet - color is fixed per vertex (Gouraud shading,
-like on the PS1/N64); the rasterizer linearly interpolates color and
-depth across a triangle's three vertices. `VU`/`VV`/`VTEXTURE` (offsets
-12-14) exist as **reserved** per-vertex fields for a future texture
-protocol - written and read back like any other register, but currently
-ignored by rendering. The vertex color submitted through `VR`/`VG`/`VB`
-is the triangle's *base* color - if a normal is set (`VNX`/`VNY`/`VNZ`)
-before `SUBMIT_VERTEX`, the actual color stored for that vertex is the
-base color modulated by the light (see below); a vertex submitted with
-no normal set (the default, all zeros) gets no directional shading,
-only whatever the ambient level contributes.
+Color is per vertex (Gouraud shading, like on the PS1/N64); the
+rasterizer linearly interpolates color (or, for a textured triangle,
+the sampled texel - see "Textures" below) and depth across a triangle's
+three vertices. The vertex color submitted through `VR`/`VG`/`VB` is
+the triangle's *base* color, used when `VTEXTURE = 0` (untextured, the
+default) - if a normal is set (`VNX`/`VNY`/`VNZ`) before
+`SUBMIT_VERTEX`, the actual color stored for that vertex is the base
+color modulated by the light (see "Lighting" below); a vertex submitted
+with no normal set (the default, all zeros) gets no directional
+shading, only whatever the ambient level contributes.
 
 | Offset | Register | Description |
 |----------|---------|----------|
 | 0-1 | VX_LOW/HIGH | vertex X, signed 16-bit, model units |
 | 2-3 | VY_LOW/HIGH | vertex Y |
 | 4-5 | VZ_LOW/HIGH | vertex Z |
-| 6 | VR | vertex/cube color, R (0-255) |
-| 7 | VG | vertex/cube color, G |
-| 8 | VB | vertex/cube color, B |
+| 6 | VR | vertex/cube color, R (0-255) - ignored when textured |
+| 7 | VG | vertex/cube color, G - ignored when textured |
+| 8 | VB | vertex/cube color, B - ignored when textured |
 | 9-11 | VNX/VNY/VNZ | normal of the *next* vertex submitted (see "Lighting" below) |
-| 12 | VU | **reserved** - texture U (unused) |
-| 13 | VV | **reserved** - texture V (unused) |
-| 14 | VTEXTURE | **reserved** - texture id (unused) |
+| 12 | VU | texture U of the *next* vertex (0-255 = 0.0-1.0) |
+| 13 | VV | texture V of the *next* vertex |
+| 14 | VTEXTURE | texture slot of the *next* vertex (0 = no texture, else 1-8 - see "Textures" below) |
 | 15 | COMMAND (write = trigger) | 1=SUBMIT_VERTEX, 2=DRAW_TRIANGLE, 3=CLEAR, 4=PRESENT, 5=DRAW_CUBE |
 | 16 | STATUS (read-only) | 0=ok, 1=DRAW_TRIANGLE called without 3 accumulated vertices |
 | 17-18 | CUBE_SIZE_LOW/HIGH | half edge length of the next `DRAW_CUBE`, signed 16-bit |
@@ -2647,9 +2646,10 @@ only whatever the ambient level contributes.
 | 41-43 | LIGHT_DIR_X/Y/Z | light direction, world space |
 | 44-46 | LIGHT_R/G/B | light color/intensity (0-255 per channel) |
 | 47 | AMBIENT | background light level (0-255) |
-| 48-55 | *(reserved)* | future texture-upload protocol |
+| 48-55 | *(reserved)* | free |
 | 56-63 | see "Math (16-bit)" below | |
 | 64-77 | see "Math (32-bit)" below | |
+| 78-96 | see "Textures" below | |
 
 `OBJ_*`/`CAM_*` take effect immediately on write, with no command
 (like sprite position/map scroll) - rotating an object or moving the
@@ -2706,9 +2706,12 @@ Addresses: `0xF0001100` (VX_LOW) - `0xF00011FF` (end of reserved range).
   center (`VX/VY/VZ`), half edge length (`CUBE_SIZE_LOW/HIGH`), and
   base color (`VR/VG/VB`), then triggers `DRAW_CUBE` once. `Gpu3D`
   builds all 8 corners and 12 triangles (with the correct axis-aligned
-  normal per face) internally and rasterizes them through the exact
-  same pipeline as `DRAW_TRIANGLE` - same model/camera transform, same
-  lighting, same z-buffer. Doesn't touch `pendingVertices` at all, so
+  normal per face, and a full `(0,0)-(1,1)` UV quad per face) internally
+  and rasterizes them through the exact same pipeline as
+  `DRAW_TRIANGLE` - same model/camera transform, same lighting, same
+  z-buffer. If `VTEXTURE` is non-zero when the command runs, all 6 faces
+  get that one texture (see "Textures" below) instead of the
+  `VR`/`VG`/`VB` color. Doesn't touch `pendingVertices` at all, so
   it's safe to mix `DRAW_CUBE` and manual `SUBMIT_VERTEX`/
   `DRAW_TRIANGLE` calls within the same frame. Doesn't call `CLEAR`/
   `PRESENT` itself - same convention as `DRAW_TRIANGLE`, the caller
@@ -2770,6 +2773,52 @@ overflow). No `SIN`/`COS` here - angles never need 32-bit range, they
 stay on the 16-bit block.
 
 Addresses: `0xF0001140` (MATH32_A0) - `0xF000114D` (MATH32_RESULT3).
+
+### Textures
+
+Texture loading lives inside `Gpu3D` itself rather than a separate
+device - by design (see `misty-zooming-bee.md`): `Gpu3D` decodes a PNG
+atlas (via `stb_image`, the same library `PngLoader` uses) and cuts out
+32x32 regions into its OWN texture memory (`TEXTURE_SLOTS` = 8 slots,
+32x32 RGB each - a few tens of KB, trivial). The protocol is
+deliberately identical to `PngLoader`'s (see its section above): `LOAD`
+decodes the file into a cached RGBA buffer, `EXTRACT` cuts one 32x32
+square out of that cache into a numbered slot - one `LOAD` serves many
+`EXTRACT`s of the same atlas without re-decoding.
+
+| Offset | Register | Description |
+|----------|---------|----------|
+| 78-89 | TEX_NAME0-11 | atlas PNG file name, 8.3 format |
+| 90-91 | TEX_SRC_X_LOW/HIGH | X of the region to cut, in the atlas |
+| 92-93 | TEX_SRC_Y_LOW/HIGH | Y of the region to cut |
+| 94 | TEX_SLOT | destination slot, 1-8 |
+| 95 | TEX_COMMAND (write = trigger) | 1=LOAD, 2=EXTRACT |
+| 96 | TEX_STATUS (read-only) | 0=ok, 1=file not found / nothing loaded yet, 2=region out of bounds, 3=invalid slot |
+
+Addresses: `0xF000114E` (TEX_NAME0) - `0xF0001160` (TEX_STATUS).
+
+Slot `0` is reserved to mean "no texture" - `VTEXTURE` (offset 14,
+described above as reserved) is now live: set on the next vertex
+submitted (like `VR`/`VG`/`VB`), along with `VU`/`VV` (offsets 12-13,
+0-255 = 0.0-1.0 texture coordinates). A textured triangle samples the
+slot named by `VTEXTURE` (nearest-neighbor, no filtering - the same
+pixel-art aesthetic the rest of the project already uses) at the
+per-pixel interpolated `(u, v)`, and the sampled texel REPLACES the
+triangle's base color entirely - lighting (ambient + diffuse) still
+multiplies on top of it exactly as it does for a plain-colored vertex.
+An untextured vertex (`VTEXTURE = 0`, the default) renders exactly as
+before - nothing changes for existing demos that never touch these
+registers.
+
+`DRAW_CUBE` (see above) also honors `VTEXTURE`: if non-zero when the
+command runs, all 6 faces get the SAME texture (one texture per cube,
+the same way one base color already applies to the whole cube), each
+face UV-mapped as a full `(0,0)-(1,0)-(1,1)-(0,1)` quad. `VR`/`VG`/`VB`
+are ignored for a textured cube - the texture fully replaces them.
+
+Working example - `C/DEMOS/CUBEWRLD.MC`: loads `TILES.PNG` once, cuts
+two 32x32 tiles into slots 1 and 2, and draws the two floor layers with
+`draw_cube_at(..., texSlot)` (see `C/DEV/LIB/GEOM3D.MC`).
 
 ### Example
 
