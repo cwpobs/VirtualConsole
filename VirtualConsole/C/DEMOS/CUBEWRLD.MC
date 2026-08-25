@@ -33,7 +33,13 @@ const KEY_RIGHT = 77;
 
 const MAX_CELLS = 64;
 const CUBE_SIZE = 40;
-const CUBE_HALF = 20;
+const CUBE_HALF = 20;      // используется для РАССТАНОВКИ клеток (шаг сетки)
+const CUBE_DRAW_HALF = 19; // используется для ОТРИСОВКИ - чуть меньше CUBE_HALF,
+                            // чтобы между соседними кубами был зазор в 2 юнита:
+                            // при ровно стыкующихся гранях (0 зазора) грани
+                            // соседних кубов лежат в одной плоскости и мерцают
+                            // от z-fighting (выглядит как кубы "проникают" друг
+                            // в друга на стыке) - см. misty-zooming-bee.md
 const MOVE_SPEED = 4;
 
 int cellCenterXLow[MAX_CELLS];
@@ -219,11 +225,11 @@ int draw_floor() {
     while (i < cellCount) {
         if (cellHeight[i] > 0) {
             draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], 0, 0,
-                cellCenterZLow[i], cellCenterZHigh[i], CUBE_HALF, 0, 180, 180, 190);
+                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 180, 180, 190);
         }
         if (cellHeight[i] > 1) {
             draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], layer2YLow, layer2YHigh,
-                cellCenterZLow[i], cellCenterZHigh[i], CUBE_HALF, 0, 150, 150, 210);
+                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 150, 150, 210);
         }
         i = i + 1;
     }
