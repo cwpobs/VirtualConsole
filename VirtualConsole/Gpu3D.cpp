@@ -461,6 +461,15 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
     double ry = worldY - camY;
     double rz = worldZ - camZ;
 
+    // Backface culling (см. Gpu3D.h, ScreenVertex) - dot нормали с
+    // направлением "от камеры к вершине" (worldPos - camPos = rx/ry/rz,
+    // уже посчитано выше) в МИРОВОМ пространстве - одинаковая система
+    // координат для обоих слагаемых, поворот/отмена поворота камеры для
+    // этого не нужны. > 0 - нормаль смотрит "от камеры" (грань задом
+    // наперёд) - см. rasterizeTriangle().
+    double normalLenSq = v.nx * v.nx + v.ny * v.ny + v.nz * v.nz;
+    double backfaceDot = (worldNx * rx + worldNy * ry + worldNz * rz);
+
     // отменяем yaw камеры
     double vx1 = rx * std::cos(-camYaw) + rz * std::sin(-camYaw);
     double vz1 = -rx * std::sin(-camYaw) + rz * std::cos(-camYaw);
@@ -505,6 +514,8 @@ Gpu3D::ScreenVertex Gpu3D::transformAndProject(const Vertex& v) const
     out.viewZ = vz2;
     out.u = v.u;
     out.v = v.v;
+    out.normalLenSq = normalLenSq;
+    out.backfaceDot = backfaceDot;
     out.litR = brightnessOf(lightR);
     out.litG = brightnessOf(lightG);
     out.litB = brightnessOf(lightB);
@@ -556,6 +567,17 @@ void Gpu3D::rasterizeTriangle(const Vertex (&verts)[3])
     // Упрощение вместо честного клиппинга (см. ASSEMBLY.md, "Gpu3D") -
     // если хоть одна вершина "за камерой", весь треугольник отбрасывается.
     if (sv[0].viewZ < 0 || sv[1].viewZ < 0 || sv[2].viewZ < 0)
+    {
+        return;
+    }
+
+    // Backface culling (см. Gpu3D.h, ScreenVertex) - normalLenSq==0
+    // значит "нормаль не задана" (старый контент вроде CUBE3D.ASM/
+    // SNOW3D.MC её не трогает) - такие треугольники НИКОГДА не
+    // отбрасываются, для обратной совместимости. Нормаль/dot берём с
+    // первой вершины - как и текстуру выше, для граней куба она
+    // одинакова на всех трёх вершинах треугольника.
+    if (sv[0].normalLenSq > 1e-6 && sv[0].backfaceDot > 0.0)
     {
         return;
     }

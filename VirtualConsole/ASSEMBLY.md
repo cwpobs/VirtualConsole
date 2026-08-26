@@ -2691,6 +2691,20 @@ Addresses: `0xF0001100` (VX_LOW) - `0xF00011FF` (end of reserved range).
   not an issue for convex objects like a cube at typical demo
   distances). Doesn't touch `VideoCard` directly - only its own
   internal buffer.
+
+  Before rasterizing - backface culling: if a vertex has a normal set
+  (`VNX/VNY/VNZ` nonzero - `normalLenSq > 0`) AND the dot product of the
+  world-space normal with the "camera to vertex" vector is positive
+  (the face points away from the camera), the whole triangle is
+  discarded. Geometry with NO normal set (old demos that wrote
+  triangles by hand before `VNX/VNY/VNZ` existed, e.g.
+  `CUBE3D.ASM`/`SNOW3D.MC`) is never culled - backward compatibility.
+  `DRAW_CUBE` (below) always sets axis-aligned normals, so its geometry
+  is fully subject to culling. This removes both the z-fighting flicker
+  between facing interior faces of adjacent cubes and the "inside of the
+  cube" artifact visible when the camera sits right up against a face
+  (see also the `COLLISION_SKIN` margin in `Phys3D` below - previously
+  the only, insufficient, mitigation for this).
 - **3 (CLEAR)** - resets the internal z-buffer (to "infinity") and the
   "touched pixels" mask - preparation for a new frame. There's no
   need to touch the color buffer itself - pixels not hit in the new
@@ -3020,13 +3034,20 @@ generous-headroom convention as `Gpu3D`.
    or face alike) by `radius - distance` - **plus a small skin margin**
    (a couple of units) so the sphere never comes to rest touching a
    face exactly - without it, the camera can end up close enough to a
-   face that turning reveals the cube's inside (no backface culling in
-   `Gpu3D`'s rasterizer, see its section above - the same class of
-   artifact z-fighting between adjacent cubes was, worked around there
-   with a similar small gap). A push that's mostly "up" (see the sign
+   face that turning reveals the cube's inside (a safety margin in case
+   something isn't already discarded by backface culling in `Gpu3D`'s
+   rasterizer, see its section above - the same class of artifact
+   z-fighting between adjacent cubes was, worked around there with a
+   similar small gap). A push that's mostly "up" (see the sign
    convention above) counts as landing - sets `GROUNDED=1` and zeroes
    `velocityY`, whether the box was landed on from above or the ground
    plane below.
+
+   Step 3 repeats several times in a row (`COLLISION_RESOLVE_PASSES`,
+   currently 3) per `STEP`, rather than running once: a single pass only
+   pushes the sphere out of one box at a time, so in a corner formed by
+   two walls the first pass can push it out of the first box straight
+   into the second - later passes settle the position outside both.
 4. Separately, the same skin-margined check against the `GROUND_Y`
    plane.
 5. Write back the resolved `PLAYER_X/Y/Z` and `GROUNDED`.

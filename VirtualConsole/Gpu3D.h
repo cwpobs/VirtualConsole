@@ -163,6 +163,15 @@ private:
         double u, v;    // текстурные координаты - не зависят от 3D-трансформа, просто прокидываются
         double litR, litG, litB;   // множитель освещения (для текстурного пути - без него)
         uint8_t r, g, b;           // итоговый цвет для НЕтекстурного пути (базовый цвет * lit)
+
+        // Backface culling (см. misty-zooming-bee.md) - normalLenSq=0
+        // означает "нормаль не задана" (VNX/VNY/VNZ по умолчанию нули,
+        // старый контент вроде CUBE3D.ASM/SNOW3D.MC их не трогает) -
+        // такие треугольники НИКОГДА не отбрасываются, для обратной
+        // совместимости. backfaceDot > 0 при заданной нормали означает
+        // "смотрит от камеры" - см. rasterizeTriangle().
+        double normalLenSq;
+        double backfaceDot;
     };
 
     VideoCard* videoCard;

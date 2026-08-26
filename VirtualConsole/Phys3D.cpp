@@ -178,6 +178,10 @@ namespace
     // между соседними кубами (см. CUBE_DRAW_HALF в CUBEWRLD.MC). Держит
     // сферу игрока чуть дальше от любой грани, чем "впритык".
     const double COLLISION_SKIN = 2.0;
+
+    // Число проходов resolveSphereBoxes за один STEP - см. комментарий
+    // в step().
+    const int COLLISION_RESOLVE_PASSES = 3;
 }
 
 void Phys3D::resolveSphereBoxes(double& px, double& py, double& pz)
@@ -280,8 +284,18 @@ void Phys3D::step()
     py += dy + velocityY;
     pz += dz;
 
+    // Несколько проходов подряд - один проход выталкивает из ОДНОГО
+    // бокса за раз (см. resolveSphereBoxes), поэтому в углу между двумя
+    // стенами первый проход может вытолкнуть из одного бокса прямо В
+    // другой - следующие проходы дотягивают до устойчивого положения
+    // вне обоих. COLLISION_RESOLVE_PASSES проходов достаточно для угла
+    // из двух стен (третьего/четвёртого бокса подряд на практике не
+    // бывает - карта из отдельных боксов размером с клетку сетки).
     grounded = 0;
-    resolveSphereBoxes(px, py, pz);
+    for (int pass = 0; pass < COLLISION_RESOLVE_PASSES; pass++)
+    {
+        resolveSphereBoxes(px, py, pz);
+    }
     resolveGroundPlane(py);
 
     split(static_cast<int16_t>(std::lround(px)), playerXLow, playerXHigh);
