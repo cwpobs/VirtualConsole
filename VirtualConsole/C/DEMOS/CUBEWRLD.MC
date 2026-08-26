@@ -23,16 +23,27 @@
 // мировые координаты каждой клетки КАЖДЫЙ КАДР было бы зря потраченным
 // временем ради статичного уровня.
 //
+// Физика (столкновения с кубами + бесконечный пол + гравитация) - через
+// отдельный физический ускоритель Phys3D (см. C/DEV/LIB/PHYS3D.MC и
+// misty-zooming-bee.md) - сознательно не связан с Gpu3D. Кубы уровня
+// определяются устройству ОДИН РАЗ при загрузке (как текстуры), за кадр
+// идёт только phys_step() - "подвинь игрока, разреши коллизии".
+//
+// Стрелки читаются через KeyState (см. KeyState.h) - "зажата ли клавиша
+// ПРЯМО СЕЙЧАС", а не через очередь Keyboard/KEYBOARD_DATA (та рывками
+// движение не тянет - см. misty-zooming-bee.md). Ctrl+Q по-прежнему
+// читается через старую очередь - разовое действие, ей самое место.
+//
+// Pitch (взгляд вверх/вниз) зажат в ±89° - без этого камеру можно
+// провернуть "через горизонт" (гимбал-эффект угла Эйлера).
+//
 // Ctrl+Q - выход. Собирается командой "build cubewrld.mc", запускается
 // как "cubewrld".
 
 #include "GEOM3D.MC"
+#include "PHYS3D.MC"
 
 const KEY_CTRL_Q = 17;
-const KEY_UP = 72;
-const KEY_DOWN = 80;
-const KEY_LEFT = 75;
-const KEY_RIGHT = 77;
 
 const MAX_CELLS = 64;
 const CUBE_SIZE = 40;
@@ -51,16 +62,44 @@ const MOVE_SPEED = 4;
 const TEX_SLOT_FLOOR = 1;
 const TEX_SLOT_LAYER2 = 2;
 
+// Ограничение pitch (взгляд вверх/вниз), градусы - без него камеру можно
+// провернуть "через горизонт" из-за угла Эйлера (см. update_mouse_look()).
+const PITCH_LIMIT = 89;
+
+// Физика (см. C/DEV/LIB/PHYS3D.MC). Числа подобраны разумно, но почти
+// наверняка потребуют подстройки на живом запуске (см.
+// misty-zooming-bee.md) - конвенция знака здесь та же, что в Phys3D.cpp:
+// "вниз"/к полу = РОСТ Y.
+const GRAVITY_UNITS = 2;
+const GROUND_Y = 20;          // вровень с нижней гранью пола (см. build_level_cache: боксы пола - половина 20 при центре 0)
+const PLAYER_HALF_X = 10;
+const PLAYER_HALF_Y = 15;
+const PLAYER_HALF_Z = 10;
+const SPAWN_MARGIN = 80;      // на сколько юнитов вынести старт персонажа за пределы сетки кубов
+const PLAYER_SPAWN_Y = GROUND_Y - PLAYER_HALF_Y;   // ровно "на полу" - см. main()
+
+// Прицел - '+' по центру текстовой сетки 80x25 (см. main()).
+const CROSSHAIR_COL = 40;
+const CROSSHAIR_ROW = 12;
+const CROSSHAIR_CHAR = 43;   // '+'
+const CROSSHAIR_FG = 15;
+const BG_TRANSPARENT = 8;    // см. TextAttr::TRANSPARENT_BG
+
 int cellCenterXLow[MAX_CELLS];
 int cellCenterXHigh[MAX_CELLS];
 int cellCenterZLow[MAX_CELLS];
 int cellCenterZHigh[MAX_CELLS];
 int cellHeight[MAX_CELLS];
 int cellCount;
+int gridWidthG;
+int gridHeightG;
 
 int originXLow; int originXHigh;
 int originZLow; int originZHigh;
 int layer2YLow; int layer2YHigh;
+
+int moveDeltaXLow; int moveDeltaXHigh;
+int moveDeltaZLow; int moveDeltaZHigh;
 
 int wait_ms(int ms) {
     poke(CLOCK_LOW, 0);
@@ -69,17 +108,18 @@ int wait_ms(int ms) {
     return 0;
 }
 
-// forward/strafe - уже правильно знаковые пары low/high (для "назад"/
-// "влево" вызывающий код сам получает их через neg16 ДО вызова - см.
-// main()), сама move_camera никогда не создаёт отрицательное число с
-// нуля, только комбинирует уже готовые пары через математику Gpu3D.
-int move_camera(int forwardLow, int forwardHigh, int strafeLow, int strafeHigh) {
+// forward/strafe - уже правильно знаковые пары low/high (нули, если
+// соответствующая пара стрелок не зажата - см. main()). Считает желаемое
+// мировое смещение (dx,dz) ОТНОСИТЕЛЬНО направления взгляда и кладёт в
+// moveDeltaX*/moveDeltaZ* - раньше это сразу писалось в GPU3D_CAM_X/Z,
+// теперь вместо этого идёт в Phys3D (phys_step()) на разрешение
+// коллизий, а в камеру попадает уже РАЗРЕШЁННАЯ позиция игрока (см.
+// main()).
+int compute_move_delta(int forwardLow, int forwardHigh, int strafeLow, int strafeHigh) {
     int yawLow; int yawHigh;
     int sinLow; int sinHigh;
     int cosLow; int cosHigh;
     int termLow; int termHigh;
-    int dxLow; int dxHigh;
-    int dzLow; int dzHigh;
 
     yawLow = peek(GPU3D_CAM_YAW_LOW);
     yawHigh = peek(GPU3D_CAM_YAW_HIGH);
@@ -97,7 +137,7 @@ int move_camera(int forwardLow, int forwardHigh, int strafeLow, int strafeHigh) 
     mul16(strafeLow, strafeHigh, cosLow, cosHigh);
     add16(termLow, termHigh, mathResultLow, mathResultHigh);
     div16(mathResultLow, mathResultHigh, 100, 0);
-    dxLow = mathResultLow; dxHigh = mathResultHigh;
+    moveDeltaXLow = mathResultLow; moveDeltaXHigh = mathResultHigh;
 
     // dz = (forward*cos(yaw) - strafe*sin(yaw)) / 100
     mul16(forwardLow, forwardHigh, cosLow, cosHigh);
@@ -105,15 +145,7 @@ int move_camera(int forwardLow, int forwardHigh, int strafeLow, int strafeHigh) 
     mul16(strafeLow, strafeHigh, sinLow, sinHigh);
     sub16(termLow, termHigh, mathResultLow, mathResultHigh);
     div16(mathResultLow, mathResultHigh, 100, 0);
-    dzLow = mathResultLow; dzHigh = mathResultHigh;
-
-    add16(peek(GPU3D_CAM_X_LOW), peek(GPU3D_CAM_X_HIGH), dxLow, dxHigh);
-    poke(GPU3D_CAM_X_LOW, mathResultLow);
-    poke(GPU3D_CAM_X_HIGH, mathResultHigh);
-
-    add16(peek(GPU3D_CAM_Z_LOW), peek(GPU3D_CAM_Z_HIGH), dzLow, dzHigh);
-    poke(GPU3D_CAM_Z_LOW, mathResultLow);
-    poke(GPU3D_CAM_Z_HIGH, mathResultHigh);
+    moveDeltaZLow = mathResultLow; moveDeltaZHigh = mathResultHigh;
 
     return 0;
 }
@@ -123,6 +155,7 @@ int update_mouse_look() {
     int mag;
     int yawLow; int yawHigh;
     int pitchLow; int pitchHigh;
+    int negLimitLow; int negLimitHigh;
 
     // ВАЖНО: знак читается ДО модуля - чтение *_MAG обнуляет накопитель
     // (см. Mouse::read), после чего *_SIGN уже не отражает старое
@@ -152,8 +185,29 @@ int update_mouse_look() {
         if (sign == 0) { sub16(pitchLow, pitchHigh, mag, 0); }
         if (sign == 1) { add16(pitchLow, pitchHigh, mag, 0); }
 
-        poke(GPU3D_CAM_PITCH_LOW, mathResultLow);
-        poke(GPU3D_CAM_PITCH_HIGH, mathResultHigh);
+        pitchLow = mathResultLow; pitchHigh = mathResultHigh;
+
+        // Зажать в [-PITCH_LIMIT, +PITCH_LIMIT] - без этого угол Эйлера
+        // даёт "перепрыгнуть через горизонт" (камера переворачивается),
+        // если крутить мышью вверх/вниз без остановки. Оба сравнения -
+        // через уже готовый sub16 (см. GEOM3D.MC): результат sub16 -
+        // настоящее знаковое 16-битное число в mathResultLow/High, а
+        // "результат >= 0" эквивалентно "старший байт < 128" (бит знака
+        // сброшен) - без единого нового регистра/устройства.
+        sub16(pitchLow, pitchHigh, PITCH_LIMIT, 0);
+        if (mathResultHigh < 128) {   // pitch - LIMIT >= 0, т.е. pitch >= LIMIT
+            pitchLow = PITCH_LIMIT; pitchHigh = 0;
+        }
+
+        neg16(PITCH_LIMIT, 0);
+        negLimitLow = mathResultLow; negLimitHigh = mathResultHigh;
+        sub16(pitchLow, pitchHigh, negLimitLow, negLimitHigh);
+        if (mathResultHigh >= 128) {   // pitch - (-LIMIT) < 0, т.е. pitch < -LIMIT
+            pitchLow = negLimitLow; pitchHigh = negLimitHigh;
+        }
+
+        poke(GPU3D_CAM_PITCH_LOW, pitchLow);
+        poke(GPU3D_CAM_PITCH_HIGH, pitchHigh);
     }
 
     return 0;
@@ -195,6 +249,8 @@ int build_level_cache() {
 
     gridWidth = peek(MATRIXLOADER_WIDTH_LOW);
     gridHeight = peek(MATRIXLOADER_HEIGHT_LOW);
+    gridWidthG = gridWidth;
+    gridHeightG = gridHeight;
 
     // originX/Z - мировые координаты левого-переднего угла сетки, чтобы
     // сетка была отцентрована вокруг (0,0) - see MOVE_SPEED комментарий
@@ -235,6 +291,26 @@ int build_level_cache() {
             cellCenterZHigh[cellCount] = mathResultHigh;
 
             cellHeight[cellCount] = peek(MATRIXLOADER_CELL_VALUE);
+
+            // Физические боксы-коллайдеры - по 2 слота на клетку (пол +
+            // второй слой), определяются ОДИН РАЗ здесь же, при загрузке
+            // (не за кадр - см. заголовок файла/PHYS3D.MC). Слот куба
+            // пола - CUBE_HALF (не CUBE_DRAW_HALF) - коллизия по логике
+            // сетки, визуальный зазор между кубами для неё не важен.
+            if (cellHeight[cellCount] > 0) {
+                phys_define_box(cellCount * 2,
+                    cellCenterXLow[cellCount], cellCenterXHigh[cellCount],
+                    0, 0,
+                    cellCenterZLow[cellCount], cellCenterZHigh[cellCount],
+                    CUBE_HALF, CUBE_HALF, CUBE_HALF);
+            }
+            if (cellHeight[cellCount] > 1) {
+                phys_define_box(cellCount * 2 + 1,
+                    cellCenterXLow[cellCount], cellCenterXHigh[cellCount],
+                    layer2YLow, layer2YHigh,
+                    cellCenterZLow[cellCount], cellCenterZHigh[cellCount],
+                    CUBE_HALF, CUBE_HALF, CUBE_HALF);
+            }
 
             cellCount = cellCount + 1;
             col = col + 1;
@@ -298,30 +374,91 @@ int main() {
     poke(GPU3D_LIGHT_B, 255);
     poke(GPU3D_AMBIENT, 70);
 
-    // Камера над полом, чуть в стороне от центра, смотрит на сетку -
-    // высота/положение подобрать живым тестом.
-    poke(GPU3D_CAM_X_LOW, 0); poke(GPU3D_CAM_X_HIGH, 0);
-    poke(GPU3D_CAM_Y_LOW, 226); poke(GPU3D_CAM_Y_HIGH, 255); // -30
-    poke(GPU3D_CAM_Z_LOW, 106); poke(GPU3D_CAM_Z_HIGH, 255); // -150
+    // Физика - гравитация/размер игрока/"горизонт" (см. C/DEV/LIB/PHYS3D.MC
+    // и константы выше - GRAVITY_UNITS/GROUND_Y/PLAYER_HALF_*).
+    poke(PHYS_GRAVITY_LOW, GRAVITY_UNITS); poke(PHYS_GRAVITY_HIGH, 0);
+    poke(PHYS_GROUND_Y_LOW, GROUND_Y); poke(PHYS_GROUND_Y_HIGH, 0);
+    poke(PHYS_PLAYER_HALF_X, PLAYER_HALF_X);
+    poke(PHYS_PLAYER_HALF_Y, PLAYER_HALF_Y);
+    poke(PHYS_PLAYER_HALF_Z, PLAYER_HALF_Z);
+
+    // Старт - СНАРУЖИ сетки кубов (в свободном пространстве бесконечного
+    // пола), лицом к сцене, уже стоя на полу (не падая) - см.
+    // misty-zooming-bee.md. originZ - "ближний" край сетки по Z (см.
+    // build_level_cache) - ещё дальше по -Z от него, за SPAWN_MARGIN, и
+    // будет "снаружи". Высота - сразу ровно на полу (PLAYER_SPAWN_Y),
+    // без padения с произвольной высоты в первом кадре.
+    sub16(originZLow, originZHigh, SPAWN_MARGIN, 0);
+    phys_set_player_pos(0, 0, PLAYER_SPAWN_Y, 0, mathResultLow, mathResultHigh);
+    phys_step(0, 0, 0, 0, 0, 0);   // один шаг физики - подтвердить GROUNDED до первого кадра рендера
+
+    poke(GPU3D_CAM_X_LOW, physPlayerXLow); poke(GPU3D_CAM_X_HIGH, physPlayerXHigh);
+    poke(GPU3D_CAM_Y_LOW, physPlayerYLow); poke(GPU3D_CAM_Y_HIGH, physPlayerYHigh);
+    poke(GPU3D_CAM_Z_LOW, physPlayerZLow); poke(GPU3D_CAM_Z_HIGH, physPlayerZHigh);
+    // YAW=0 - при текущей конвенции осей (см. compute_move_delta) это
+    // "вперёд" = +Z, то есть лицом к сетке от нашей стартовой точки на
+    // -Z; если на живом запуске персонаж окажется спиной к сцене,
+    // поставить тут 180 (в тех же градусах, что и CAM_YAW везде).
     poke(GPU3D_CAM_YAW_LOW, 0); poke(GPU3D_CAM_YAW_HIGH, 0);
     poke(GPU3D_CAM_PITCH_LOW, 0); poke(GPU3D_CAM_PITCH_HIGH, 0);
 
     poke(VIDEOCARD_COMMAND, 1); // MODE_ON - см. SNOW3D.MC, прячет консоль автоматически
     poke(MOUSE_CONTROL, 1);
 
+    // Прицел - '+' по центру, прозрачный фон поверх 3D (тот же приём,
+    // что у снежинок в SNOW3D.MC) - рисуется один раз, 3D-рендер текстовый
+    // слой не трогает, перерисовывать в цикле не нужно.
+    poke(CONSOLE_VISIBLE, 1);
     clear_screen();
+    print_char(CROSSHAIR_COL, CROSSHAIR_ROW, CROSSHAIR_CHAR);
+    set_color(CROSSHAIR_COL, CROSSHAIR_ROW, CROSSHAIR_FG, BG_TRANSPARENT);
 
     running = 1;
     while (running == 1) {
+        int keys;
+        int fwLow; int fwHigh;
+        int stLow; int stHigh;
+
+        // Ctrl+Q - разовое действие, старая очередь Keyboard ей отлично
+        // подходит (в отличие от непрерывного движения - см. KeyState.h).
         key = peek(KEYBOARD_DATA);
         if (key == KEY_CTRL_Q) { running = 0; }
 
-        if (key == KEY_UP) { move_camera(MOVE_SPEED, 0, 0, 0); }
-        if (key == KEY_DOWN) { neg16(MOVE_SPEED, 0); move_camera(mathResultLow, mathResultHigh, 0, 0); }
-        if (key == KEY_RIGHT) { move_camera(0, 0, MOVE_SPEED, 0); }
-        if (key == KEY_LEFT) { neg16(MOVE_SPEED, 0); move_camera(0, 0, mathResultLow, mathResultHigh); }
+        // Движение - через KeyState ("зажата ли стрелка ПРЯМО СЕЙЧАС"),
+        // не через очередь - плавно, без рывков, с диагоналями (см.
+        // misty-zooming-bee.md).
+        keys = peek(KEYSTATE);
+        fwLow = 0; fwHigh = 0;
+        stLow = 0; stHigh = 0;
 
+        if (keys & KEYSTATE_UP) {
+            add16(fwLow, fwHigh, MOVE_SPEED, 0);
+            fwLow = mathResultLow; fwHigh = mathResultHigh;
+        }
+        if (keys & KEYSTATE_DOWN) {
+            sub16(fwLow, fwHigh, MOVE_SPEED, 0);
+            fwLow = mathResultLow; fwHigh = mathResultHigh;
+        }
+        if (keys & KEYSTATE_RIGHT) {
+            add16(stLow, stHigh, MOVE_SPEED, 0);
+            stLow = mathResultLow; stHigh = mathResultHigh;
+        }
+        if (keys & KEYSTATE_LEFT) {
+            sub16(stLow, stHigh, MOVE_SPEED, 0);
+            stLow = mathResultLow; stHigh = mathResultHigh;
+        }
+
+        compute_move_delta(fwLow, fwHigh, stLow, stHigh);
         update_mouse_look();
+
+        // Гравитация - забота Phys3D (см. step()), тут только желаемое
+        // горизонтальное смещение; результат (с учётом коллизий с
+        // кубами/полом) - в GPU3D_CAM_*.
+        phys_step(moveDeltaXLow, moveDeltaXHigh, 0, 0, moveDeltaZLow, moveDeltaZHigh);
+        poke(GPU3D_CAM_X_LOW, physPlayerXLow); poke(GPU3D_CAM_X_HIGH, physPlayerXHigh);
+        poke(GPU3D_CAM_Y_LOW, physPlayerYLow); poke(GPU3D_CAM_Y_HIGH, physPlayerYHigh);
+        poke(GPU3D_CAM_Z_LOW, physPlayerZLow); poke(GPU3D_CAM_Z_HIGH, physPlayerZHigh);
+
         draw_floor();
 
         wait_ms(17); // ~60 кадров/сек

@@ -54,6 +54,8 @@ Devices attached to the bus (details on each one are in section 9):
 | Mouse | `0xF0001075-0xF000107A` | 6 B | relative mouse movement (sign+magnitude), buttons, capture |
 | MatrixLoader | `0xF000108D-0xF00010A3` | 23 B | generic number-matrix loading (level maps etc.) with cell read-back |
 | Gpu3D | `0xF0001100-0xF00011FF` | 256 B | 3D accelerator + lighting + 16/32-bit math coprocessor (vertices/triangles/cubes/PRESENT) |
+| Phys3D | `0xF0001200-0xF00012FF` | 256 B | physics accelerator: gravity, AABB collision, infinite ground plane |
+| KeyState | `0xF0001300` | 1 B | which arrow keys are held down right now |
 
 The CPU has no clock frequency as such — it's a software interpreter
 (`CPU::step()`), not real electronic circuitry, so "speed" depends
@@ -1311,7 +1313,9 @@ Current address space map:
 | 0xF0001075 - 0xF000107A | Mouse (relative movement sign+magnitude, buttons, capture) |
 | 0xF000107B - 0xF000108C | unused gap (old MathUnit/Light3D locations - folded into Gpu3D, see below) |
 | 0xF000108D - 0xF00010A3 | MatrixLoader (generic number-matrix loading with cell read-back) |
-| 0xF0001100 - 0xF00011FF | Gpu3D (3D accelerator + lighting + 16/32-bit math coprocessor - vertices/triangles/cubes/PRESENT; 256 B reserved, ~78 used) |
+| 0xF0001100 - 0xF00011FF | Gpu3D (3D accelerator + lighting + 16/32-bit math coprocessor - vertices/triangles/cubes/PRESENT; 256 B reserved, ~97 used) |
+| 0xF0001200 - 0xF00012FF | Phys3D (physics accelerator: gravity, AABB collision, infinite ground plane; 256 B reserved, ~34 used) |
+| 0xF0001300 | KeyState (which arrow keys are held down right now, 1 B) |
 
 MMIO is placed far from RAM (starting at `0xF0000000`) rather than
 right after its current end - this way RAM can be expanded in the
@@ -2918,10 +2922,111 @@ File format is identical to `MapLoader`'s: each line is one row,
 decimal numbers separated by whitespace, every row the same length
 (a rectangular matrix), trailing blank lines ignored - see "MapLoader"
 above for the exact parsing rules. `C/DEMOS/LEVEL.TXT` is an example
-(an 8x8 grid, values 0-2 - see `C/DEMOS/CUBEWORLD.MC`, which treats
+(an 8x8 grid, values 0-2 - see `C/DEMOS/CUBEWRLD.MC`, which treats
 the value as a stack height in cubes).
 
 Addresses: `0xF000108D` (NAME0) - `0xF00010A3` (CELL_VALUE).
+
+## KeyState
+
+Whether an arrow key is held down RIGHT NOW - deliberately separate from
+`Keyboard` (see above), which is a queue built for typing (one byte per
+keypress) and turns out to be a poor fit for continuous movement: while
+a key is held, Windows resends `WM_KEYDOWN` repeatedly (key-repeat), and
+a program consuming only one queue byte per frame falls behind - worse,
+every other byte consumed during a burst is the two-byte extended-key
+*prefix* (see `Keyboard`'s section above), which matches no key code at
+all. The result is the jerky, stuttering movement `C/DEMOS/CUBEWRLD.MC`
+had before this device existed (see `misty-zooming-bee.md`) - a queue
+can't represent "held", only "happened".
+
+`KeyState` is a single-byte bitmask, updated by `VideoConsole` directly
+on `WM_KEYDOWN`/`WM_KEYUP` (not through any queue) - at any instant it
+reflects exactly which arrows are currently down, with no accumulation
+and no loss. `Keyboard` is untouched and still used for everything it
+already did (FM/EDIT navigation, one-shot actions like Ctrl+Q) - reading
+`KeyState` for movement and `KEYBOARD_DATA` for a quit keystroke in the
+same loop is the intended pattern, see `C/DEMOS/CUBEWRLD.MC`.
+
+| Bit | Key |
+|---|---|
+| 0 | UP |
+| 1 | DOWN |
+| 2 | LEFT |
+| 3 | RIGHT |
+| 4-7 | reserved |
+
+Address: `0xF0001300` (1 byte, read-only). Prelude constants (see
+"Built-in device register constants" below): `KEYSTATE`, `KEYSTATE_UP`,
+`KEYSTATE_DOWN`, `KEYSTATE_LEFT`, `KEYSTATE_RIGHT` - e.g.
+`if (peek(KEYSTATE) & KEYSTATE_UP) { ... }`.
+
+## Phys3D
+
+A physics accelerator - gravity, AABB collision volumes, and an
+infinite ground plane ("horizon") - deliberately a SEPARATE device from
+`Gpu3D`, not paired with it (see `misty-zooming-bee.md`; pairing them is
+explicitly left as a possible future task). Same reasoning as every
+other accelerator in this system: the CPU can't do this math, the
+device can, at whatever precision it needs internally.
+
+The key design choice, learned from `Gpu3D`'s own performance history:
+static level geometry (the cubes) is described to the device ONCE, at
+level-load time (`DEFINE_BOX`, one call per solid cube - like a texture
+or a map, "define it and forget it") rather than resent every frame.
+The only thing that crosses the bus every frame is a single `STEP`
+command - "move the player by (dx,dy,dz), resolve collisions" - the
+device does the O(number of boxes) work internally in C++.
+
+| Offset | Register | Description |
+|---|---|---|
+| 0-1 | GROUND_Y_LOW/HIGH | Y of the "horizon" - the infinite ground plane, signed 16-bit |
+| 2-3 | GRAVITY_LOW/HIGH | fall acceleration, units/frame², signed 16-bit |
+| 4 | BOX_SLOT | static collider slot index, 0-127 |
+| 5-10 | BOX_X/Y/Z_LOW/HIGH | box center, signed 16-bit |
+| 11-13 | BOX_HALF_X/Y/Z | box half-extent per axis, 0-255 |
+| 14 | BOX_COMMAND (write = trigger) | 1=DEFINE (create/update the box at BOX_SLOT), 2=CLEAR_ALL |
+| 15 | BOX_STATUS (read-only) | 0=ok, 1=invalid slot |
+| 16-18 | PLAYER_HALF_X/Y/Z | player AABB half-extent per axis, 0-255 |
+| 19-24 | PLAYER_X/Y/Z_LOW/HIGH | player position - write directly to spawn/teleport (no collision check, like `Gpu3D`'s `OBJ_X`); read back after `STEP` for the resolved position |
+| 25-30 | MOVE_DX/DY/DZ_LOW/HIGH | desired movement this frame - set before `STEP` |
+| 31 | GROUNDED (read-only) | 1 = resting on the ground plane or a box |
+| 32 | STEP_COMMAND (write = trigger) | 1=STEP |
+| 33 | STEP_STATUS (read-only) | 0=ok |
+
+Up to 128 static boxes (`MAX_BOXES`) - enough for a fully-solid
+`C/DEMOS/LEVEL.TXT`-sized grid (64 cells × 2 stacked layers).
+
+Addresses: `0xF0001200` (GROUND_Y_LOW) - `0xF0001221` (STEP_STATUS), out
+of a 256-byte reserved range (`0xF0001200`-`0xF00012FF`) - same
+generous-headroom convention as `Gpu3D`.
+
+### STEP - the algorithm
+
+1. An internal (not a register) `velocityY` accumulates `GRAVITY` every
+   step, reset to 0 when the player was resting (`GROUNDED`) at the
+   start of the step.
+2. Axis-separated resolution - move, test, push out - the same
+   approach most simple 3D platformers use (not a true swept-AABB, but
+   plenty for this system's movement speeds):
+   - move the player's AABB along X by `MOVE_DX`, test against every
+     defined box; on overlap, push back out along X to the box's face;
+   - same along Z with `MOVE_DZ`;
+   - same along Y with `MOVE_DY + velocityY`, testing against both
+     boxes AND the `GROUND_Y` plane - landing on top of the ground or a
+     box sets `GROUNDED=1` and zeroes `velocityY`.
+3. Write back the resolved `PLAYER_X/Y/Z` and `GROUNDED`.
+
+Full 3D AABB collision, not just "walls" - a box can be landed on from
+above (the player falls onto it) exactly the same way as the ground
+plane; a "block sideways movement only" primitive would have been a
+special case of this, not the other way around.
+
+Working example - `C/DEMOS/CUBEWRLD.MC` (see `C/DEV/LIB/PHYS3D.MC` for
+the mini-C wrapper functions `phys_define_box()`/`phys_step()`/etc.):
+defines one box per solid grid cell at load time, then each frame sends
+one `STEP` with the desired horizontal movement and copies the resolved
+position into `Gpu3D`'s `CAM_X/Y/Z` - the camera IS the player.
 
 ---
 
@@ -3291,7 +3396,7 @@ Before your own source is compiled, the compiler silently prepends a
 fixed block of `const`/mapped-array declarations for the registers most
 graphics/tile programs need - `Keyboard`, `Clock`, `VideoCard`
 (background, hardware sprites, tile scroll), `ConsoleLayer`,
-`PngLoader`, `MapLoader`, `Mouse`, `MatrixLoader` (see their sections
+`PngLoader`, `MapLoader`, `Mouse`, `MatrixLoader`, `KeyState` (see their sections
 above for what each register does). You don't declare these yourself -
 they're just already there, named with a device prefix so registers
 that share a name across devices (`COMMAND`, `STATUS`) don't collide:
@@ -3306,17 +3411,20 @@ that share a name across devices (`COMMAND`, `STATUS`) don't collide:
     MAPLOADER_NAME0, MAPLOADER_COMMAND, MAPLOADER_STATUS
     MOUSE_DELTA_X_SIGN .. MOUSE_CONTROL
     MATRIXLOADER_NAME0 .. MATRIXLOADER_CELL_VALUE
+    KEYSTATE, KEYSTATE_UP, KEYSTATE_DOWN, KEYSTATE_LEFT, KEYSTATE_RIGHT
     EXEC_CHILD_DISK
     CMD_ARGS_LEN
 
 `Gpu3D` (which also covers lighting and the 16/32-bit math coprocessor,
-see its section above) is an exception - its registers are NOT in the
-prelude, they're declared by hand as plain `const`s in the
-`C/DEV/LIB/GEOM3D.MC` library (`#include "GEOM3D.MC"` - see "#include"
-below) - the addresses are stable, and adding them to the prelude the
-same way as the rest would be easy, it just hasn't been done, to keep
-the prelude focused on devices almost every program touches rather than
-the 3D-specific ones.
+see its section above) and `Phys3D` are the exceptions - their registers
+are NOT in the prelude, they're declared by hand as plain `const`s in
+the `C/DEV/LIB/GEOM3D.MC` and `C/DEV/LIB/PHYS3D.MC` libraries
+(`#include "GEOM3D.MC"` / `#include "PHYS3D.MC"` - see "#include" below,
+including multiple `#include` lines in the same file) - the addresses
+are stable, and adding them to the prelude the same way as the rest
+would be easy, it just hasn't been done, to keep the prelude focused on
+devices almost every program touches rather than the 3D/physics-specific
+ones.
 
 Three ready-made mapped arrays over the `NAME0-11` buffers come
 prepended alongside them - `pngLoaderName`/`mapLoaderName`/
@@ -3911,11 +4019,12 @@ the links in the last column).
 
 Already declared for you in every program - `KEYBOARD_*`, `CLOCK_*`,
 `VIDEOCARD_*` (background/sprites/scroll), `CONSOLE_VISIBLE`,
-`PNGLOADER_*`, `MAPLOADER_*`, `MOUSE_*`, `MATRIXLOADER_*`,
-`EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus ready mapped arrays
-`pngLoaderName`/`mapLoaderName`/`matrixLoaderName`/`cmdArgs`. `GPU3D_*`
-(3D + lighting + math coprocessor) is NOT in the prelude -
-`#include "GEOM3D.MC"` instead (see "#include" below). See "Built-in
+`PNGLOADER_*`, `MAPLOADER_*`, `MOUSE_*`, `MATRIXLOADER_*`, `KEYSTATE`/
+`KEYSTATE_UP/DOWN/LEFT/RIGHT`, `EXEC_CHILD_DISK`, `CMD_ARGS_LEN`, plus
+ready mapped arrays `pngLoaderName`/`mapLoaderName`/`matrixLoaderName`/
+`cmdArgs`. `GPU3D_*` (3D + lighting + math coprocessor) and `PHYS_*`
+(physics accelerator) are NOT in the prelude - `#include "GEOM3D.MC"`/
+`#include "PHYS3D.MC"` instead (see "#include" below). See "Built-in
 device register constants (prelude)" above for the full list.
 
 **Screen (Text VRAM/TextAttr)**

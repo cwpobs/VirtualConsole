@@ -1,6 +1,7 @@
 #include "VideoConsole.h"
 #include "Keyboard.h"
 #include "Mouse.h"
+#include "KeyState.h"
 #include "TextVRAM.h"
 #include "TextAttr.h"
 #include "Font8x16.h"
@@ -79,6 +80,21 @@ namespace
         return 0xE0;
     }
 
+    // Стрелка -> бит KeyState (см. KeyState.h) - НЕЗАВИСИМО от очереди
+    // Keyboard/extendedKeyCode выше: тут нужно только "какая из четырёх
+    // стрелок", без extended-префикса и без потока событий.
+    uint8_t arrowKeyStateBit(WPARAM vk)
+    {
+        switch (vk)
+        {
+        case VK_UP: return KeyState::BIT_UP;
+        case VK_DOWN: return KeyState::BIT_DOWN;
+        case VK_LEFT: return KeyState::BIT_LEFT;
+        case VK_RIGHT: return KeyState::BIT_RIGHT;
+        default: return 0;
+        }
+    }
+
     const int PIXEL_WIDTH = VideoConsole::COLS * VideoConsole::CELL_W;   // 640
     const int PIXEL_HEIGHT = VideoConsole::ROWS * VideoConsole::CELL_H;  // 400
 
@@ -126,18 +142,46 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         // решает, для чего его генерировать), двойной инжекции не
         // будет - WM_CHAR для этих кодов клавиш не порождается вообще.
         int code = extendedKeyCode(wParam);
+        uint8_t arrowBit = arrowKeyStateBit(wParam);
 
-        if (code >= 0)
+        if (code >= 0 || arrowBit != 0)
         {
             VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
-            if (self != nullptr && self->keyboard != nullptr)
+            if (self != nullptr && code >= 0 && self->keyboard != nullptr)
             {
                 // Двухбайтовая последовательность (префикс, потом код) -
                 // см. extendedKeyPrefix выше; без префикса EDIT.MC не
                 // отличает стрелку от буквы с тем же числовым кодом.
                 self->keyboard->injectKey(extendedKeyPrefix(wParam));
                 self->keyboard->injectKey(static_cast<uint8_t>(code));
+            }
+
+            // Независимо от очереди Keyboard выше - "стрелка зажата"
+            // для непрерывного движения (см. KeyState.h про то, почему
+            // очередь для этого не годится). Авто-повтор WM_KEYDOWN,
+            // пока клавиша зажата, тут безвреден - повторно выставляет
+            // тот же бит.
+            if (self != nullptr && arrowBit != 0 && self->keyState != nullptr)
+            {
+                self->keyState->setKeyDown(arrowBit, true);
+            }
+
+            return 0;
+        }
+    }
+
+    if (msg == WM_KEYUP)
+    {
+        uint8_t arrowBit = arrowKeyStateBit(wParam);
+
+        if (arrowBit != 0)
+        {
+            VideoConsole* self = reinterpret_cast<VideoConsole*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+            if (self != nullptr && self->keyState != nullptr)
+            {
+                self->keyState->setKeyDown(arrowBit, false);
             }
 
             return 0;
@@ -272,8 +316,8 @@ LRESULT CALLBACK VideoConsole::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-VideoConsole::VideoConsole(Keyboard* keyboard, Mouse* mouse, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale)
-    : keyboard(keyboard), mouse(mouse), videoCard(videoCard), consoleLayer(consoleLayer), scale(scale),
+VideoConsole::VideoConsole(Keyboard* keyboard, Mouse* mouse, KeyState* keyState, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale)
+    : keyboard(keyboard), mouse(mouse), keyState(keyState), videoCard(videoCard), consoleLayer(consoleLayer), scale(scale),
     mouseCaptured(false), stopRequested(false),
     cursorRow(0), cursorCol(0), cursorVisible(false), frameGeneration(0)
 {

@@ -21,7 +21,9 @@
 #include "ModLoaderDiskSelect.h"
 #include "Gpu3D.h"
 #include "Mouse.h"
+#include "KeyState.h"
 #include "MatrixLoader.h"
+#include "Phys3D.h"
 #include "Bus.h"
 #include "Assembler.h"
 #include "VideoConsole.h"
@@ -80,9 +82,11 @@ int main()
     ModLoader modLoader(&soundCard, &diskC, &diskD, &modLoaderDiskSelect);
     Gpu3D gpu3D(&videoCard, &diskC);
     Mouse mouse;
+    KeyState keyState;
     MatrixLoader matrixLoader(&diskC);
+    Phys3D phys3D;
     Assembler assembler;
-    VideoConsole videoConsole(&keyboard, &mouse, &videoCard, &consoleLayer, config.videoConsoleScale);
+    VideoConsole videoConsole(&keyboard, &mouse, &keyState, &videoCard, &consoleLayer, config.videoConsoleScale);
 
     if (config.useVideoConsole)
     {
@@ -122,11 +126,20 @@ int main()
     // слияния в Gpu3D, см. misty-zooming-bee.md).
     bus.mapDevice(&matrixLoader, 0xF000108D, 0xF00010A3); // обобщённый загрузчик матрицы чисел (карта уровня и т.п.) с обратным чтением ячеек
 
-    // Единый 3D-девайс (ускоритель + свет + математика 16/32 бит) - с
-    // большим запасом адресов (256 байт, реально занято ~78) под
-    // будущий рост (текстуры, доп. источники света) без повторной
-    // перенумерации - см. misty-zooming-bee.md.
+    // Единый 3D-девайс (ускоритель + свет + математика 16/32 бит +
+    // текстуры) - с большим запасом адресов (256 байт) под будущий рост
+    // без повторной перенумерации - см. misty-zooming-bee.md.
     bus.mapDevice(&gpu3D, 0xF0001100, 0xF00011FF);
+
+    // Физический ускоритель - отдельное устройство (гравитация, AABB-
+    // боксы, коллизии, бесконечная опорная плоскость пола) - сознательно
+    // не связано с Gpu3D, см. misty-zooming-bee.md.
+    bus.mapDevice(&phys3D, 0xF0001200, 0xF00012FF);
+
+    // "Зажата ли стрелка прямо сейчас" - НЕ через очередь Keyboard (та
+    // остаётся как есть) - см. KeyState.h про то, почему это отдельное
+    // маленькое устройство.
+    bus.mapDevice(&keyState, 0xF0001300, 0xF0001300);
 
     // Только устройства, которым реально нужен периодический опрос
     // (Timer - счётчик тиков/прерывание, Keyboard - опрос реальной

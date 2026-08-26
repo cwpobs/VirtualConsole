@@ -165,10 +165,12 @@
     <ClCompile Include="Keyboard.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Gpu3D.cpp" />
+    <ClCompile Include="KeyState.cpp" />
     <ClCompile Include="MapLoader.cpp" />
     <ClCompile Include="MatrixLoader.cpp" />
     <ClCompile Include="Mouse.cpp" />
     <ClCompile Include="Memory.cpp" />
+    <ClCompile Include="Phys3D.cpp" />
     <ClCompile Include="ModLoader.cpp" />
     <ClCompile Include="ModLoaderDiskSelect.cpp" />
     <ClCompile Include="PngLoader.cpp" />
@@ -193,10 +195,12 @@
     <ClInclude Include="Font8x16.h" />
     <ClInclude Include="Keyboard.h" />
     <ClInclude Include="Gpu3D.h" />
+    <ClInclude Include="KeyState.h" />
     <ClInclude Include="MapLoader.h" />
     <ClInclude Include="MatrixLoader.h" />
     <ClInclude Include="Mouse.h" />
     <ClInclude Include="Memory.h" />
+    <ClInclude Include="Phys3D.h" />
     <ClInclude Include="ModLoader.h" />
     <ClInclude Include="ModLoaderDiskSelect.h" />
     <ClInclude Include="PngLoader.h" />

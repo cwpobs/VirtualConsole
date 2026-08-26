@@ -12,6 +12,7 @@
 
 class Keyboard;
 class Mouse;
+class KeyState;
 class TextVRAM;
 class TextAttr;
 class VideoCard;
@@ -79,7 +80,7 @@ public:
     // пикселя окна (1 = 640x400, 2 = 1280x800 и т.д.) - глиф остаётся
     // резким при увеличении, т.к. рисуется как есть, без сглаживания
     // (см. renderThreadMain, glPixelZoom).
-    VideoConsole(Keyboard* keyboard, Mouse* mouse, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale);
+    VideoConsole(Keyboard* keyboard, Mouse* mouse, KeyState* keyState, VideoCard* videoCard, ConsoleLayer* consoleLayer, int scale);
     ~VideoConsole();
 
     // Открывает окно и стартует рендер-поток - вызывается один раз из
@@ -115,6 +116,7 @@ private:
 
     Keyboard* keyboard;
     Mouse* mouse;
+    KeyState* keyState;
     VideoCard* videoCard;
     ConsoleLayer* consoleLayer;
     int scale;
