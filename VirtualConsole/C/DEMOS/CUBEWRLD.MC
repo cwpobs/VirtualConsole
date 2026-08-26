@@ -179,11 +179,10 @@ int update_mouse_look() {
         pitchLow = peek(GPU3D_CAM_PITCH_LOW);
         pitchHigh = peek(GPU3D_CAM_PITCH_HIGH);
 
-        // Знак пока подобран "на глаз" (мышь вверх = смотреть вверх) -
-        // если на живом запуске окажется наоборот, поменять местами
-        // add16/sub16 здесь.
-        if (sign == 0) { sub16(pitchLow, pitchHigh, mag, 0); }
-        if (sign == 1) { add16(pitchLow, pitchHigh, mag, 0); }
+        // Знак подтверждён живым тестом (было наоборот - см.
+        // misty-zooming-bee.md).
+        if (sign == 0) { add16(pitchLow, pitchHigh, mag, 0); }
+        if (sign == 1) { sub16(pitchLow, pitchHigh, mag, 0); }
 
         pitchLow = mathResultLow; pitchHigh = mathResultHigh;
 
@@ -265,8 +264,11 @@ int build_level_cache() {
     neg16(mathResultLow, mathResultHigh);
     originZLow = mathResultLow; originZHigh = mathResultHigh;
 
-    neg16(CUBE_SIZE, 0);
-    layer2YLow = mathResultLow; layer2YHigh = mathResultHigh;
+    // +CUBE_SIZE, не -CUBE_SIZE - на экране "вверх" оказался знак +Y, не
+    // -Y (было наоборот, см. misty-zooming-bee.md) - второй слой должен
+    // стоять НАД первым, а не под полом. Обычная константа, MathUnit тут
+    // не нужен.
+    layer2YLow = CUBE_SIZE; layer2YHigh = 0;
 
     cellCount = 0;
     row = 0;
