@@ -1,13 +1,15 @@
-// CUBEWRLD.MC - демка "пол из кубов": уровень (высота стопки кубов на
-// клетке - 0/1/2) грузится из LEVEL.TXT через MatrixLoader, пол рисуется
-// кубами через GEOM3D.MC (единый девайс Gpu3D - 3D-ускоритель + свет +
-// математический сопроцессор 16/32 бит, см. misty-zooming-bee.md про то,
-// почему это теперь одно устройство, а не три), камера крутится мышью
-// (см. Mouse.h), персонаж (=камера, вид от первого лица) двигается
-// стрелками ОТНОСИТЕЛЬНО направления взгляда - вся тригонометрия (sin/cos
-// yaw) считается не тут, а на математическом сопроцессоре Gpu3D (см.
-// GEOM3D.MC::move_camera), т.к. мини-C умеет только 8-битную арифметику
-// без тригонометрии (см. ASSEMBLY.md, "The long type").
+// CUBEWRLD.MC - демка "уровень из кубов": сетка 14x14 грузится из
+// LEVEL.TXT через MatrixLoader - значение клетки теперь высота СТЕНЫ
+// над полом (0/1/2 блока), пол при этом есть ВСЕГДА, на каждой клетке
+// (см. draw_floor()). Кубы рисуются через GEOM3D.MC (единый девайс
+// Gpu3D - 3D-ускоритель + свет + математический сопроцессор 16/32 бит,
+// см. misty-zooming-bee.md про то, почему это теперь одно устройство, а
+// не три), камера крутится мышью (см. Mouse.h), персонаж (=камера, вид
+// от первого лица) двигается стрелками ОТНОСИТЕЛЬНО направления взгляда
+// - вся тригонометрия (sin/cos yaw) считается не тут, а на
+// математическом сопроцессоре Gpu3D (см. GEOM3D.MC::compute_move_delta),
+// т.к. мини-C умеет только 8-битную арифметику без тригонометрии (см.
+// ASSEMBLY.md, "The long type").
 //
 // Пол рисуется аппаратной командой DRAW_CUBE (GEOM3D.MC::draw_cube_at) -
 // один куб это ~13 poke() вместо 468 (36 вершин по 13 байт вручную) - это
@@ -17,11 +19,12 @@
 // прямо в Gpu3D, своя "быстрая память" на 8 слотов (не отдельное
 // устройство, см. misty-zooming-bee.md).
 //
-// Демка ограничена уровнями до 64 клеток (8x8, как LEVEL.TXT) - позиции
-// кубов кэшируются один раз при загрузке в фиксированные массивы
-// (мини-C не умеет в массивы переменного размера), пересчитывать 16-битные
-// мировые координаты каждой клетки КАЖДЫЙ КАДР было бы зря потраченным
-// временем ради статичного уровня.
+// Демка ограничена уровнями до MAX_CELLS клеток (196 = 14x14, как
+// LEVEL.TXT - см. константу ниже) - позиции кубов кэшируются один раз
+// при загрузке в фиксированные массивы (мини-C не умеет в массивы
+// переменного размера), пересчитывать 16-битные мировые координаты
+// каждой клетки КАЖДЫЙ КАДР было бы зря потраченным временем ради
+// статичного уровня.
 //
 // Физика (столкновения с кубами + бесконечный пол + гравитация) - через
 // отдельный физический ускоритель Phys3D (см. C/DEV/LIB/PHYS3D.MC и
@@ -45,7 +48,7 @@
 
 const KEY_CTRL_Q = 17;
 
-const MAX_CELLS = 64;
+const MAX_CELLS = 196; // 14x14, см. LEVEL.TXT - строго < 256 (см. ASSEMBLY.md про предел индекса обычного int-массива)
 const CUBE_SIZE = 40;
 const CUBE_HALF = 20;      // используется для РАССТАНОВКИ клеток (шаг сетки)
 const CUBE_DRAW_HALF = 19; // используется для ОТРИСОВКИ - чуть меньше CUBE_HALF,
@@ -56,11 +59,10 @@ const CUBE_DRAW_HALF = 19; // используется для ОТРИСОВКИ
                             // в друга на стыке) - см. misty-zooming-bee.md
 const MOVE_SPEED = 4;
 
-// Текстурные слоты Gpu3D (1-8, см. GEOM3D.MC) - пол первого слоя и
-// стопки второго слоя красятся разными тайлами из TILES.PNG, чтобы
-// визуально отличались.
+// Текстурные слоты Gpu3D (1-8, см. GEOM3D.MC) - пол и стены красятся
+// разными тайлами из TILES.PNG, чтобы визуально отличались.
 const TEX_SLOT_FLOOR = 1;
-const TEX_SLOT_LAYER2 = 2;
+const TEX_SLOT_WALL = 2;
 
 // Ограничение pitch (взгляд вверх/вниз), градусы - без него камеру можно
 // провернуть "через горизонт" из-за угла Эйлера (см. update_mouse_look()).
@@ -69,14 +71,21 @@ const PITCH_LIMIT = 89;
 // Физика (см. C/DEV/LIB/PHYS3D.MC). Числа подобраны разумно, но почти
 // наверняка потребуют подстройки на живом запуске (см.
 // misty-zooming-bee.md) - конвенция знака здесь та же, что в Phys3D.cpp:
-// "вниз"/к полу = РОСТ Y.
+// "вверх" = РОСТ Y (подтверждено живым тестом - второй блок стены на
+// +CUBE_SIZE стоит НАД первым), значит падение - это УМЕНЬШЕНИЕ Y, а
+// "на полу" - это ВЫШЕ GROUND_Y на радиус, не ниже. Игрок - сфера (см.
+// Phys3D.h), один радиус.
 const GRAVITY_UNITS = 2;
-const GROUND_Y = 20;          // вровень с нижней гранью пола (см. build_level_cache: боксы пола - половина 20 при центре 0)
-const PLAYER_HALF_X = 10;
-const PLAYER_HALF_Y = 15;
-const PLAYER_HALF_Z = 10;
-const SPAWN_MARGIN = 80;      // на сколько юнитов вынести старт персонажа за пределы сетки кубов
-const PLAYER_SPAWN_Y = GROUND_Y - PLAYER_HALF_Y;   // ровно "на полу" - см. main()
+const GROUND_Y = CUBE_HALF;   // верхняя (ходовая) грань пола - пол центрирован в 0, половина CUBE_HALF
+const PLAYER_RADIUS = 12;
+const PLAYER_SPAWN_Y = GROUND_Y + PLAYER_RADIUS;   // ровно "на полу", центр сферы НАД грунтом - см. main()
+
+// Клетка спавна - заведомо открытая (0) клетка ВНУТРИ периметра стен,
+// см. LEVEL.TXT (14 в ширину, спавн в (row=6, col=6), индекс в
+// cellCenterX*/Z* - row*gridWidth+col = 6*14+6). Персонаж стартует
+// ВНУТРИ уровня, а не снаружи - см. misty-zooming-bee.md (в прошлой
+// итерации было наоборот, теперь заменено по просьбе пользователя).
+const SPAWN_CELL_INDEX = 90;
 
 // Прицел - '+' по центру текстовой сетки 80x25 (см. main()).
 const CROSSHAIR_COL = 40;
@@ -91,12 +100,12 @@ int cellCenterZLow[MAX_CELLS];
 int cellCenterZHigh[MAX_CELLS];
 int cellHeight[MAX_CELLS];
 int cellCount;
-int gridWidthG;
-int gridHeightG;
 
 int originXLow; int originXHigh;
 int originZLow; int originZHigh;
-int layer2YLow; int layer2YHigh;
+int layer2YLow; int layer2YHigh;   // высота ПЕРВОГО блока стены (над полом)
+int wall2YLow; int wall2YHigh;     // высота ВТОРОГО блока стены (над первым)
+int boxSlotCount;                  // отдельный счётчик слотов Phys3D - только для стен, не для каждой клетки сетки
 
 int moveDeltaXLow; int moveDeltaXHigh;
 int moveDeltaZLow; int moveDeltaZHigh;
@@ -234,7 +243,7 @@ int load_floor_textures() {
     status = load_texture_tile(TEX_SLOT_FLOOR, 0, 0, 0, 0);
     if (status != 0) { return status; }
 
-    status = load_texture_tile(TEX_SLOT_LAYER2, 32, 0, 64, 0);
+    status = load_texture_tile(TEX_SLOT_WALL, 32, 0, 64, 0);
     return status;
 }
 
@@ -248,8 +257,6 @@ int build_level_cache() {
 
     gridWidth = peek(MATRIXLOADER_WIDTH_LOW);
     gridHeight = peek(MATRIXLOADER_HEIGHT_LOW);
-    gridWidthG = gridWidth;
-    gridHeightG = gridHeight;
 
     // originX/Z - мировые координаты левого-переднего угла сетки, чтобы
     // сетка была отцентрована вокруг (0,0) - see MOVE_SPEED комментарий
@@ -265,12 +272,14 @@ int build_level_cache() {
     originZLow = mathResultLow; originZHigh = mathResultHigh;
 
     // +CUBE_SIZE, не -CUBE_SIZE - на экране "вверх" оказался знак +Y, не
-    // -Y (было наоборот, см. misty-zooming-bee.md) - второй слой должен
-    // стоять НАД первым, а не под полом. Обычная константа, MathUnit тут
-    // не нужен.
+    // -Y (было наоборот, см. misty-zooming-bee.md) - блок стены должен
+    // стоять НАД полом, а не под ним. Обычные константы, MathUnit не
+    // нужен (2*CUBE_SIZE=80 умещается в один байт).
     layer2YLow = CUBE_SIZE; layer2YHigh = 0;
+    wall2YLow = CUBE_SIZE * 2; wall2YHigh = 0;
 
     cellCount = 0;
+    boxSlotCount = 0;
     row = 0;
     while (row < gridHeight) {
         col = 0;
@@ -292,26 +301,32 @@ int build_level_cache() {
             cellCenterZLow[cellCount] = mathResultLow;
             cellCenterZHigh[cellCount] = mathResultHigh;
 
+            // Значение клетки теперь - высота СТЕНЫ над полом (0 = нет
+            // стены, только пол; 1/2 - один/два блока стены) - пол есть
+            // ВСЕГДА, на каждой клетке (см. draw_floor()), физического
+            // бокса под ним не нужно - его роль уже играет бесконечная
+            // плоскость GROUND_Y (см. Phys3D). Боксы - только под
+            // стенами, по одному на каждый блок, слот - через ОТДЕЛЬНЫЙ
+            // счётчик boxSlotCount (не cellCount*2 - число реально
+            // используемых боксов теперь зависит от количества стен, а
+            // не от размера сетки, см. misty-zooming-bee.md).
             cellHeight[cellCount] = peek(MATRIXLOADER_CELL_VALUE);
 
-            // Физические боксы-коллайдеры - по 2 слота на клетку (пол +
-            // второй слой), определяются ОДИН РАЗ здесь же, при загрузке
-            // (не за кадр - см. заголовок файла/PHYS3D.MC). Слот куба
-            // пола - CUBE_HALF (не CUBE_DRAW_HALF) - коллизия по логике
-            // сетки, визуальный зазор между кубами для неё не важен.
             if (cellHeight[cellCount] > 0) {
-                phys_define_box(cellCount * 2,
-                    cellCenterXLow[cellCount], cellCenterXHigh[cellCount],
-                    0, 0,
-                    cellCenterZLow[cellCount], cellCenterZHigh[cellCount],
-                    CUBE_HALF, CUBE_HALF, CUBE_HALF);
-            }
-            if (cellHeight[cellCount] > 1) {
-                phys_define_box(cellCount * 2 + 1,
+                phys_define_box(boxSlotCount,
                     cellCenterXLow[cellCount], cellCenterXHigh[cellCount],
                     layer2YLow, layer2YHigh,
                     cellCenterZLow[cellCount], cellCenterZHigh[cellCount],
                     CUBE_HALF, CUBE_HALF, CUBE_HALF);
+                boxSlotCount = boxSlotCount + 1;
+            }
+            if (cellHeight[cellCount] > 1) {
+                phys_define_box(boxSlotCount,
+                    cellCenterXLow[cellCount], cellCenterXHigh[cellCount],
+                    wall2YLow, wall2YHigh,
+                    cellCenterZLow[cellCount], cellCenterZHigh[cellCount],
+                    CUBE_HALF, CUBE_HALF, CUBE_HALF);
+                boxSlotCount = boxSlotCount + 1;
             }
 
             cellCount = cellCount + 1;
@@ -330,13 +345,20 @@ int draw_floor() {
 
     i = 0;
     while (i < cellCount) {
+        // Пол - ВСЕГДА, на каждой клетке (см. build_level_cache) - иначе
+        // на проходимых клетках без стены не видно, что там вообще есть
+        // пол, хотя физически игрок там уже стоит на GROUND_Y (см.
+        // misty-zooming-bee.md).
+        draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], 0, 0,
+            cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 180, 180, 190, TEX_SLOT_FLOOR);
+
         if (cellHeight[i] > 0) {
-            draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], 0, 0,
-                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 180, 180, 190, TEX_SLOT_FLOOR);
+            draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], layer2YLow, layer2YHigh,
+                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 150, 150, 210, TEX_SLOT_WALL);
         }
         if (cellHeight[i] > 1) {
-            draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], layer2YLow, layer2YHigh,
-                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 150, 150, 210, TEX_SLOT_LAYER2);
+            draw_cube_at(cellCenterXLow[i], cellCenterXHigh[i], wall2YLow, wall2YHigh,
+                cellCenterZLow[i], cellCenterZHigh[i], CUBE_DRAW_HALF, 0, 150, 150, 210, TEX_SLOT_WALL);
         }
         i = i + 1;
     }
@@ -376,31 +398,25 @@ int main() {
     poke(GPU3D_LIGHT_B, 255);
     poke(GPU3D_AMBIENT, 70);
 
-    // Физика - гравитация/размер игрока/"горизонт" (см. C/DEV/LIB/PHYS3D.MC
-    // и константы выше - GRAVITY_UNITS/GROUND_Y/PLAYER_HALF_*).
+    // Физика - гравитация/радиус игрока/"горизонт" (см. C/DEV/LIB/PHYS3D.MC
+    // и константы выше - GRAVITY_UNITS/GROUND_Y/PLAYER_RADIUS).
     poke(PHYS_GRAVITY_LOW, GRAVITY_UNITS); poke(PHYS_GRAVITY_HIGH, 0);
     poke(PHYS_GROUND_Y_LOW, GROUND_Y); poke(PHYS_GROUND_Y_HIGH, 0);
-    poke(PHYS_PLAYER_HALF_X, PLAYER_HALF_X);
-    poke(PHYS_PLAYER_HALF_Y, PLAYER_HALF_Y);
-    poke(PHYS_PLAYER_HALF_Z, PLAYER_HALF_Z);
+    poke(PHYS_PLAYER_RADIUS, PLAYER_RADIUS);
 
-    // Старт - СНАРУЖИ сетки кубов (в свободном пространстве бесконечного
-    // пола), лицом к сцене, уже стоя на полу (не падая) - см.
-    // misty-zooming-bee.md. originZ - "ближний" край сетки по Z (см.
-    // build_level_cache) - ещё дальше по -Z от него, за SPAWN_MARGIN, и
-    // будет "снаружи". Высота - сразу ровно на полу (PLAYER_SPAWN_Y),
-    // без padения с произвольной высоты в первом кадре.
-    sub16(originZLow, originZHigh, SPAWN_MARGIN, 0);
-    phys_set_player_pos(0, 0, PLAYER_SPAWN_Y, 0, mathResultLow, mathResultHigh);
+    // Старт - ВНУТРИ периметра стен уровня, на заведомо открытой клетке
+    // (см. SPAWN_CELL_INDEX выше) - уже стоя на полу (не падая). Мировые
+    // координаты этой клетки уже посчитаны build_level_cache() выше,
+    // читаем их прямо из кэша вместо повторного счёта.
+    phys_set_player_pos(
+        cellCenterXLow[SPAWN_CELL_INDEX], cellCenterXHigh[SPAWN_CELL_INDEX],
+        PLAYER_SPAWN_Y, 0,
+        cellCenterZLow[SPAWN_CELL_INDEX], cellCenterZHigh[SPAWN_CELL_INDEX]);
     phys_step(0, 0, 0, 0, 0, 0);   // один шаг физики - подтвердить GROUNDED до первого кадра рендера
 
     poke(GPU3D_CAM_X_LOW, physPlayerXLow); poke(GPU3D_CAM_X_HIGH, physPlayerXHigh);
     poke(GPU3D_CAM_Y_LOW, physPlayerYLow); poke(GPU3D_CAM_Y_HIGH, physPlayerYHigh);
     poke(GPU3D_CAM_Z_LOW, physPlayerZLow); poke(GPU3D_CAM_Z_HIGH, physPlayerZHigh);
-    // YAW=0 - при текущей конвенции осей (см. compute_move_delta) это
-    // "вперёд" = +Z, то есть лицом к сетке от нашей стартовой точки на
-    // -Z; если на живом запуске персонаж окажется спиной к сцене,
-    // поставить тут 180 (в тех же градусах, что и CAM_YAW везде).
     poke(GPU3D_CAM_YAW_LOW, 0); poke(GPU3D_CAM_YAW_HIGH, 0);
     poke(GPU3D_CAM_PITCH_LOW, 0); poke(GPU3D_CAM_PITCH_HIGH, 0);
 

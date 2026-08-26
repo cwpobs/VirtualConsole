@@ -14,7 +14,7 @@ Phys3D::Phys3D()
     boxHalfX = boxHalfY = boxHalfZ = 0;
     boxStatus = 0;
 
-    playerHalfX = playerHalfY = playerHalfZ = 0;
+    playerRadius = 0;
     playerXLow = playerXHigh = playerYLow = playerYHigh = playerZLow = playerZHigh = 0;
 
     moveDxLow = moveDxHigh = moveDyLow = moveDyHigh = moveDzLow = moveDzHigh = 0;
@@ -59,9 +59,7 @@ uint8_t Phys3D::read(uint32_t address)
     case REG_BOX_HALF_Z: return boxHalfZ;
     case REG_BOX_STATUS: return boxStatus;
 
-    case REG_PLAYER_HALF_X: return playerHalfX;
-    case REG_PLAYER_HALF_Y: return playerHalfY;
-    case REG_PLAYER_HALF_Z: return playerHalfZ;
+    case REG_PLAYER_RADIUS: return playerRadius;
     case REG_PLAYER_X_LOW: return playerXLow;
     case REG_PLAYER_X_HIGH: return playerXHigh;
     case REG_PLAYER_Y_LOW: return playerYLow;
@@ -112,9 +110,7 @@ void Phys3D::write(uint32_t address, uint8_t value)
         }
         return;
 
-    case REG_PLAYER_HALF_X: playerHalfX = value; return;
-    case REG_PLAYER_HALF_Y: playerHalfY = value; return;
-    case REG_PLAYER_HALF_Z: playerHalfZ = value; return;
+    case REG_PLAYER_RADIUS: playerRadius = value; return;
 
     // Позиция игрока пишется напрямую, без проверки коллизий - спавн/
     // телепорт, как OBJ_X у Gpu3D. Разрешённая позиция после движения
@@ -174,107 +170,88 @@ void Phys3D::clearAllBoxes()
 
 namespace
 {
-    // Перекрытие двух отрезков [aMin,aMax] и [bMin,bMax] - используется
-    // на каждой паре осей при проверке AABB-пересечения ниже.
-    bool overlaps1D(double aCenter, double aHalf, double bCenter, double bHalf)
-    {
-        return std::abs(aCenter - bCenter) < (aHalf + bHalf);
-    }
+    // Небольшой запас сверх "ровно касается" - без него камера
+    // останавливается точно на поверхности грани, а без backface
+    // culling в растеризаторе Gpu3D (см. ASSEMBLY.md) на этой границе
+    // из-за погрешности плавающей точки при повороте камеры видны
+    // внутренние грани куба - тот же класс проблемы, что и z-fighting
+    // между соседними кубами (см. CUBE_DRAW_HALF в CUBEWRLD.MC). Держит
+    // сферу игрока чуть дальше от любой грани, чем "впритык".
+    const double COLLISION_SKIN = 2.0;
 }
 
-void Phys3D::moveResolveX(double& px, double py, double pz, double dx) const
+void Phys3D::resolveSphereBoxes(double& px, double& py, double& pz)
 {
-    double newPx = px + dx;
+    double radius = playerRadius;
 
     for (const Box& box : boxes)
     {
         if (!box.active) { continue; }
-        if (!overlaps1D(py, playerHalfY, box.y, box.halfY)) { continue; }
-        if (!overlaps1D(pz, playerHalfZ, box.z, box.halfZ)) { continue; }
-        if (!overlaps1D(newPx, playerHalfX, box.x, box.halfX)) { continue; }
 
-        // Пересеклись по всем трём осям при позиции newPx - вытолкнуть
-        // вдоль X на ближайшую грань бокса (в ту сторону, откуда пришли).
-        if (dx > 0)
+        // Ближайшая точка на AABB к центру сферы - покоординатный clamp.
+        double closestX = std::min(std::max(px, box.x - box.halfX), box.x + box.halfX);
+        double closestY = std::min(std::max(py, box.y - box.halfY), box.y + box.halfY);
+        double closestZ = std::min(std::max(pz, box.z - box.halfZ), box.z + box.halfZ);
+
+        double dx = px - closestX;
+        double dy = py - closestY;
+        double dz = pz - closestZ;
+        double distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq >= radius * radius) { continue; }
+
+        double dist = std::sqrt(distSq);
+        double nx, ny, nz;
+
+        if (dist > 1e-6)
         {
-            newPx = box.x - box.halfX - playerHalfX;
+            nx = dx / dist;
+            ny = dy / dist;
+            nz = dz / dist;
         }
-        else if (dx < 0)
+        else
         {
-            newPx = box.x + box.halfX + playerHalfX;
+            // Вырожденный случай - центр сферы совпал с ближайшей точкой
+            // (центр внутри бокса) - выталкиваем "вверх" (см. ниже про
+            // конвенцию знака), чтобы не делить на ноль.
+            nx = 0.0; ny = 1.0; nz = 0.0;
+            dist = 0.0;
+        }
+
+        double push = radius - dist + COLLISION_SKIN;
+        px += nx * push;
+        py += ny * push;
+        pz += nz * push;
+
+        // "Вверх" - это +Y (подтверждено живым тестом на стопке кубов -
+        // второй блок стены рисуется на +CUBE_SIZE и стоит НАД первым,
+        // см. CUBEWRLD.MC/misty-zooming-bee.md) - если вытолкнуло
+        // преимущественно в эту сторону, считаем, что игрок приземлился
+        // НА бокс сверху.
+        if (ny > 0.5)
+        {
+            grounded = 1;
+            velocityY = 0.0;
         }
     }
-
-    px = newPx;
 }
 
-void Phys3D::moveResolveZ(double px, double& pz, double py, double dz) const
+void Phys3D::resolveGroundPlane(double& py)
 {
-    double newPz = pz + dz;
-
-    for (const Box& box : boxes)
-    {
-        if (!box.active) { continue; }
-        if (!overlaps1D(py, playerHalfY, box.y, box.halfY)) { continue; }
-        if (!overlaps1D(px, playerHalfX, box.x, box.halfX)) { continue; }
-        if (!overlaps1D(newPz, playerHalfZ, box.z, box.halfZ)) { continue; }
-
-        if (dz > 0)
-        {
-            newPz = box.z - box.halfZ - playerHalfZ;
-        }
-        else if (dz < 0)
-        {
-            newPz = box.z + box.halfZ + playerHalfZ;
-        }
-    }
-
-    pz = newPz;
-}
-
-void Phys3D::moveResolveY(double px, double pz, double& py, double dy)
-{
-    double newPy = py + dy;
-    bool landedOnSomething = false;
-
-    for (const Box& box : boxes)
-    {
-        if (!box.active) { continue; }
-        if (!overlaps1D(px, playerHalfX, box.x, box.halfX)) { continue; }
-        if (!overlaps1D(pz, playerHalfZ, box.z, box.halfZ)) { continue; }
-        if (!overlaps1D(newPy, playerHalfY, box.y, box.halfY)) { continue; }
-
-        if (dy > 0)
-        {
-            newPy = box.y - box.halfY - playerHalfY;
-            landedOnSomething = true;
-        }
-        else if (dy < 0)
-        {
-            newPy = box.y + box.halfY + playerHalfY;
-        }
-
-        velocityY = 0.0;
-    }
-
     // Бесконечная опорная плоскость пола ("горизонт") - игрок не может
     // провалиться сквозь GROUND_Y ни при каких X/Z, в отличие от боксов
-    // с конечными границами выше. Конвенция: "вниз" = РОСТ Y (гравитация
-    // прибавляется к velocityY со знаком +, см. step()) - если на живом
-    // запуске окажется, что визуально это "вверх", поменять знак
-    // гравитации в step() на противоположный, здесь менять ничего не
-    // придётся (пол по-прежнему "там, где движение с dy>0").
+    // с конечными границами выше. Конвенция: "вверх" = РОСТ Y (см. выше) -
+    // игрок падает при УМЕНЬШЕНИИ Y и должен упереться в пол снизу,
+    // когда его нижняя точка (py - radius) достигает GROUND_Y.
     double groundY = combine(groundYLow, groundYHigh);
+    double radius = playerRadius;
 
-    if (dy > 0 && newPy + playerHalfY >= groundY)
+    if (py - radius <= groundY)
     {
-        newPy = groundY - playerHalfY;
-        landedOnSomething = true;
+        py = groundY + radius + COLLISION_SKIN;
+        grounded = 1;
         velocityY = 0.0;
     }
-
-    grounded = landedOnSomething ? 1 : 0;
-    py = newPy;
 }
 
 void Phys3D::step()
@@ -287,17 +264,25 @@ void Phys3D::step()
     double dy = combine(moveDyLow, moveDyHigh);
     double dz = combine(moveDzLow, moveDzHigh);
 
-    // Гравитация - копится в velocityY, обнуляется moveResolveY() при
-    // посадке на пол/бокс. Направление "вниз" - в сторону РОСТА Y (та
-    // же конвенция, что и у пола ниже: посадка происходит при движении
-    // с dy > 0) - если на живом запуске оси наоборот, поменять знак
-    // здесь и в moveResolveY на противоположный.
+    // Гравитация - копится в velocityY, обнуляется при посадке
+    // (resolveSphereBoxes/resolveGroundPlane). "Вверх" = РОСТ Y (см.
+    // resolveGroundPlane/resolveSphereBoxes), значит падение - это
+    // УМЕНЬШЕНИЕ Y, отсюда минус: GRAVITY - положительная величина
+    // ("сколько юнитов/кадр² теряем"), а не знаковое ускорение.
     double gravity = combine(gravityLow, gravityHigh);
-    velocityY += gravity;
+    velocityY -= gravity;
 
-    moveResolveX(px, py, pz, dx);
-    moveResolveZ(px, pz, py, dz);
-    moveResolveY(px, pz, py, dy + velocityY);
+    // Сфера двигается СРАЗУ на полный вектор (не по осям отдельно, как
+    // раньше - см. misty-zooming-bee.md про "срезание углов") - вся
+    // работа по недопущению проникновения в геометрию - в
+    // resolveSphereBoxes ниже.
+    px += dx;
+    py += dy + velocityY;
+    pz += dz;
+
+    grounded = 0;
+    resolveSphereBoxes(px, py, pz);
+    resolveGroundPlane(py);
 
     split(static_cast<int16_t>(std::lround(px)), playerXLow, playerXHigh);
     split(static_cast<int16_t>(std::lround(py)), playerYLow, playerYHigh);

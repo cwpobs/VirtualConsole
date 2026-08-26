@@ -49,9 +49,15 @@ private:
     static const uint32_t REG_BOX_COMMAND = 14;
     static const uint32_t REG_BOX_STATUS = 15;
 
-    static const uint32_t REG_PLAYER_HALF_X = 16;
-    static const uint32_t REG_PLAYER_HALF_Y = 17;
-    static const uint32_t REG_PLAYER_HALF_Z = 18;
+    // Игрок - сфера (один радиус), не AABB - см. misty-zooming-bee.md:
+    // раздельное разрешение по осям (X/Z/Y по очереди) даёт "срезание
+    // углов" при движении по диагонали в угол куба, из-за чего камера
+    // на кадр оказывалась внутри геометрии. Сфера против AABB-боксов
+    // (боксы остаются AABB) выталкивается вдоль НАСТОЯЩЕГО направления
+    // проникновения - углов не режет. Смещения 17-18 (бывшие
+    // PLAYER_HALF_Y/Z) теперь ничем не заняты - не переносим 19 и
+    // дальше, чтобы не сдвигать остальные регистры без необходимости.
+    static const uint32_t REG_PLAYER_RADIUS = 16;
     static const uint32_t REG_PLAYER_X_LOW = 19;
     static const uint32_t REG_PLAYER_X_HIGH = 20;
     static const uint32_t REG_PLAYER_Y_LOW = 21;
@@ -85,7 +91,7 @@ private:
     uint8_t boxHalfX, boxHalfY, boxHalfZ;
     uint8_t boxStatus;
 
-    uint8_t playerHalfX, playerHalfY, playerHalfZ;
+    uint8_t playerRadius;
     uint8_t playerXLow, playerXHigh, playerYLow, playerYHigh, playerZLow, playerZHigh;
 
     uint8_t moveDxLow, moveDxHigh, moveDyLow, moveDyHigh, moveDzLow, moveDzHigh;
@@ -104,13 +110,14 @@ private:
     void clearAllBoxes();
     void step();
 
-    // Три отдельных прохода по осям (X, затем Z, затем Y) - тот же
-    // приём "подвинь-проверь-вытолкни", что у большинства простых 3D-
-    // платформеров (не честный swept-AABB, а достаточно для скорости
-    // движения в этой демке). px/py/pz - позиция игрока, мутируется на
-    // месте. moveResolveY дополнительно проверяет плоскость пола и
-    // взводит grounded/обнуляет velocityY при посадке.
-    void moveResolveX(double& px, double py, double pz, double dx) const;
-    void moveResolveZ(double px, double& pz, double py, double dz) const;
-    void moveResolveY(double px, double pz, double& py, double dy);
+    // Sphere-vs-AABB для каждого активного бокса: ближайшая точка на
+    // боксе к центру сферы, выталкивание вдоль вектора (центр -
+    // ближайшая точка) - см. misty-zooming-bee.md про то, почему это
+    // заменило три раздельных прохода по осям (срезало углы кубов).
+    // Мутирует px/py/pz на месте, взводит grounded/обнуляет velocityY
+    // при выталкивании преимущественно "вверх" (см. resolveSphereBoxes).
+    void resolveSphereBoxes(double& px, double& py, double& pz);
+
+    // Плоскость пола - отдельно от боксов (бесконечна, не AABB).
+    void resolveGroundPlane(double& py);
 };

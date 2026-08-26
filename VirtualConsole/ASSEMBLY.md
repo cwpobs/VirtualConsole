@@ -2987,7 +2987,7 @@ device does the O(number of boxes) work internally in C++.
 | 11-13 | BOX_HALF_X/Y/Z | box half-extent per axis, 0-255 |
 | 14 | BOX_COMMAND (write = trigger) | 1=DEFINE (create/update the box at BOX_SLOT), 2=CLEAR_ALL |
 | 15 | BOX_STATUS (read-only) | 0=ok, 1=invalid slot |
-| 16-18 | PLAYER_HALF_X/Y/Z | player AABB half-extent per axis, 0-255 |
+| 16 | PLAYER_RADIUS | player collision radius, 0-255 (player is a SPHERE, not an AABB - see below); offsets 17-18 unused |
 | 19-24 | PLAYER_X/Y/Z_LOW/HIGH | player position - write directly to spawn/teleport (no collision check, like `Gpu3D`'s `OBJ_X`); read back after `STEP` for the resolved position |
 | 25-30 | MOVE_DX/DY/DZ_LOW/HIGH | desired movement this frame - set before `STEP` |
 | 31 | GROUNDED (read-only) | 1 = resting on the ground plane or a box |
@@ -3006,27 +3006,46 @@ generous-headroom convention as `Gpu3D`.
 1. An internal (not a register) `velocityY` accumulates `GRAVITY` every
    step, reset to 0 when the player was resting (`GROUNDED`) at the
    start of the step.
-2. Axis-separated resolution - move, test, push out - the same
-   approach most simple 3D platformers use (not a true swept-AABB, but
-   plenty for this system's movement speeds):
-   - move the player's AABB along X by `MOVE_DX`, test against every
-     defined box; on overlap, push back out along X to the box's face;
-   - same along Z with `MOVE_DZ`;
-   - same along Y with `MOVE_DY + velocityY`, testing against both
-     boxes AND the `GROUND_Y` plane - landing on top of the ground or a
-     box sets `GROUNDED=1` and zeroes `velocityY`.
-3. Write back the resolved `PLAYER_X/Y/Z` and `GROUNDED`.
+2. The player's sphere moves by the FULL vector at once - `(MOVE_DX,
+   MOVE_DY + velocityY, MOVE_DZ)` - not one axis at a time. An earlier
+   version resolved X, then Z, then Y separately (the "move, test, push
+   out" approach many simple 3D platformers use) - moving diagonally
+   into a box's corner could still tunnel the camera partway into the
+   geometry for a frame, since each axis pass only sees a 1D overlap,
+   not the true point of contact.
+3. For every active box: find the closest point on the box to the
+   sphere's center (per-axis clamp), and if the distance from that
+   point to the center is less than `PLAYER_RADIUS`, push the center
+   out along that direction (the true direction of penetration, corner
+   or face alike) by `radius - distance` - **plus a small skin margin**
+   (a couple of units) so the sphere never comes to rest touching a
+   face exactly - without it, the camera can end up close enough to a
+   face that turning reveals the cube's inside (no backface culling in
+   `Gpu3D`'s rasterizer, see its section above - the same class of
+   artifact z-fighting between adjacent cubes was, worked around there
+   with a similar small gap). A push that's mostly "up" (see the sign
+   convention above) counts as landing - sets `GROUNDED=1` and zeroes
+   `velocityY`, whether the box was landed on from above or the ground
+   plane below.
+4. Separately, the same skin-margined check against the `GROUND_Y`
+   plane.
+5. Write back the resolved `PLAYER_X/Y/Z` and `GROUNDED`.
 
-Full 3D AABB collision, not just "walls" - a box can be landed on from
-above (the player falls onto it) exactly the same way as the ground
-plane; a "block sideways movement only" primitive would have been a
-special case of this, not the other way around.
+Full 3D collision, not just "walls" - a box can be landed on from above
+(the player falls onto it) exactly the same way as the ground plane; a
+"block sideways movement only" primitive would have been a special
+case of this, not the other way around. Boxes themselves stay AABB
+(defined by three half-extents) - only the PLAYER is a sphere, which is
+what makes the closest-point trick above a simple, well-known
+sphere-vs-AABB test.
 
 Working example - `C/DEMOS/CUBEWRLD.MC` (see `C/DEV/LIB/PHYS3D.MC` for
 the mini-C wrapper functions `phys_define_box()`/`phys_step()`/etc.):
-defines one box per solid grid cell at load time, then each frame sends
-one `STEP` with the desired horizontal movement and copies the resolved
-position into `Gpu3D`'s `CAM_X/Y/Z` - the camera IS the player.
+defines one box per wall block at load time (the floor itself needs no
+box - the `GROUND_Y` plane already covers it everywhere), then each
+frame sends one `STEP` with the desired horizontal movement and copies
+the resolved position into `Gpu3D`'s `CAM_X/Y/Z` - the camera IS the
+player.
 
 ---
 
